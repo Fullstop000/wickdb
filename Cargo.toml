@@ -1,0 +1,8 @@
+[package]
+name = "wickdb"
+version = "0.1.0"
+authors = ["fullstop000 <fullstop1005@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+log = "0.4.6"
