@@ -1,3 +1,16 @@
+// Copyright 2019 Fullstop000 <fullstop1005@gmail.com>.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::fmt::Display;
 use std::mem;
 use std::ptr;
@@ -175,13 +188,15 @@ mod tests {
         let node = arena.alloc_node(1);
         let results = Arc::new(Mutex::new(vec![]));
         let mut tests = vec![vec![1u8, 2, 3, 4, 5], vec![6u8, 7, 8, 9], vec![10u8, 11]];
-        for t in tests.drain(..).enumerate()
+        for t in tests
+            .drain(..)
+            .enumerate()
             .map(|(i, test)| {
                 let cloned_arena = arena.clone();
                 let cloned_results = results.clone();
                 thread::spawn(move || {
                     let offset = cloned_arena.alloc_bytes(test.as_slice()) as usize;
-                    cloned_results.lock().unwrap().push((i, offset,test));
+                    cloned_results.lock().unwrap().push((i, offset, test));
                 })
             })
             .collect::<Vec<_>>()
@@ -194,7 +209,7 @@ mod tests {
                 let ptr = mem_ptr.add(offset) as *mut u8;
                 for (i, b) in expect.iter().enumerate() {
                     let inmem_b = ptr.add(i);
-                    assert_eq!(*inmem_b,*b);
+                    assert_eq!(*inmem_b, *b);
                 }
             }
         }
