@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::util::slice::Slice;
 use std::fmt::Display;
 use std::mem;
 use std::ptr;
@@ -19,6 +20,40 @@ use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 use super::skiplist::{Node, MAX_HEIGHT, MAX_NODE_SIZE};
 
+pub trait Arena {
+    /// Allocate memory for a node by given height.
+    /// This method allocates a Node size + height * ptr ( u64 ) memory area.
+    // TODO: define the potential errors and return Result<Error, *mut Node> instead of raw pointer
+    fn alloc_node(&self, height: usize) -> *mut Node {
+        unimplemented!()
+    }
+
+    /// Copy bytes data of the Slice into arena directly and return the starting offset
+    fn alloc_bytes(&self, data: Slice) -> u32 {
+        unimplemented!()
+    }
+
+    /// Get in memory arena bytes as Slice from start point to start + offset
+    fn get(&self, offset: usize, count: usize) -> Slice {
+        unimplemented!()
+    }
+
+    /// Return bool to indicate whether there is enough room for given size
+    /// If false, use a new arena for allocating and flush the old.
+    fn has_room_for(&self, size: usize) -> bool {
+        unimplemented!()
+    }
+
+    /// Return the size of memory that allocated
+    fn size(&self) -> usize {
+        unimplemented!()
+    }
+
+    /// Return the size of memory that has been allocated.
+    fn memory_used(&self) -> usize {
+        unimplemented!()
+    }
+}
 // TODO: implement CommonArena: https://github.com/google/leveldb/blob/master/util/arena.cc
 
 /// AggressiveArena is a memory pool for allocating and handling Node memory dynamically.
@@ -40,10 +75,22 @@ impl AggressiveArena {
         }
     }
 
-    /// Allocate memory for a node by given height.
-    /// This method allocates a Node size + height * ptr ( u64 ) memory area.
-    // TODO: define the potential errors and return Result<Error, *mut Node> instead of raw pointer
-    pub fn alloc_node(&self, height: usize) -> *mut Node {
+    /// For test
+    pub(super) fn display_all(&self) -> Vec<u8> {
+        let mut result = Vec::with_capacity(self.mem.capacity());
+        unsafe {
+            let ptr = self.mem.as_ptr();
+            for i in 0..self.offset.load(Ordering::Acquire) {
+                let p = ptr.add(i) as *mut u8;
+                result.push(*p)
+            }
+        }
+        result
+    }
+}
+
+impl Arena for AggressiveArena {
+    fn alloc_node(&self, height: usize) -> *mut Node {
         let ptr_size = mem::size_of::<*mut u8>();
         // truncate node size to reduce waste
         let used_node_size = MAX_NODE_SIZE - (MAX_HEIGHT - height) * ptr_size;
@@ -68,12 +115,11 @@ impl AggressiveArena {
         }
     }
 
-    /// Copy bytes data into arena directly and return the starting offset
-    pub fn alloc_bytes(&self, data: &[u8]) -> u32 {
-        let start = self.offset.fetch_add(data.len(), Ordering::SeqCst);
+    fn alloc_bytes(&self, data: Slice) -> u32 {
+        let start = self.offset.fetch_add(data.size(), Ordering::SeqCst);
         unsafe {
             let ptr = self.mem.as_ptr().add(start) as *mut u8;
-            for (i, b) in data.iter().enumerate() {
+            for (i, b) in data.to_slice().iter().enumerate() {
                 let p = ptr.add(i) as *mut u8;
                 p.replace(*b);
             }
@@ -81,34 +127,40 @@ impl AggressiveArena {
         start as u32
     }
 
-    /// Return bool to indicate whether there is enough room for given size
-    /// If false, use a new arena for allocating and flush the old.
-    pub fn has_room_for(&self, size: usize) -> bool {
-        self.size() - self.memory_used() >= size
-    }
-
-    /// Return the size of memory that has been allocated.
-    /// This method is thread safe.
-    pub fn memory_used(&self) -> usize {
-        self.offset.load(Ordering::Acquire)
-    }
-
-    /// Return the size of memory that allocated
-    pub fn size(&self) -> usize {
-        self.mem.capacity()
-    }
-
-    /// For test
-    pub(super) fn display_all(&self) -> Vec<u8> {
-        let mut result = Vec::with_capacity(self.mem.capacity());
+    fn get(&self, start: usize, offset: usize) -> Slice {
+        let o = self.offset.load(Ordering::Acquire);
+        if start + offset > o {
+            panic!(
+                "[arena] try to get data from [{}] to [{}] but max offset is [{}]",
+                start,
+                start + offset,
+                o
+            );
+        }
+        let mut result = Vec::with_capacity(offset);
         unsafe {
-            let ptr = self.mem.as_ptr();
-            for i in 0..self.offset.load(Ordering::Acquire) {
+            let ptr = self.mem.as_ptr().add(start) as *mut u8;
+            for i in 0..offset {
                 let p = ptr.add(i) as *mut u8;
                 result.push(*p)
             }
         }
-        result
+        Slice::from(result)
+    }
+
+    #[inline]
+    fn has_room_for(&self, size: usize) -> bool {
+        self.size() - self.memory_used() >= size
+    }
+
+    #[inline]
+    fn size(&self) -> usize {
+        self.mem.capacity()
+    }
+
+    #[inline]
+    fn memory_used(&self) -> usize {
+        self.offset.load(Ordering::Acquire)
     }
 }
 
@@ -195,8 +247,8 @@ mod tests {
                 let cloned_arena = arena.clone();
                 let cloned_results = results.clone();
                 thread::spawn(move || {
-                    let offset = cloned_arena.alloc_bytes(test.as_slice()) as usize;
-                    cloned_results.lock().unwrap().push((i, offset, test));
+                    let offset = cloned_arena.alloc_bytes(Slice::from(test.clone())) as usize;
+                    cloned_results.lock().unwrap().push((i, offset, test.clone()));
                 })
             })
             .collect::<Vec<_>>()
