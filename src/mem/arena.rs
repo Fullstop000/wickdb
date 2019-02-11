@@ -24,35 +24,23 @@ pub trait Arena {
     /// Allocate memory for a node by given height.
     /// This method allocates a Node size + height * ptr ( u64 ) memory area.
     // TODO: define the potential errors and return Result<Error, *mut Node> instead of raw pointer
-    fn alloc_node(&self, height: usize) -> *mut Node {
-        unimplemented!()
-    }
+    fn alloc_node(&self, height: usize) -> *mut Node {}
 
     /// Copy bytes data of the Slice into arena directly and return the starting offset
-    fn alloc_bytes(&self, data: Slice) -> u32 {
-        unimplemented!()
-    }
+    fn alloc_bytes(&self, data: Slice) -> u32 {}
 
     /// Get in memory arena bytes as Slice from start point to start + offset
-    fn get(&self, offset: usize, count: usize) -> Slice {
-        unimplemented!()
-    }
+    fn get(&self, offset: usize, count: usize) -> Slice {}
 
     /// Return bool to indicate whether there is enough room for given size
     /// If false, use a new arena for allocating and flush the old.
-    fn has_room_for(&self, size: usize) -> bool {
-        unimplemented!()
-    }
+    fn has_room_for(&self, size: usize) -> bool {}
 
     /// Return the size of memory that allocated
-    fn size(&self) -> usize {
-        unimplemented!()
-    }
+    fn size(&self) -> usize {}
 
     /// Return the size of memory that has been allocated.
-    fn memory_used(&self) -> usize {
-        unimplemented!()
-    }
+    fn memory_used(&self) -> usize {}
 }
 // TODO: implement CommonArena: https://github.com/google/leveldb/blob/master/util/arena.cc
 
@@ -248,7 +236,10 @@ mod tests {
                 let cloned_results = results.clone();
                 thread::spawn(move || {
                     let offset = cloned_arena.alloc_bytes(Slice::from(test.clone())) as usize;
-                    cloned_results.lock().unwrap().push((i, offset, test.clone()));
+                    cloned_results
+                        .lock()
+                        .unwrap()
+                        .push((i, offset, test.clone()));
                 })
             })
             .collect::<Vec<_>>()
