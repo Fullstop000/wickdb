@@ -5,4 +5,7 @@ authors = ["fullstop000 <fullstop1005@gmail.com>"]
 edition = "2018"
 
 [dependencies]
+libc = "0.2.0"
 log = "0.4.6"
+rand = "0.6.4"
+byteorder = "1.3.1"
