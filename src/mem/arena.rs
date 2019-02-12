@@ -24,23 +24,23 @@ pub trait Arena {
     /// Allocate memory for a node by given height.
     /// This method allocates a Node size + height * ptr ( u64 ) memory area.
     // TODO: define the potential errors and return Result<Error, *mut Node> instead of raw pointer
-    fn alloc_node(&self, height: usize) -> *mut Node {}
+    fn alloc_node(&self, height: usize) -> *mut Node;
 
     /// Copy bytes data of the Slice into arena directly and return the starting offset
-    fn alloc_bytes(&self, data: Slice) -> u32 {}
+    fn alloc_bytes(&self, data: Slice) -> u32;
 
     /// Get in memory arena bytes as Slice from start point to start + offset
-    fn get(&self, offset: usize, count: usize) -> Slice {}
+    fn get(&self, offset: usize, count: usize) -> Slice;
 
     /// Return bool to indicate whether there is enough room for given size
     /// If false, use a new arena for allocating and flush the old.
-    fn has_room_for(&self, size: usize) -> bool {}
+    fn has_room_for(&self, size: usize) -> bool;
 
     /// Return the size of memory that allocated
-    fn size(&self) -> usize {}
+    fn size(&self) -> usize;
 
     /// Return the size of memory that has been allocated.
-    fn memory_used(&self) -> usize {}
+    fn memory_used(&self) -> usize;
 }
 // TODO: implement CommonArena: https://github.com/google/leveldb/blob/master/util/arena.cc
 
