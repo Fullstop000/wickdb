@@ -19,6 +19,8 @@ use std::cmp::Ordering;
 use std::ops::Index;
 use std::ptr;
 use std::slice;
+use std::fmt;
+use super::byte::compare;
 
 /// Slice is a simple structure containing a pointer into some external
 /// storage and a size.  The user of a Slice must ensure that the slice
@@ -29,7 +31,7 @@ use std::slice;
 /// external synchronization, but if any of the threads may call a
 /// non-const method, all threads accessing the same Slice must use
 /// external synchronization.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Slice {
     data: *const u8,
     size: usize,
@@ -59,14 +61,26 @@ impl Slice {
         self.data
     }
 
+    #[inline]
     pub fn compare(&self, other: &Slice) -> Ordering {
-        Ordering::Equal
+        compare(self.to_slice(), other.to_slice())
     }
 
     #[inline]
     pub fn clear(&mut self) {
         self.data = ptr::null();
         self.size = 0;
+    }
+
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        unsafe { ::std::str::from_utf8_unchecked(self.to_slice()) }
+    }
+}
+
+impl fmt::Debug for Slice {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.as_str())
     }
 }
 
@@ -99,13 +113,22 @@ impl<'a> From<&'a [u8]> for Slice {
 }
 
 impl From<Vec<u8>> for Slice {
+    #[inline]
     fn from(v: Vec<u8>) -> Self {
         Slice::new(v.as_ptr(), v.len())
     }
 }
 
 impl<'a> From<&'a Vec<u8>> for Slice {
+    #[inline]
     fn from(v: &'a Vec<u8>) -> Self {
         Slice::new(v.as_ptr(), v.len())
+    }
+}
+
+impl<'a> From<&'a str> for Slice {
+    #[inline]
+    fn from(s: &'a str) -> Self {
+        Slice::new(s.as_ptr(), s.len())
     }
 }
