@@ -23,6 +23,12 @@ pub fn compare(b1: &[u8], b2: &[u8]) -> Ordering {
     if b1.is_empty() && b2.is_empty() {
         return Ordering::Equal;
     }
+    if b1.is_empty(){
+        return Ordering::Less;
+    }
+    if b2.is_empty(){
+        return Ordering::Greater;
+    }
     let n = min(b1.len(), b2.len());
     unsafe {
         let result = memcmp(
@@ -45,8 +51,18 @@ mod tests {
 
     #[test]
     fn test_compare() {
-        let s1 = vec![1u8, 2u8, 3u8];
-        let s2 = vec![1u8, 3u8, 2u8];
-        assert_eq!(Ordering::Less, compare(s1.as_slice(), s2.as_slice()));
+        let mut tests = vec![
+            (vec![], vec![], Ordering::Equal),
+            (vec![], vec![1u8], Ordering::Less),
+            (vec![2u8], vec![], Ordering::Greater),
+            (vec![1u8, 2u8, 3u8], vec![1u8, 2u8, 3u8], Ordering::Equal),
+            (vec![1u8, 2u8, 3u8], vec![1u8, 3u8, 2u8], Ordering::Less),
+            (vec![1u8, 3u8, 3u8], vec![1u8, 2u8, 2u8], Ordering::Greater),
+        ];
+
+        for (b1, b2, expect) in tests.drain(..) {
+            assert_eq!(compare(b1.as_slice(), b2.as_slice()), expect);
+        }
     }
+
 }
