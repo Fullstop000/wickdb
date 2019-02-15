@@ -27,7 +27,7 @@ pub trait Arena {
     fn alloc_node(&self, height: usize) -> *mut Node;
 
     /// Copy bytes data of the Slice into arena directly and return the starting offset
-    fn alloc_bytes(&self, data: Slice) -> u32;
+    fn alloc_bytes(&self, data: &Slice) -> u32;
 
     /// Get in memory arena bytes as Slice from start point to start + offset
     fn get(&self, offset: usize, count: usize) -> Slice;
@@ -103,7 +103,7 @@ impl Arena for AggressiveArena {
         }
     }
 
-    fn alloc_bytes(&self, data: Slice) -> u32 {
+    fn alloc_bytes(&self, data: &Slice) -> u32 {
         let start = self.offset.fetch_add(data.size(), Ordering::SeqCst);
         unsafe {
             let ptr = self.mem.as_ptr().add(start) as *mut u8;
@@ -115,20 +115,20 @@ impl Arena for AggressiveArena {
         start as u32
     }
 
-    fn get(&self, start: usize, offset: usize) -> Slice {
+    fn get(&self, start: usize, count: usize) -> Slice {
         let o = self.offset.load(Ordering::Acquire);
-        if start + offset > o {
+        if start + count > o {
             panic!(
-                "[arena] try to get data from [{}] to [{}] but max offset is [{}]",
+                "[arena] try to get data from [{}] to [{}] but max count is [{}]",
                 start,
-                start + offset,
+                start + count,
                 o
             );
         }
-        let mut result = Vec::with_capacity(offset);
+        let mut result = Vec::with_capacity(count);
         unsafe {
             let ptr = self.mem.as_ptr().add(start) as *mut u8;
-            for i in 0..offset {
+            for i in 0..count {
                 let p = ptr.add(i) as *mut u8;
                 result.push(*p)
             }
@@ -235,7 +235,7 @@ mod tests {
                 let cloned_arena = arena.clone();
                 let cloned_results = results.clone();
                 thread::spawn(move || {
-                    let offset = cloned_arena.alloc_bytes(Slice::from(test.clone())) as usize;
+                    let offset = cloned_arena.alloc_bytes(&Slice::from(test.clone())) as usize;
                     cloned_results
                         .lock()
                         .unwrap()
