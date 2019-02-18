@@ -15,12 +15,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
+use super::byte::compare;
 use std::cmp::Ordering;
+use std::fmt;
 use std::ops::Index;
 use std::ptr;
 use std::slice;
-use std::fmt;
-use super::byte::compare;
 
 /// Slice is a simple structure containing a pointer into some external
 /// storage and a size.  The user of a Slice must ensure that the slice

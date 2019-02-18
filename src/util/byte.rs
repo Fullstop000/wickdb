@@ -23,10 +23,10 @@ pub fn compare(b1: &[u8], b2: &[u8]) -> Ordering {
     if b1.is_empty() && b2.is_empty() {
         return Ordering::Equal;
     }
-    if b1.is_empty(){
+    if b1.is_empty() {
         return Ordering::Less;
     }
-    if b2.is_empty(){
+    if b2.is_empty() {
         return Ordering::Greater;
     }
     let n = min(b1.len(), b2.len());

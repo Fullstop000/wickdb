@@ -96,7 +96,6 @@ impl Arena for AggressiveArena {
                 nexts_part.as_mut_ptr() as *mut AtomicPtr<Node>,
                 height,
             ));
-
             (*node).height = height;
             (*node).next_nodes = next_nodes;
             node
@@ -109,7 +108,7 @@ impl Arena for AggressiveArena {
             let ptr = self.mem.as_ptr().add(start) as *mut u8;
             for (i, b) in data.to_slice().iter().enumerate() {
                 let p = ptr.add(i) as *mut u8;
-                p.replace(*b);
+                (*p) = *b;
             }
         }
         start as u32
@@ -117,14 +116,13 @@ impl Arena for AggressiveArena {
 
     fn get(&self, start: usize, count: usize) -> Slice {
         let o = self.offset.load(Ordering::Acquire);
-        if start + count > o {
-            panic!(
-                "[arena] try to get data from [{}] to [{}] but max count is [{}]",
-                start,
-                start + count,
-                o
-            );
-        }
+        invarint!(
+            start + count <= o,
+            "[arena] try to get data from [{}] to [{}] but max count is [{}]",
+            start,
+            start + count,
+            o,
+        );
         let mut result = Vec::with_capacity(count);
         unsafe {
             let ptr = self.mem.as_ptr().add(start) as *mut u8;

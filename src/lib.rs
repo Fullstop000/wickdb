@@ -18,10 +18,11 @@ extern crate byteorder;
 extern crate libc;
 extern crate rand;
 
-mod config;
-mod db;
-mod mem;
-mod util;
+#[macro_use]
+pub mod util;
+pub mod config;
+pub mod db;
+pub mod mem;
 
 #[cfg(test)]
 mod tests {

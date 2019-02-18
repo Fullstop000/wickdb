@@ -63,22 +63,22 @@ impl Node {
     }
 
     pub fn get_next(&self, height: usize) -> *mut Node {
-        if height > self.height {
-            panic!(
-                "skiplist: try to get next node in height [{}] but the height of node is {}",
-                height, self.height
-            );
-        }
+        invarint!(
+            height <= self.height,
+            "skiplist: try to get next node in height [{}] but the height of node is {}",
+            height,
+            self.height
+        );
         self.next_nodes[height - 1].load(Ordering::Acquire)
     }
 
     pub fn set_next(&self, height: usize, node: *mut Node) {
-        if height > self.height {
-            panic!(
-                "skiplist: try to set next node in height [{}] but the height of node is {}",
-                height, self.height
-            );
-        }
+        invarint!(
+            height <= self.height,
+            "skiplist: try to set next node in height [{}] but the height of node is {}",
+            height,
+            self.height
+        );
         self.next_nodes[height - 1].store(node, Ordering::Release);
     }
 
@@ -131,9 +131,11 @@ impl Skiplist<AggressiveArena> {
         let mut prev = [ptr::null_mut(); MAX_HEIGHT];
         let node = self.find_greater_or_equal(key, &mut prev);
         unsafe {
-            if &(*node).key(&self.arena) == key {
-                panic!("[skiplist] duplicate insertion [key={:?}] is not allowed", key);
-            }
+            invarint!(
+                &(*node).key(&self.arena) != key,
+                "[skiplist] duplicate insertion [key={:?}] is not allowed",
+                key
+            );
         }
         let height = rand_height();
         let max_height = self.max_height.load(Ordering::Acquire);
@@ -170,7 +172,7 @@ impl Skiplist<AggressiveArena> {
                         return node;
                     }
                     // move to next level
-                    height-=1;
+                    height -= 1;
                 } else {
                     // keep search in the same level
                     node = next;

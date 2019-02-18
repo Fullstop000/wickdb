@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[macro_use]
+pub mod macros;
 pub mod byte;
 pub mod comparator;
 pub mod error;
