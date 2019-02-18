@@ -40,7 +40,7 @@ pub fn compare(b1: &[u8], b2: &[u8]) -> Ordering {
             Some(x) if x > 0 => Ordering::Greater,
             Some(x) if x == 0 => Ordering::Equal,
             Some(x) if x < 0 => Ordering::Less,
-            Some(_) | None=> panic!("invalid memcmp returning"),
+            Some(_) | None => panic!("invalid memcmp returning"),
         }
     }
 }
@@ -55,7 +55,7 @@ mod tests {
             (vec![], vec![], Ordering::Equal),
             (vec![], vec![1u8], Ordering::Less),
             (vec![2u8], vec![], Ordering::Greater),
-            (vec![1u8], vec![1u8,2u8], Ordering::Less),
+            (vec![1u8], vec![1u8, 2u8], Ordering::Less),
             (vec![1u8, 2u8], vec![1u8], Ordering::Greater),
             (vec![1u8, 2u8, 3u8], vec![1u8, 2u8, 3u8], Ordering::Equal),
             (vec![1u8, 2u8, 3u8], vec![1u8, 3u8, 2u8], Ordering::Less),

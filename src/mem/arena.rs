@@ -221,6 +221,20 @@ mod tests {
     }
 
     #[test]
+    fn test_simple_alloc_bytes() {
+        let mut arena = AggressiveArena::new(100);
+        let input = vec![1u8, 2u8, 3u8, 4u8, 5u8];
+        let offset = arena.alloc_bytes(&Slice::from(input.clone()));
+        unsafe {
+            let ptr = arena.mem.as_mut_ptr().add(offset as usize) as *mut u8;
+            for (i, b) in input.clone().iter().enumerate() {
+                let p = ptr.add(i);
+                assert_eq!(*p, *b);
+            }
+        }
+    }
+
+    #[test]
     fn test_alloc_bytes_concurrency() {
         let arena = Arc::new(AggressiveArena::new(500));
         let node = arena.alloc_node(1);
@@ -261,7 +275,7 @@ mod tests {
         let arena = new_default_arena();
         arena.alloc_node(MAX_HEIGHT); // 152
         arena.alloc_node(1); // 64
-        arena.alloc_bytes(&Slice::from(vec![1u8,2u8,3u8,4u8].as_slice())); // 4
+        arena.alloc_bytes(&Slice::from(vec![1u8, 2u8, 3u8, 4u8].as_slice())); // 4
         assert_eq!(152 + 64 + 4, arena.memory_used())
     }
 
