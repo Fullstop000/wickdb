@@ -27,7 +27,8 @@ use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 const BRANCHING: u32 = 4;
 pub const MAX_HEIGHT: usize = 12;
 
-// MAX_NODE_SIZE = size of Node + MAX_HEIGHT * size_of(usize) (ptr size is same as usize)
+// As we use #[repr(C)], the size of usize is always 8
+// MAX_NODE_SIZE = size of Node + MAX_HEIGHT * size_of(usize) (ptr size is same as usize) = 56 + 12 * 8 = 152
 pub const MAX_NODE_SIZE: usize = mem::size_of::<Node>() + MAX_HEIGHT * mem::size_of::<*mut u8>();
 
 #[derive(Debug)]

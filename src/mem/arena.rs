@@ -255,4 +255,19 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_memory_used() {
+        let arena = new_default_arena();
+        arena.alloc_node(MAX_HEIGHT); // 152
+        arena.alloc_node(1); // 64
+        arena.alloc_bytes(&Slice::from(vec![1u8,2u8,3u8,4u8].as_slice())); // 4
+        assert_eq!(152 + 64 + 4, arena.memory_used())
+    }
+
+    #[test]
+    fn test_has_room_for() {
+        let arena = AggressiveArena::new(1);
+        assert_eq!(arena.has_room_for(100), false);
+    }
 }
