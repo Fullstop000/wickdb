@@ -11,26 +11,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use util::error::WickError;
-use config::Config;
+use crate::config::Config;
+use crate::util::error::WickError;
+use crate::util::slice::Slice;
 
-pub struct DB {
-}
+pub struct DB {}
 
 pub fn open_db(config: Config) -> DB {
-
+    DB::new()
 }
 
 impl DB {
     pub fn new() -> DB {
-
+        DB {}
     }
-    pub fn write(&self, key: Vec<&u8>) -> Result<(), WickError> {
-
-    }
-
-    pub fn get(&self, key: Vec<&u8>) -> Option<Vec<&u8>> {
-
+    pub fn write(&self, key: Slice, value: Slice) -> Result<(), WickError> {
+        println!("[write] key: {:?}, value: {:?}", &key, &value);
+        Ok(())
     }
 
+    pub fn get(&self, key: Slice) -> Option<Slice> {
+        println!("[get] key: {:?}", &key);
+        None
+    }
 }

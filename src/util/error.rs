@@ -1,3 +1,1 @@
-pub enum WickError {
-
-}
+pub enum WickError {}
