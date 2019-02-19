@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use libc::{c_int, c_void, size_t};
-use std::cmp::{max, Ordering};
+use std::cmp::{min, Ordering};
 
 extern "C" {
     fn memcmp(cx: *const c_void, ct: *const c_void, n: size_t) -> c_int;
@@ -29,7 +29,7 @@ pub fn compare(b1: &[u8], b2: &[u8]) -> Ordering {
     if b2.is_empty() {
         return Ordering::Greater;
     }
-    let n = max(b1.len(), b2.len());
+    let n = min(b1.len(), b2.len());
     unsafe {
         let result = Some(memcmp(
             b1.as_ptr() as *const c_void,
@@ -39,7 +39,15 @@ pub fn compare(b1: &[u8], b2: &[u8]) -> Ordering {
         // FIXME: this may fail in ubuntu
         match result {
             Some(x) if x > 0 => Ordering::Greater,
-            Some(x) if x == 0 => Ordering::Equal,
+            Some(x) if x == 0 => {
+                if b1.len() < b2.len() {
+                    Ordering::Less
+                } else if b1.len() == b2.len(){
+                    Ordering::Equal
+                } else {
+                    Ordering::Greater
+                }
+            }
             Some(x) if x < 0 => Ordering::Less,
             Some(_) | None => panic!("invalid memcmp returning"),
         }
