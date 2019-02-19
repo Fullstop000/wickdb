@@ -224,7 +224,7 @@ mod tests {
     fn test_simple_alloc_bytes() {
         let mut arena = AggressiveArena::new(100);
         let input = vec![1u8, 2u8, 3u8, 4u8, 5u8];
-        let offset = arena.alloc_bytes(&Slice::from(input.clone()));
+        let offset = arena.alloc_bytes(&Slice::from(&input));
         unsafe {
             let ptr = arena.mem.as_mut_ptr().add(offset as usize) as *mut u8;
             for (i, b) in input.clone().iter().enumerate() {
@@ -237,7 +237,6 @@ mod tests {
     #[test]
     fn test_alloc_bytes_concurrency() {
         let arena = Arc::new(AggressiveArena::new(500));
-        let node = arena.alloc_node(1);
         let results = Arc::new(Mutex::new(vec![]));
         let mut tests = vec![vec![1u8, 2, 3, 4, 5], vec![6u8, 7, 8, 9], vec![10u8, 11]];
         for t in tests

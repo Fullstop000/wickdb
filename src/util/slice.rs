@@ -112,13 +112,6 @@ impl<'a> From<&'a [u8]> for Slice {
     }
 }
 
-impl From<Vec<u8>> for Slice {
-    #[inline]
-    fn from(v: Vec<u8>) -> Self {
-        Slice::new(v.as_ptr(), v.len())
-    }
-}
-
 impl<'a> From<&'a Vec<u8>> for Slice {
     #[inline]
     fn from(v: &'a Vec<u8>) -> Self {
