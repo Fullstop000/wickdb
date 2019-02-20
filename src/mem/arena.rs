@@ -236,13 +236,13 @@ mod tests {
         let mut tests = vec![vec![1u8, 2, 3, 4, 5], vec![6u8, 7, 8, 9], vec![10u8, 11]];
         for t in tests
             .drain(..)
-            .enumerate()
-            .map(|(i, test)| {
+            .map(| test| {
                 let cloned_arena = arena.clone();
                 let cloned_results = results.clone();
                 thread::spawn(move || {
                     let offset = cloned_arena.alloc_bytes(&Slice::from(test.as_slice())) as usize;
-                    cloned_results.lock().unwrap().push((i, offset, test));
+                    // start position in arena, origin test data
+                    cloned_results.lock().unwrap().push((offset, test));
                 })
             })
             .collect::<Vec<_>>()
@@ -250,7 +250,8 @@ mod tests {
             t.join().unwrap();
         }
         let mem_ptr = arena.mem.as_ptr();
-        for (index, offset, expect) in results.lock().unwrap().drain(..) {
+        for (offset, expect) in results.lock().unwrap().drain(..) {
+            // compare result and expect byte by byte
             unsafe {
                 let ptr = mem_ptr.add(offset) as *mut u8;
                 for (i, b) in expect.iter().enumerate() {

@@ -161,7 +161,6 @@ impl Skiplist<AggressiveArena> {
     pub fn find_greater_or_equal(&self, key: &Slice, prev_nodes: &mut [*mut Node]) -> *mut Node {
         let mut level = self.max_height.load(Ordering::Acquire);
         let mut node = self.head;
-        let arena = &self.arena;
         loop {
             unsafe {
                 let next = (*node).get_next(level);
@@ -215,7 +214,6 @@ impl Skiplist<AggressiveArena> {
     pub fn find_last(&self) -> *mut Node {
         let mut level = self.max_height.load(Ordering::Acquire) - 1;
         let mut node = self.head;
-        let arena = &self.arena;
         loop {
             unsafe {
                 let next = (*node).get_next(level);
