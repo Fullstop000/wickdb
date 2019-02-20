@@ -123,15 +123,10 @@ impl Arena for AggressiveArena {
             start + count,
             o,
         );
-        let mut result = Vec::with_capacity(count);
         unsafe {
-            let ptr = self.mem.as_ptr().add(start) as *mut u8;
-            for i in 0..count {
-                let p = ptr.add(i) as *mut u8;
-                result.push(*p)
-            }
+            let ptr = self.mem.as_ptr().add(start) as *const u8;
+            Slice::new(ptr, count)
         }
-        Slice::from(&result)
     }
 
     #[inline]
