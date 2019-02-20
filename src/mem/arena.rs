@@ -131,7 +131,7 @@ impl Arena for AggressiveArena {
                 result.push(*p)
             }
         }
-        Slice::from(result)
+        Slice::from(&result)
     }
 
     #[inline]
@@ -246,11 +246,11 @@ mod tests {
                 let cloned_arena = arena.clone();
                 let cloned_results = results.clone();
                 thread::spawn(move || {
-                    let offset = cloned_arena.alloc_bytes(&Slice::from(test.clone())) as usize;
+                    let offset = cloned_arena.alloc_bytes(&Slice::from(test.as_slice())) as usize;
                     cloned_results
                         .lock()
                         .unwrap()
-                        .push((i, offset, test.clone()));
+                        .push((i, offset, test));
                 })
             })
             .collect::<Vec<_>>()
@@ -266,6 +266,17 @@ mod tests {
                     assert_eq!(*inmem_b, *b);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_get() {
+        let arena = new_default_arena();
+        let input = vec![1u8, 2u8, 3u8, 4u8, 5u8];
+        let start = arena.alloc_bytes(&Slice::from(input.as_slice()));
+        let result = arena.get(start as usize, 5);
+        for (b1, b2) in input.iter().zip(result.to_slice()) {
+            assert_eq!(*b1, *b2);
         }
     }
 

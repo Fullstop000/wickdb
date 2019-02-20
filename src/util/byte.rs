@@ -60,7 +60,7 @@ mod tests {
 
     #[test]
     fn test_compare() {
-        let mut tests = vec![
+        let tests = vec![
             (vec![], vec![], Ordering::Equal),
             (vec![], vec![1u8], Ordering::Less),
             (vec![2u8], vec![], Ordering::Greater),
