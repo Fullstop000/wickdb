@@ -155,26 +155,55 @@ impl Skiplist<AggressiveArena> {
         }
     }
 
-    /// Find the last node whose key is less than or equal to the given key.
-    /// If `prev` is true, the previous node of each level will be recorded into `tmp_prev_nodes`
-    /// this can be helpful when adding a new node to the skiplist
+    /// Find the nearest node with a key >= the given key.
+    /// Add prev node into `prev_nodes`
+    /// which can be helpful for adding new node to the skiplist.
     pub fn find_greater_or_equal(&self, key: &Slice, prev_nodes: &mut [*mut Node]) -> *mut Node {
-        let mut height = self.max_height.load(Ordering::Acquire);
+        let mut level = self.max_height.load(Ordering::Acquire);
         let mut node = self.head;
         let arena = &self.arena;
         loop {
             unsafe {
-                let next = (*node).get_next(height);
-                let next_key = (*next).key(arena);
+                let next = (*node).get_next(level);
                 if self.key_is_less_than(key, next) {
-                    // we need to record the prev node
-                    prev_nodes[height] = node;
-                    if height == 0 {
-                        return node;
+                    // given key < next key
+                    // record the prev node
+                    prev_nodes[level - 1] = node;
+                    // already arrived the bottom return the current node
+                    if level == 1 {
+                        return next;
                     }
                     // move to next level
-                    height -= 1;
+                    level -= 1;
                 } else {
+                    // so we keep searching in the same level
+                    node = next;
+                }
+            }
+        }
+    }
+
+    /// Find the nearest node with a key < the given key.
+    /// Return head if there is no such node.
+    pub fn find_less_than(&self, key: &Slice) -> *mut Node {
+        let mut level = self.max_height.load(Ordering::Acquire) - 1;
+        let mut node = self.head;
+        let arena = &self.arena;
+        loop {
+            unsafe {
+                let next = (*node).get_next(level);
+                if next.is_null()
+                    || self.comparator.compare(&((*next).key(arena)), key) != CmpOrdering::Less
+                {
+                    // next is nullptr or next.key >= key
+                    if level == 0 {
+                        return node;
+                    } else {
+                        // move to next level
+                        level -= 1;
+                    }
+                } else {
+                    // next.key < key
                     // keep search in the same level
                     node = next;
                 }
@@ -182,10 +211,32 @@ impl Skiplist<AggressiveArena> {
         }
     }
 
-    /// Return whether the give key is less than the give node's key.
-    fn key_is_less_than(&self, key: &Slice, n: *mut Node) -> bool {
+    /// Find the last node
+    pub fn find_last(&self) -> *mut Node {
+        let mut level = self.max_height.load(Ordering::Acquire) - 1;
+        let mut node = self.head;
+        let arena = &self.arena;
+        loop {
+            unsafe {
+                let next = (*node).get_next(level);
+                if next.is_null() {
+                    if level == 0 {
+                        return node;
+                    }
+                    // move to next level
+                    level -= 1;
+                } else {
+                    node = next;
+                }
+            }
+        }
+    }
+
+    /// Return whether the give key is less than the given node's key.
+    pub(super) fn key_is_less_than(&self, key: &Slice, n: *mut Node) -> bool {
         if n.is_null() {
-            false
+            // take nullptr as +infinite large
+            true
         } else {
             let node_key = unsafe { (*n).key(&self.arena) };
             match self.comparator.compare(key, &node_key) {
@@ -194,15 +245,6 @@ impl Skiplist<AggressiveArena> {
             }
         }
     }
-    //
-    //    pub fn find_less(&self, key: Vec<u8>) ->&Node {
-    //        &Node{
-    //            ..Default::default()
-    //        }
-    //    }
-    //
-    //    /// Add a new key-value into skiplist
-    //    pub fn put(self, key: Vec<u8>, value: Vec<u8>) {}
 }
 
 /// Generate a random height < MAX_HEIGHT for node
@@ -220,7 +262,14 @@ pub fn rand_height() -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{rand_height, Node, MAX_HEIGHT};
+    use super::*;
+    use crate::util::comparator::BytewiseComparator;
+    use std::ptr;
+    use std::rc::Rc;
+
+    fn new_test_skl() -> Skiplist<AggressiveArena> {
+        Skiplist::new(64 << 20, Rc::new(BytewiseComparator::new()))
+    }
 
     #[test]
     fn test_rand_height() {
@@ -229,4 +278,75 @@ mod tests {
             assert_eq!(height < MAX_HEIGHT, true);
         }
     }
+
+    #[test]
+    fn test_key_is_less_than() {
+        let skl = new_test_skl();
+        let vec = vec![1u8, 2u8, 3u8];
+        let key = Slice::from(vec.as_slice());
+        // return false if node is nullptr
+        assert_eq!(false, skl.key_is_less_than(&key, ptr::null_mut()));
+
+        let n = Node::new(
+            &Slice::from(vec![1u8, 2u8].as_slice()),
+            &Slice::from(""),
+            1,
+            &skl.arena,
+        );
+        assert_eq!(false, skl.key_is_less_than(&key, n));
+
+        let n2 = Node::new(
+            &Slice::from(vec![1u8, 2u8, 4u8].as_slice()),
+            &Slice::from(""),
+            1,
+            &skl.arena,
+        );
+        assert_eq!(true, skl.key_is_less_than(&key, n2));
+    }
+
+    #[test]
+    fn test_find_greater_or_equal() {
+        let skl = new_test_skl();
+        skl.max_height.store(5, Ordering::Release);
+        let value = Slice::from("");
+        let n1 = Node::new(&Slice::from("key1"), &value, 5, &skl.arena);
+        let n2 = Node::new(&Slice::from("key3"), &value, 1, &skl.arena);
+        let n3 = Node::new(&Slice::from("key5"), &value, 2, &skl.arena);
+        let n4 = Node::new(&Slice::from("key7"), &value, 4, &skl.arena);
+        let n5 = Node::new(&Slice::from("key9"), &value, 3, &skl.arena);
+
+        // Manually construct a skiplist
+        // TODO: use a easier way to construct the skiplist
+        unsafe {
+            for i in 0..5 {
+                (*skl.head).next_nodes[i].store(n1, Ordering::Release);
+            }
+            (*n1).set_next(1, n2);
+            (*n1).set_next(2, n3);
+            (*n1).set_next(4, n4);
+            (*n1).set_next(3, n5);
+            (*n2).set_next(1, n3);
+            (*n3).set_next(1, n4);
+            (*n3).set_next(2, n4);
+            (*n4).set_next(1, n5);
+            (*n4).set_next(2, n5);
+            (*n4).set_next(3, n5);
+        }
+
+        let mut prev_nodes = vec![ptr::null_mut(); 5];
+        let target_key = Slice::from("key4");
+        let res = skl.find_greater_or_equal(&target_key, &mut prev_nodes);
+        assert_eq!(res, n3);
+        // prev_nodes should be correct
+        assert_eq!(prev_nodes[0], n2);
+        for node in prev_nodes[1..5].iter() {
+            assert_eq!(*node, n1);
+        }
+    }
+
+    #[test]
+    fn test_find_less_than() {}
+
+    #[test]
+    fn test_basic() {}
 }

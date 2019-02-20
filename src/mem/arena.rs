@@ -242,10 +242,7 @@ mod tests {
                 let cloned_results = results.clone();
                 thread::spawn(move || {
                     let offset = cloned_arena.alloc_bytes(&Slice::from(test.as_slice())) as usize;
-                    cloned_results
-                        .lock()
-                        .unwrap()
-                        .push((i, offset, test));
+                    cloned_results.lock().unwrap().push((i, offset, test));
                 })
             })
             .collect::<Vec<_>>()

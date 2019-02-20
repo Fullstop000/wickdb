@@ -42,7 +42,7 @@ pub fn compare(b1: &[u8], b2: &[u8]) -> Ordering {
             Some(x) if x == 0 => {
                 if b1.len() < b2.len() {
                     Ordering::Less
-                } else if b1.len() == b2.len(){
+                } else if b1.len() == b2.len() {
                     Ordering::Equal
                 } else {
                     Ordering::Greater
@@ -72,7 +72,12 @@ mod tests {
         ];
 
         for (i, (b1, b2, expect)) in tests.iter().enumerate() {
-            assert_eq!(compare(b1.as_slice(), b2.as_slice()), *expect, "compare testing :{}", i + 1);
+            assert_eq!(
+                compare(b1.as_slice(), b2.as_slice()),
+                *expect,
+                "compare testing :{}",
+                i + 1
+            );
         }
     }
 
