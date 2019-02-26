@@ -236,7 +236,7 @@ mod tests {
         let mut tests = vec![vec![1u8, 2, 3, 4, 5], vec![6u8, 7, 8, 9], vec![10u8, 11]];
         for t in tests
             .drain(..)
-            .map(| test| {
+            .map(|test| {
                 let cloned_arena = arena.clone();
                 let cloned_results = results.clone();
                 thread::spawn(move || {
