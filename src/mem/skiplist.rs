@@ -131,12 +131,14 @@ impl Skiplist<AggressiveArena> {
     pub fn insert(&self, key: &Slice, value: &Slice) {
         let mut prev = [ptr::null_mut(); MAX_HEIGHT];
         let node = self.find_greater_or_equal(key, &mut prev);
-        unsafe {
-            invarint!(
-                &(*node).key(&self.arena) != key,
-                "[skiplist] duplicate insertion [key={:?}] is not allowed",
-                key
-            );
+        if !node.is_null() {
+            unsafe {
+                invarint!(
+                    &(*node).key(&self.arena) != key,
+                    "[skiplist] duplicate insertion [key={:?}] is not allowed",
+                    key
+                );
+            }
         }
         let height = rand_height();
         let max_height = self.max_height.load(Ordering::Acquire);
@@ -148,9 +150,9 @@ impl Skiplist<AggressiveArena> {
         }
         let new_node = Node::new(key, value, height, &self.arena);
         unsafe {
-            for i in 0..height {
-                (*new_node).set_next(i, (*(prev[i])).get_next(i));
-                (*(prev[i])).set_next(i, new_node);
+            for i in 1..=height {
+                (*new_node).set_next(i, (*(prev[i-1])).get_next(i));
+                (*(prev[i-1])).set_next(i, new_node);
             }
         }
     }
@@ -164,11 +166,11 @@ impl Skiplist<AggressiveArena> {
         loop {
             unsafe {
                 let next = (*node).get_next(level);
-                if self.key_is_less_than(key, next) {
+                if self.key_is_less_than_or_equal(key, next) {
                     // given key < next key
                     // record the prev node
                     prev_nodes[level - 1] = node;
-                    // already arrived the bottom return the current node
+                    // already arrived the bottom return the current node's next
                     if level == 1 {
                         return next;
                     }
@@ -231,15 +233,15 @@ impl Skiplist<AggressiveArena> {
     }
 
     /// Return whether the give key is less than the given node's key.
-    pub(super) fn key_is_less_than(&self, key: &Slice, n: *mut Node) -> bool {
+    pub(super) fn key_is_less_than_or_equal(&self, key: &Slice, n: *mut Node) -> bool {
         if n.is_null() {
             // take nullptr as +infinite large
             true
         } else {
             let node_key = unsafe { (*n).key(&self.arena) };
             match self.comparator.compare(key, &node_key) {
-                CmpOrdering::Less => true,
-                _ => false,
+                CmpOrdering::Greater => false,
+                _ => true,
             }
         }
     }
@@ -259,7 +261,7 @@ pub fn rand_height() -> usize {
 }
 
 #[cfg(test)]
-mod tests {
+mod skiplist_tests {
     use super::*;
     use crate::util::comparator::BytewiseComparator;
     use std::ptr;
@@ -307,33 +309,32 @@ mod tests {
     }
 
     #[test]
-    fn test_key_is_less_than() {
+    fn test_key_is_less_than_or_equal() {
         let skl = new_test_skl();
         let vec = vec![1u8, 2u8, 3u8];
         let key = Slice::from(vec.as_slice());
-        // return false if node is nullptr
-        assert_eq!(false, skl.key_is_less_than(&key, ptr::null_mut()));
 
-        let n = Node::new(
-            &Slice::from(vec![1u8, 2u8].as_slice()),
-            &Slice::from(""),
-            1,
-            &skl.arena,
-        );
-        assert_eq!(false, skl.key_is_less_than(&key, n));
+        let tests = vec![
+            (vec![1u8, 2u8], false),
+            (vec![1u8, 2u8, 4u8], true),
+            (vec![1u8, 2u8, 3u8], true),
+        ];
+        // nullptr should be considered as the largest
+        assert_eq!(true, skl.key_is_less_than_or_equal(&key, ptr::null_mut()));
 
-        let n2 = Node::new(
-            &Slice::from(vec![1u8, 2u8, 4u8].as_slice()),
-            &Slice::from(""),
-            1,
-            &skl.arena,
-        );
-        assert_eq!(true, skl.key_is_less_than(&key, n2));
+        for (node_key, expected) in tests {
+            let node = Node::new(
+                &Slice::from(node_key.as_slice()),
+                &Slice::from(""),
+                1,
+                &skl.arena
+            );
+            assert_eq!(expected, skl.key_is_less_than_or_equal(&key, node))
+        }
     }
 
     #[test]
     fn test_find_greater_or_equal() {
-        let value = Slice::from("");
         let inputs = vec![
             ("key1", "", 5),
             ("key3", "", 1),
@@ -347,6 +348,7 @@ mod tests {
             .collect();
         let skl = construct_skl_from_nodes(nodes);
         let mut prev_nodes = vec![ptr::null_mut(); 5];
+        // test the scenario for un-inserted key
         let target_key = Slice::from("key4");
         let res = skl.find_greater_or_equal(&target_key, &mut prev_nodes);
         unsafe {
@@ -357,11 +359,22 @@ mod tests {
                 assert_eq!((**node).key(&skl.arena).as_str(), "key1");
             }
         }
+        prev_nodes = vec![ptr::null_mut(); 5];
+        // test the scenario for inserted key
+        let target_key2 = Slice::from("key5");
+        let res2 = skl.find_greater_or_equal(&target_key2, &mut prev_nodes);
+        unsafe {
+            assert_eq!((*res2).key(&skl.arena).as_str(), "key5");
+            // prev_nodes should be correct
+            assert_eq!((*(prev_nodes[0])).key(&skl.arena).as_str(), "key3");
+            for node in prev_nodes[1..5].iter() {
+                assert_eq!((**node).key(&skl.arena).as_str(), "key1");
+            }
+        }
     }
 
     #[test]
     fn test_find_less_than() {
-        let value = Slice::from("");
         let inputs = vec![
             ("key1", "", 5),
             ("key3", "", 1),
@@ -383,7 +396,6 @@ mod tests {
 
     #[test]
     fn test_find_last() {
-        let value = Slice::from("");
         let inputs = vec![
             ("key1", "", 5),
             ("key3", "", 1),
@@ -399,6 +411,34 @@ mod tests {
         let last = skl.find_last();
         unsafe {
             assert_eq!((*last).key(&skl.arena).as_str(), "key9");
+        }
+    }
+
+    #[test]
+    fn test_insert() {
+        let mut inputs = vec![
+            ("key1", "val1" ),
+            ("key3", "val2" ),
+            ("key5", "val3" ),
+            ("key7", "val4" ),
+            ("key9", "val5" ),
+        ];
+        let skl = new_test_skl();
+        for (key, value) in inputs.drain(..) {
+            skl.insert(&Slice::from(key), &Slice::from(value));
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_duplicate_insert_should_panic() {
+        let mut inputs = vec![
+            ("key1", "val1" ),
+            ("key1", "val2" ),
+        ];
+        let skl = new_test_skl();
+        for (key, value) in inputs.drain(..) {
+            skl.insert(&Slice::from(key), &Slice::from(value));
         }
     }
 
