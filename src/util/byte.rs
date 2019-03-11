@@ -64,6 +64,8 @@ mod tests {
             (vec![], vec![], Ordering::Equal),
             (vec![], vec![1u8], Ordering::Less),
             (vec![2u8], vec![], Ordering::Greater),
+            (vec![2u8], vec![1u8], Ordering::Greater),
+            (vec![2u8], vec![1u8, 2u8, 3u8], Ordering::Greater),
             (vec![1u8], vec![1u8, 2u8], Ordering::Less),
             (vec![1u8, 2u8], vec![1u8], Ordering::Greater),
             (vec![1u8, 2u8, 3u8], vec![1u8, 2u8, 3u8], Ordering::Equal),

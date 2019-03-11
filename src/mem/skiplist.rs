@@ -52,7 +52,7 @@ pub struct Node {
 
 impl Node {
     /// Allocates memory in the given arena for Node
-    pub fn new<A: Arena>(key: &Slice, value: &Slice, height: usize, arena: &A) -> *mut Node {
+    pub fn new(key: &Slice, value: &Slice, height: usize, arena: &Box<Arena>) -> *mut Node {
         let node = arena.alloc_node(height);
         unsafe {
             (*node).key_size = key.size() as u64;
@@ -63,6 +63,7 @@ impl Node {
         node
     }
 
+    #[inline]
     pub fn get_next(&self, height: usize) -> *mut Node {
         invarint!(
             height <= self.height && height > 0,
@@ -73,6 +74,7 @@ impl Node {
         self.next_nodes[height - 1].load(Ordering::Acquire)
     }
 
+    #[inline]
     pub fn set_next(&self, height: usize, node: *mut Node) {
         invarint!(
             height <= self.height && height > 0,
@@ -84,19 +86,19 @@ impl Node {
     }
 
     #[inline]
-    pub fn key<A: Arena>(&self, arena: &A) -> Slice {
+    pub fn key(&self, arena: &Box<Arena>) -> Slice {
         let raw = arena.get(self.key_offset as usize, self.key_size as usize);
         Slice::from(raw)
     }
 
     #[inline]
-    pub fn value<A: Arena>(&self, arena: &A) -> Slice {
+    pub fn value(&self, arena: &Box<Arena>) -> Slice {
         let raw = arena.get(self.value_offset as usize, self.value_size as usize);
         Slice::from(raw)
     }
 }
 
-pub struct Skiplist<A: Arena> {
+pub struct Skiplist {
     // current max height
     // Should be handled atomically
     pub max_height: AtomicUsize,
@@ -108,13 +110,12 @@ pub struct Skiplist<A: Arena> {
     // head node
     pub head: *mut Node,
     // arena contains all the nodes data
-    pub arena: A,
+    pub arena: Box<Arena>,
 }
 
-impl Skiplist<AggressiveArena> {
+impl Skiplist {
     /// Create a new Skiplist with the given arena capacity
-    pub fn new(arena_cap: usize, cmp: Rc<Comparator<Slice>>) -> Self {
-        let arena = AggressiveArena::new(arena_cap);
+    pub fn new(cmp: Rc<Comparator<Slice>>, arena: Box<Arena>) -> Self {
         let head = arena.alloc_node(MAX_HEIGHT);
         Skiplist {
             comparator: cmp,
@@ -130,7 +131,7 @@ impl Skiplist<AggressiveArena> {
     /// The key must be unique otherwise this method panic.
     pub fn insert(&self, key: &Slice, value: &Slice) {
         let mut prev = [ptr::null_mut(); MAX_HEIGHT];
-        let node = self.find_greater_or_equal(key, &mut prev);
+        let node = self.find_greater_or_equal(key, Some(&mut prev));
         if !node.is_null() {
             unsafe {
                 invarint!(
@@ -160,7 +161,7 @@ impl Skiplist<AggressiveArena> {
     /// Find the nearest node with a key >= the given key.
     /// Add prev node into `prev_nodes`
     /// which can be helpful for adding new node to the skiplist.
-    pub fn find_greater_or_equal(&self, key: &Slice, prev_nodes: &mut [*mut Node]) -> *mut Node {
+    pub fn find_greater_or_equal(&self, key: &Slice, mut prev_nodes: Option<&mut [*mut Node]>) -> *mut Node {
         let mut level = self.max_height.load(Ordering::Acquire);
         let mut node = self.head;
         loop {
@@ -169,7 +170,9 @@ impl Skiplist<AggressiveArena> {
                 if self.key_is_less_than_or_equal(key, next) {
                     // given key < next key
                     // record the prev node
-                    prev_nodes[level - 1] = node;
+                    if let Some(ref mut p) = prev_nodes {
+                        p[level - 1] = node;
+                    }
                     // already arrived the bottom return the current node's next
                     if level == 1 {
                         return next;
@@ -261,19 +264,20 @@ pub fn rand_height() -> usize {
 }
 
 #[cfg(test)]
-mod skiplist_tests {
+mod tests {
     use super::*;
+    use crate::mem::iterator::SkiplistIterator;
     use crate::util::comparator::BytewiseComparator;
     use std::ptr;
     use std::rc::Rc;
 
-    fn new_test_skl() -> Skiplist<AggressiveArena> {
-        Skiplist::new(64 << 20, Rc::new(BytewiseComparator::new()))
+    fn new_test_skl() -> Skiplist {
+        Skiplist::new( Rc::new(BytewiseComparator::new()), Box::new(AggressiveArena::new(64 << 20)))
     }
 
     fn construct_skl_from_nodes(
         mut nodes: Vec<(Slice, Slice, usize)>,
-    ) -> Skiplist<AggressiveArena> {
+    ) -> Skiplist {
         if nodes.is_empty() {
             return new_test_skl();
         }
@@ -350,7 +354,7 @@ mod skiplist_tests {
         let mut prev_nodes = vec![ptr::null_mut(); 5];
         // test the scenario for un-inserted key
         let target_key = Slice::from("key4");
-        let res = skl.find_greater_or_equal(&target_key, &mut prev_nodes);
+        let res = skl.find_greater_or_equal(&target_key, Some(&mut prev_nodes));
         unsafe {
             assert_eq!((*res).key(&skl.arena).as_str(), "key5");
             // prev_nodes should be correct
@@ -362,7 +366,7 @@ mod skiplist_tests {
         prev_nodes = vec![ptr::null_mut(); 5];
         // test the scenario for inserted key
         let target_key2 = Slice::from("key5");
-        let res2 = skl.find_greater_or_equal(&target_key2, &mut prev_nodes);
+        let res2 = skl.find_greater_or_equal(&target_key2, Some(&mut prev_nodes));
         unsafe {
             assert_eq!((*res2).key(&skl.arena).as_str(), "key5");
             // prev_nodes should be correct
@@ -387,7 +391,16 @@ mod skiplist_tests {
             .map(|(key, val, height)| (Slice::from(*key), Slice::from(*val), *height))
             .collect();
         let skl = construct_skl_from_nodes(nodes);
+
+        // test scenario for un-inserted key
         let target_key = Slice::from("key4");
+        let res = skl.find_less_than(&target_key);
+        unsafe {
+            assert_eq!((*res).key(&skl.arena).as_str(), "key3");
+        }
+
+        // test scenario for inserted key
+        let target_key = Slice::from("key5");
         let res = skl.find_less_than(&target_key);
         unsafe {
             assert_eq!((*res).key(&skl.arena).as_str(), "key3");
@@ -416,7 +429,7 @@ mod skiplist_tests {
 
     #[test]
     fn test_insert() {
-        let mut inputs = vec![
+        let inputs = vec![
             ("key1", "val1" ),
             ("key3", "val2" ),
             ("key5", "val3" ),
@@ -424,24 +437,78 @@ mod skiplist_tests {
             ("key9", "val5" ),
         ];
         let skl = new_test_skl();
-        for (key, value) in inputs.drain(..) {
+        for (key, value) in inputs.clone() {
             skl.insert(&Slice::from(key), &Slice::from(value));
+        }
+
+        let mut node = skl.head;
+        for (input_key, input_val) in inputs.clone() {
+            unsafe {
+                let next = (*node).get_next(1);
+                let key = (*next).key(&skl.arena);
+                let val = (*next).value(&skl.arena);
+                assert_eq!(key.as_str(), input_key);
+                assert_eq!(val.as_str(), input_val);
+                node = next;
+            }
+        }
+        unsafe {
+            // should be the last node
+            assert_eq!((*node).get_next(1), ptr::null_mut());
         }
     }
 
     #[test]
     #[should_panic]
     fn test_duplicate_insert_should_panic() {
-        let mut inputs = vec![
+        let inputs = vec![
             ("key1", "val1" ),
             ("key1", "val2" ),
         ];
         let skl = new_test_skl();
-        for (key, value) in inputs.drain(..) {
+        for (key, value) in inputs {
             skl.insert(&Slice::from(key), &Slice::from(value));
         }
     }
 
+    // this is a e2e test for all methods in SkiplistIterator
     #[test]
-    fn test_basic() {}
+    fn test_basic() {
+        let skl = new_test_skl();
+        let inputs = vec![
+            ("key1", "val1" ),
+            ("key11", "" ),
+            ("key13", "" ),
+            ("key3", "val2" ),
+            ("key5", "val3" ),
+            ("key7", "val4" ),
+            ("key9", "val5" ),
+        ];
+        for (key, val) in inputs.clone() {
+            skl.insert(&Slice::from(key), &Slice::from(val))
+        }
+        let mut skl_iterator = SkiplistIterator::new(&skl, skl.head);
+        for (key, val) in inputs.clone() {
+            skl_iterator.next();
+            if !skl_iterator.valid() {
+                break
+            }
+            assert_eq!(key, skl_iterator.key().as_str());
+            assert_eq!(val, skl_iterator.value().as_str());
+        }
+        skl_iterator.prev();
+        assert_eq!(inputs.get(inputs.len() - 2).unwrap().0, skl_iterator.key().as_str());
+        // the first node is head
+        skl_iterator.seek_to_first();
+        assert_eq!(unsafe{ (*skl.head).key(&skl.arena).as_str()}, skl_iterator.key().as_str());
+        skl_iterator.seek_to_last();
+        assert_eq!(inputs.last().unwrap().0, skl_iterator.key().as_str());
+        skl_iterator.seek(&Slice::from("key7"));
+        assert_eq!("key7", skl_iterator.key().as_str());
+    }
+
+    #[test]
+    fn test_concurrent_insert() {
+        // TODO
+    }
 }

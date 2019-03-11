@@ -87,7 +87,7 @@ impl<'a> SkiplistIterator<'a> {
     /// Advance to the first node with a key >= target
     #[inline]
     pub fn seek(&mut self, target_key: &Slice) {
-        self.node = self.skl.find_greater_or_equal(target_key, &mut vec![]);
+        self.node = self.skl.find_greater_or_equal(target_key, None);
     }
 
     /// Position at the first node in list
