@@ -12,5 +12,5 @@
 // limitations under the License.
 
 mod arena;
-mod skiplist;
 mod iterator;
+mod skiplist;

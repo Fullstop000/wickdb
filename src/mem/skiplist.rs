@@ -152,8 +152,8 @@ impl Skiplist {
         let new_node = Node::new(key, value, height, &self.arena);
         unsafe {
             for i in 1..=height {
-                (*new_node).set_next(i, (*(prev[i-1])).get_next(i));
-                (*(prev[i-1])).set_next(i, new_node);
+                (*new_node).set_next(i, (*(prev[i - 1])).get_next(i));
+                (*(prev[i - 1])).set_next(i, new_node);
             }
         }
     }
@@ -161,7 +161,11 @@ impl Skiplist {
     /// Find the nearest node with a key >= the given key.
     /// Add prev node into `prev_nodes`
     /// which can be helpful for adding new node to the skiplist.
-    pub fn find_greater_or_equal(&self, key: &Slice, mut prev_nodes: Option<&mut [*mut Node]>) -> *mut Node {
+    pub fn find_greater_or_equal(
+        &self,
+        key: &Slice,
+        mut prev_nodes: Option<&mut [*mut Node]>,
+    ) -> *mut Node {
         let mut level = self.max_height.load(Ordering::Acquire);
         let mut node = self.head;
         loop {
@@ -272,12 +276,13 @@ mod tests {
     use std::rc::Rc;
 
     fn new_test_skl() -> Skiplist {
-        Skiplist::new( Rc::new(BytewiseComparator::new()), Box::new(AggressiveArena::new(64 << 20)))
+        Skiplist::new(
+            Rc::new(BytewiseComparator::new()),
+            Box::new(AggressiveArena::new(64 << 20)),
+        )
     }
 
-    fn construct_skl_from_nodes(
-        mut nodes: Vec<(Slice, Slice, usize)>,
-    ) -> Skiplist {
+    fn construct_skl_from_nodes(mut nodes: Vec<(Slice, Slice, usize)>) -> Skiplist {
         if nodes.is_empty() {
             return new_test_skl();
         }
@@ -331,7 +336,7 @@ mod tests {
                 &Slice::from(node_key.as_slice()),
                 &Slice::from(""),
                 1,
-                &skl.arena
+                &skl.arena,
             );
             assert_eq!(expected, skl.key_is_less_than_or_equal(&key, node))
         }
@@ -430,11 +435,11 @@ mod tests {
     #[test]
     fn test_insert() {
         let inputs = vec![
-            ("key1", "val1" ),
-            ("key3", "val2" ),
-            ("key5", "val3" ),
-            ("key7", "val4" ),
-            ("key9", "val5" ),
+            ("key1", "val1"),
+            ("key3", "val2"),
+            ("key5", "val3"),
+            ("key7", "val4"),
+            ("key9", "val5"),
         ];
         let skl = new_test_skl();
         for (key, value) in inputs.clone() {
@@ -461,10 +466,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_duplicate_insert_should_panic() {
-        let inputs = vec![
-            ("key1", "val1" ),
-            ("key1", "val2" ),
-        ];
+        let inputs = vec![("key1", "val1"), ("key1", "val2")];
         let skl = new_test_skl();
         for (key, value) in inputs {
             skl.insert(&Slice::from(key), &Slice::from(value));
@@ -476,13 +478,13 @@ mod tests {
     fn test_basic() {
         let skl = new_test_skl();
         let inputs = vec![
-            ("key1", "val1" ),
-            ("key11", "" ),
-            ("key13", "" ),
-            ("key3", "val2" ),
-            ("key5", "val3" ),
-            ("key7", "val4" ),
-            ("key9", "val5" ),
+            ("key1", "val1"),
+            ("key11", ""),
+            ("key13", ""),
+            ("key3", "val2"),
+            ("key5", "val3"),
+            ("key7", "val4"),
+            ("key9", "val5"),
         ];
         for (key, val) in inputs.clone() {
             skl.insert(&Slice::from(key), &Slice::from(val))
@@ -491,16 +493,22 @@ mod tests {
         for (key, val) in inputs.clone() {
             skl_iterator.next();
             if !skl_iterator.valid() {
-                break
+                break;
             }
             assert_eq!(key, skl_iterator.key().as_str());
             assert_eq!(val, skl_iterator.value().as_str());
         }
         skl_iterator.prev();
-        assert_eq!(inputs.get(inputs.len() - 2).unwrap().0, skl_iterator.key().as_str());
+        assert_eq!(
+            inputs.get(inputs.len() - 2).unwrap().0,
+            skl_iterator.key().as_str()
+        );
         // the first node is head
         skl_iterator.seek_to_first();
-        assert_eq!(unsafe{ (*skl.head).key(&skl.arena).as_str()}, skl_iterator.key().as_str());
+        assert_eq!(
+            unsafe { (*skl.head).key(&skl.arena).as_str() },
+            skl_iterator.key().as_str()
+        );
         skl_iterator.seek_to_last();
         assert_eq!(inputs.last().unwrap().0, skl_iterator.key().as_str());
         skl_iterator.seek(&Slice::from("key7"));

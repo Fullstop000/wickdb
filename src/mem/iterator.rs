@@ -14,39 +14,33 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-use std::ptr;
 use super::arena::Arena;
-use super::skiplist::{Skiplist, Node};
+use super::skiplist::{Node, Skiplist};
 use crate::util::slice::Slice;
+use std::ptr;
 
 /// Iteration over the contents of a skip list
 // TODO: maybe use a more common trait 'Iterator'
-pub struct SkiplistIterator <'a> {
+pub struct SkiplistIterator<'a> {
     skl: &'a Skiplist,
     node: *mut Node,
 }
 
 impl<'a> SkiplistIterator<'a> {
     pub fn new(skl: &'a Skiplist, node: *mut Node) -> Self {
-        Self {
-            skl,
-            node,
-        }
+        Self { skl, node }
     }
 
     /// Returns true whether the iterator is positioned at a valid node
     #[inline]
     pub fn valid(&self) -> bool {
-       !self.node.is_null()
+        !self.node.is_null()
     }
 
     /// If the head is nullptr, this method will panic. Otherwise return true.
     #[inline]
     pub fn panic_valid(&self) -> bool {
-        invarint!(
-            self.valid(),
-            "[skl] Invalid iterator head",
-        );
+        invarint!(self.valid(), "[skl] Invalid iterator head",);
         true
     }
 
@@ -54,18 +48,14 @@ impl<'a> SkiplistIterator<'a> {
     #[inline]
     pub fn key(&self) -> Slice {
         self.panic_valid();
-        unsafe {
-            (*(self.node)).key(&self.skl.arena)
-        }
+        unsafe { (*(self.node)).key(&self.skl.arena) }
     }
 
     /// Return the value of node in current position
     #[inline]
     pub fn value(&self) -> Slice {
         self.panic_valid();
-        unsafe {
-            (*(self.node)).value(&self.skl.arena)
-        }
+        unsafe { (*(self.node)).value(&self.skl.arena) }
     }
 
     /// Advance to the next position
