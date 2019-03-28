@@ -14,7 +14,9 @@
 #[macro_use]
 pub mod macros;
 pub mod byte;
+pub mod coding;
 pub mod comparator;
 pub mod error;
+pub mod hash;
 pub mod slice;
 pub mod varint;
