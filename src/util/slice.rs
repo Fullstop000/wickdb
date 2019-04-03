@@ -21,6 +21,8 @@ use std::fmt;
 use std::ops::Index;
 use std::ptr;
 use std::slice;
+use std::hash::{Hash, Hasher};
+use crate::util::hash::hash;
 
 /// Slice is a simple structure containing a pointer into some external
 /// storage and a size.  The user of a Slice must ensure that the slice
@@ -31,7 +33,7 @@ use std::slice;
 /// external synchronization, but if any of the threads may call a
 /// non-const method, all threads accessing the same Slice must use
 /// external synchronization.
-#[derive(Clone)]
+#[derive(Clone, Eq)]
 pub struct Slice {
     data: *const u8,
     size: usize,
@@ -95,13 +97,20 @@ impl Index<usize> for Slice {
 
     /// Return the ith byte in the referenced data
     fn index(&self, index: usize) -> &u8 {
-        if index > self.size {
-            panic!(
-                "[slice] out of range. Slice size is [{}] but try to get [{}]",
-                self.size, index
-            );
-        }
+        invarint!(
+            index > self.size,
+            "[slice] out of range. Slice size is [{}] but try to get [{}]",
+            self.size, index
+        );
         unsafe { &*self.data.offset(index as isize) }
+    }
+}
+
+impl Hash for Slice {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let hash = hash(self.to_slice(), 0xbc9f1d34);
+        state.write_u32();
+        state.finish();
     }
 }
 
