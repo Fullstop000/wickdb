@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![feature(box_syntax)]
 #[macro_use]
 extern crate log;
 extern crate byteorder;
@@ -19,6 +20,7 @@ extern crate rand;
 
 #[macro_use]
 pub mod util;
+pub mod cache;
 pub mod config;
 pub mod db;
 pub mod mem;

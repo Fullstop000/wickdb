@@ -54,6 +54,7 @@ pub fn compare(b1: &[u8], b2: &[u8]) -> Ordering {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::cmp::Ordering;

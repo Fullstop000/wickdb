@@ -109,7 +109,7 @@ impl Index<usize> for Slice {
 impl Hash for Slice {
     fn hash<H: Hasher>(&self, state: &mut H) {
         let hash = hash(self.to_slice(), 0xbc9f1d34);
-        state.write_u32();
+        state.write_u32(hash);
         state.finish();
     }
 }
