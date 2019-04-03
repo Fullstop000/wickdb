@@ -21,7 +21,7 @@ use std::sync::{Mutex, Arc};
 use std::fmt::Debug;
 use std::ptr;
 use std::rc::Rc;
-use crate::cache::{Handle as CacheHandle, Cache};
+use crate::cache::{Handle as CacheHandle, Cache, HandleRef};
 use std::cell::RefCell;
 
 const NUM_SHARD_BITS : usize = 4;
@@ -134,7 +134,7 @@ struct MutexFields<T: Default + Debug> {
     /// Entries are in use by clients, and have refs >= 2 and in_cache==true.
     in_use: *mut LRUHandle<T>,
 
-    table: HashMap<Slice, *mut LRUHandle<T>>,
+    table: HashMap<Slice, HandleRef<T>>,
 }
 
 impl<T: Default + Debug> LRUCache<T> {
@@ -205,7 +205,7 @@ impl<T: Default + Debug> LRUCache<T> {
         unsafe {
             if !n.is_null() && (*n).in_cache {
                 Self::lru_remove(n);
-                (*n).in_cache == false; // mark it not in cache
+                (*n).in_cache = false; // mark it not in cache
                 self.dec_ref(n);
             }
         }
@@ -223,7 +223,7 @@ impl<T: Default + Debug> LRUCache<T> {
 }
 
 impl <T: 'static + Default + Debug> Cache<T> for LRUCache<T> {
-    fn insert(&mut self, key: Slice, value: T, charge: usize, deleter: Box<FnMut(&Slice, &T)>) -> Rc<RefCell<CacheHandle<T>>> {
+    fn insert(&mut self, key: Slice, value: T, charge: usize, deleter: Box<FnMut(&Slice, &T)>) -> HandleRef<T> {
         let mut mutex_data = self.mutex.lock().unwrap();
         let handle = LRUHandle::new(
             Vec::from(key.to_slice()).into_boxed_slice(),
@@ -237,8 +237,8 @@ impl <T: 'static + Default + Debug> Cache<T> for LRUCache<T> {
             r.borrow_mut().in_cache = true;
             Self::lru_append(mutex_data.in_use, r.as_ptr());
             mutex_data.usage += charge;
-            if let Some(old) = mutex_data.table.insert(key, r.as_ptr()) {
-                self.finish_erase(old);
+            if let Some(old) = mutex_data.table.insert(key, r.clone()) {
+                self.finish_erase(old.as_ptr() as *mut LRUHandle<T>);
             }
         }
         // evict unused lru entries
@@ -247,40 +247,37 @@ impl <T: 'static + Default + Debug> Cache<T> for LRUCache<T> {
                 let old = (*mutex_data.lru).next;
                 if (*old).refs == 1 {
                     if let Some(n) = mutex_data.table.remove(&(*old).key()) {
-                        self.finish_erase(n);
+                        self.finish_erase(n.as_ptr() as *mut LRUHandle<T>);
                     }
                 }
             }
         }
-        r
+        r.clone()
     }
 
-    fn look_up(&self, key: &Slice) -> Option<Rc<RefCell<CacheHandle<T>>>> {
-        let mut mutex = self.mutex.lock().unwrap();
+    fn look_up(&self, key: &Slice) -> Option<HandleRef<T>> {
+        let mutex = self.mutex.lock().unwrap();
         match mutex.table.get(key) {
             Some(handle) => {
                 unsafe {
-                    self.inc_ref(handle);
-                };
-                Rc::new(RefCell::new(handle))
+                    self.inc_ref(handle.as_ptr() as *mut LRUHandle<T>);
+                    Some(handle.clone())
+                }
             }
             None => None
         }
     }
 
-    fn release(&mut self, handle: &CacheHandle<T>) {
-        // TODO
-    }
-
-    fn value(&mut self, handle: &CacheHandle<T>) -> T {
-        // TODO
+    fn release(&mut self, handle: HandleRef<T>) {
+        let mutex = self.mutex.lock().unwrap();
+        unsafe { self.dec_ref(handle.as_ptr() as *mut LRUHandle<T>); }
     }
 
     fn erase(&mut self, key: Slice) {
         let mut mutex_data = self.mutex.lock().unwrap();
         // remove the key in hashtable
         if let Some(n) = mutex_data.table.remove(&key) {
-            self.finish_erase(n);
+            self.finish_erase(n.as_ptr() as *mut LRUHandle<T>);
         }
     }
 

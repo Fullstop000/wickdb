@@ -58,25 +58,19 @@ pub trait Cache<T> {
         value: T,
         charge: usize,
         deleter: Box<FnMut(&Slice, &T)>,
-    ) -> Rc<RefCell<Handle<T>>>;
+    ) -> HandleRef<T>;
 
     /// If the cache has no mapping for "key", returns NULL.
     ///
     /// Else return a handle that corresponds to the mapping.  The caller
     /// must call this->Release(handle) when the returned mapping is no
     /// longer needed.
-    fn look_up(&self, key: Slice) -> Option<Rc<RefCell<Handle<T>>>>;
+    fn look_up(&self, key: &Slice) -> Option<HandleRef<T>>;
 
     /// Release a mapping returned by a previous Lookup().
     /// REQUIRES: handle must not have been released yet.
     /// REQUIRES: handle must have been returned by a method on *this.
-    fn release(&mut self, handle: &Handle<T>);
-
-    /// Return the value encapsulated in a handle returned by a
-    /// successful Lookup().
-    /// REQUIRES: handle must not have been released yet.
-    /// REQUIRES: handle must have been returned by a method on *this.
-    fn value(&mut self, handle: &Handle<T>) -> T;
+    fn release(&mut self, handle: HandleRef<T>);
 
     /// If the cache contains entry for key, erase it.  Note that the
     /// underlying entry will be kept around until all existing handles
@@ -93,4 +87,6 @@ pub trait Cache<T> {
     /// cache.
     fn total_charge(&self) -> usize;
 }
+
+pub type HandleRef<T> = Rc<RefCell<Handle<T>>>;
 
