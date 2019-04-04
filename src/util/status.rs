@@ -11,12 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[macro_use]
-pub mod macros;
-pub mod byte;
-pub mod coding;
-pub mod comparator;
-pub mod status;
-pub mod hash;
-pub mod slice;
-pub mod varint;
+// Copyright (c) 2011 The LevelDB Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+pub enum Status {
+    NotFound,
+    Corruption,
+    NotSupported,
+    InvalidArgument,
+    IOError
+}
+
