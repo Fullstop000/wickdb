@@ -103,7 +103,7 @@ pub struct Skiplist {
     // Should be handled atomically
     pub max_height: AtomicUsize,
     // comparator is used to compare the key of node
-    pub comparator: Rc<Comparator<Slice>>,
+    pub comparator: Rc<Comparator>,
     // references of this Skiplist
     // This not only represents in-memory refs but also 'refs' in read request
     refs: AtomicUsize,
@@ -115,7 +115,7 @@ pub struct Skiplist {
 
 impl Skiplist {
     /// Create a new Skiplist with the given arena capacity
-    pub fn new(cmp: Rc<Comparator<Slice>>, arena: Box<Arena>) -> Self {
+    pub fn new(cmp: Rc<Comparator>, arena: Box<Arena>) -> Self {
         let head = arena.alloc_node(MAX_HEIGHT);
         Skiplist {
             comparator: cmp,

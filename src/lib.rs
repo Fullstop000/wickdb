@@ -11,23 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![allow(dead_code)]
+#![allow(unused_variables)]
+
 #[macro_use]
 extern crate log;
-extern crate byteorder;
 extern crate libc;
 extern crate rand;
 
 #[macro_use]
 pub mod util;
 pub mod cache;
-pub mod config;
+pub mod batch;
 pub mod db;
+pub mod options;
+pub mod filter;
 pub mod mem;
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
-    }
-}
+pub mod snapshot;
