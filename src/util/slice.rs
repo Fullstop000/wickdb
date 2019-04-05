@@ -98,7 +98,7 @@ impl Index<usize> for Slice {
     /// Return the ith byte in the referenced data
     fn index(&self, index: usize) -> &u8 {
         invarint!(
-            index > self.size,
+            index < self.size,
             "[slice] out of range. Slice size is [{}] but try to get [{}]",
             self.size, index
         );
