@@ -23,7 +23,7 @@ use std::fmt::{Display, Formatter, Error, Debug};
 
 /// The max key sequence number. The value is 2^56 - 1 because the seq number
 /// only takes 56 bits when is serialized to `InternalKey`
-pub static MAX_KEY_SEQUENCE: u64 = 1 << 56 - 1;
+pub static MAX_KEY_SEQUENCE: u64 = (1u64 << 56) - 1;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ValueType {
@@ -226,7 +226,7 @@ mod tests {
         let mut tests: Vec<(u64, ValueType, Vec<u8>)> = vec![
             (1, ValueType::Value, vec![1, 1, 0, 0, 0,0 ,0, 0]),
             (2, ValueType::Deletion, vec![0, 2, 0,0,0,0,0,0]),
-            (MAX_KEY_SEQUENCE, ValueType::Deletion, vec![255, 255,255,255,255,255,255,1]),
+            (MAX_KEY_SEQUENCE, ValueType::Deletion, vec![0, 255, 255,255,255,255,255,255]),
         ];
         for (seq, t, expect) in tests.drain(..) {
             assert_eq!(pack_seq_and_type(seq, t), expect);
