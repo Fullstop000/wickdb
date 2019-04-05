@@ -28,7 +28,7 @@ use super::slice::Slice;
 pub fn encode_fixed_32(dst: &mut [u8], value: u32) {
     invarint!(
         dst.len() >= 4,
-        "the length of 'dst' must be more than 4 for a u32",
+        "the length of 'dst' must be more than 4 for a u32, but got {}", dst.len()
     );
     unsafe {
         let bytes = transmute::<u32, [u8; 4]>(value.to_le());
@@ -44,7 +44,7 @@ pub fn encode_fixed_32(dst: &mut [u8], value: u32) {
 pub fn encode_fixed_64(dst: &mut [u8], value: u64) {
     invarint!(
         dst.len() >= 4,
-        "the length of 'dst' must be more than 4 for a u64",
+        "the length of 'dst' must be more than 4 for a u64, but got {}", dst.len()
     );
     unsafe {
         let bytes = transmute::<u64, [u8; 8]>(value.to_le());
@@ -54,34 +54,34 @@ pub fn encode_fixed_64(dst: &mut [u8], value: u64) {
 
 /// Decodes the first 4-bytes of `src` in little-endian and returns the decoded value.
 ///
-/// # Panics
-///
-/// Panics if `src.len()` is less than 4.
+/// If the length of the given `src` is larger than 4, only use `src[0..4]`
 pub fn decode_fixed_32(src: &[u8]) -> u32 {
-    invarint!(
-        src.len() >= 4,
-        "the length of 'src' must be more than 4 for converting to a u32",
-    );
     let mut data: u32 = 0;
-    unsafe {
-        copy_nonoverlapping(src.as_ptr(), &mut data as *mut u32 as *mut u8, 4);
+    if src.len() >= 4 {
+        unsafe {
+            copy_nonoverlapping(src.as_ptr(), &mut data as *mut u32 as *mut u8, 4);
+        }
+    } else {
+        for i in 0..src.len() {
+            data += (src[i] as u32) << (i * 8);
+        }
     }
     data.to_le()
 }
 
 /// Decodes the first 8-bytes of `src` in little-endian and returns the decoded value.
 ///
-/// # Panics
-///
-/// Panics if `src.len()` is less than 8.
+/// If the length of the given `src` is larger than 8, only use `src[0..8]`
 pub fn decode_fixed_64(src: &[u8]) -> u64 {
-    invarint!(
-        src.len() >= 8,
-        "the length of 'src' must be more than 4 for converting to a u64",
-    );
     let mut data: u64 = 0;
-    unsafe {
-        copy_nonoverlapping(src.as_ptr(), &mut data as *mut u64 as *mut u8, 8);
+    if src.len() >= 8 {
+        unsafe {
+            copy_nonoverlapping(src.as_ptr(), &mut data as *mut u64 as *mut u8, 8);
+        }
+    } else {
+        for i in 0..src.len() {
+            data += (src[i] as u64) << (i * 8);
+        }
     }
     data.to_le()
 }
@@ -112,13 +112,19 @@ mod tests {
     #[test]
     fn test_decode_fixed_32() {
         let mut tests: Vec<(Vec<u8>, u32)> = vec![
+            (vec![], 0u32),
+            (vec![0], 0u32),
+            (vec![1, 0], 1u32),
+            (vec![1, 1], 257u32),
             (vec![0, 0, 0, 0], 0u32),
             (vec![1, 0, 0, 0], 1u32),
             (vec![255, 0, 0, 0], 255u32),
             (vec![0, 1, 0, 0], 256u32),
+            (vec![0, 1], 256u32),
             (vec![0, 2, 0, 0], 512u32),
             (vec![255, 255, 255, 255], u32::max_value()),
             (vec![255, 255, 255, 255, 0, 0], u32::max_value()),
+            (vec![255, 255, 255, 255, 1, 0], u32::max_value()),
         ];
         for (src, expect) in tests.drain(..) {
             let result = decode_fixed_32(src.as_slice());
@@ -156,10 +162,15 @@ mod tests {
     #[test]
     fn test_decode_fixed_64() {
         let mut tests: Vec<(Vec<u8>, u64)> = vec![
+            (vec![], 0u64),
+            (vec![0], 0u64),
             (vec![0; 8], 0u64),
+            (vec![1, 0], 1u64),
+            (vec![1, 1], 257u64),
             (vec![1, 0, 0, 0, 0, 0, 0, 0], 1u64),
             (vec![255, 0, 0, 0, 0, 0, 0, 0], 255u64),
             (vec![0, 1, 0, 0, 0, 0, 0, 0], 256u64),
+            (vec![0, 1], 256u64),
             (vec![0, 2, 0, 0, 0, 0, 0, 0], 512u64),
             (
                 vec![255, 255, 255, 255, 255, 255, 255, 255],
@@ -167,6 +178,10 @@ mod tests {
             ),
             (
                 vec![255, 255, 255, 255, 255, 255, 255, 255, 0, 0],
+                u64::max_value(),
+            ),
+            (
+                vec![255, 255, 255, 255, 255, 255, 255, 255, 1, 0],
                 u64::max_value(),
             ),
         ];
