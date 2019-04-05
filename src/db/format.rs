@@ -224,8 +224,8 @@ mod tests {
     #[test]
     fn test_pack_seq_and_type() {
         let mut tests: Vec<(u64, ValueType, Vec<u8>)> = vec![
-//            (1, ValueType::Value, vec![1, 0, 0, 0, 0,0 ,0, 0]),
-            (2, ValueType::Deletion, vec![2, 0,0,0,0,0,0,1]),
+            (1, ValueType::Value, vec![1, 1, 0, 0, 0,0 ,0, 0]),
+            (2, ValueType::Deletion, vec![0, 2, 0,0,0,0,0,0]),
             (MAX_KEY_SEQUENCE, ValueType::Deletion, vec![255, 255,255,255,255,255,255,1]),
         ];
         for (seq, t, expect) in tests.drain(..) {
