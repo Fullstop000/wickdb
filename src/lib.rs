@@ -17,7 +17,10 @@
 #[macro_use]
 extern crate log;
 extern crate libc;
+#[macro_use]
+extern crate lazy_static;
 extern crate rand;
+extern crate crc;
 
 #[macro_use]
 pub mod util;
@@ -28,3 +31,5 @@ pub mod options;
 pub mod filter;
 pub mod mem;
 pub mod snapshot;
+pub mod record;
+pub mod storage;

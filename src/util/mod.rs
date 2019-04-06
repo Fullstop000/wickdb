@@ -15,6 +15,7 @@
 pub mod macros;
 pub mod byte;
 pub mod coding;
+pub mod crc32;
 pub mod comparator;
 pub mod status;
 pub mod hash;
