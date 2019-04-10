@@ -42,19 +42,8 @@ pub trait FilterPolicy {
     /// `MayContain` returns whether the encoded filter may contain given key.
     /// False positives are possible, where it returns true for keys not in the
     /// original set.
-    fn may_contain(&self, key: &Slice) -> bool;
+    fn may_contain(&self, filter: &[u8], key: &Slice) -> bool;
 
-    /// Creates a new `FilterWriter`
-    fn new_filter_writer(&self) -> Box<dyn FilterWriter>;
-}
-
-pub trait FilterWriter {
-
-    /// `add_key` adds a key to the current filter block.
-    fn add_key(&mut self, key: &Slice);
-
-    /// `finish` appends to dst an encoded filter that holds the current set of
-    /// keys. The writer state is reset after the call to `Finish` allowing the
-    /// writer to be reused for the creation of additional filters.
-    fn finish(&mut self) -> Slice;
+    /// Creates a filter based on given keys
+    fn create_filter(&self, keys: &[Vec<u8>]) -> Vec<u8>;
 }
