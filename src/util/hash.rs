@@ -21,7 +21,6 @@ pub fn hash(data: &[u8], seed: u32) -> u32 {
     // Similar to murmur hash
     let n = data.len();
     let m: u32 = 0xc6a4a793;
-    let r = 24;
     let mut h = seed ^ (m.wrapping_mul(n as u32));
 
     // Pick up four bytes at a time
@@ -29,7 +28,7 @@ pub fn hash(data: &[u8], seed: u32) -> u32 {
     while i + 4 <= n {
         let w = decode_fixed_32(&data[i..]);
         i += 4;
-        h += w;
+        h = h.wrapping_add(w);
         h = h.wrapping_mul(m);
         h ^= h >> 16;
     }
@@ -41,7 +40,7 @@ pub fn hash(data: &[u8], seed: u32) -> u32 {
     if diff >= 1 {
         h += data[i] as u32;
         h = h.wrapping_mul(m);
-        h ^= h >> r;
+        h ^= h >> 24;
     }
     h
 }
