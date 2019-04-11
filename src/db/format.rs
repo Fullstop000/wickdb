@@ -23,7 +23,7 @@ use std::fmt::{Display, Formatter, Error, Debug};
 
 /// The max key sequence number. The value is 2^56 - 1 because the seq number
 /// only takes 56 bits when is serialized to `InternalKey`
-pub static MAX_KEY_SEQUENCE: u64 = (1u64 << 56) - 1;
+pub const MAX_KEY_SEQUENCE: u64 = (1u64 << 56) - 1;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ValueType {

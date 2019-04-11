@@ -28,17 +28,14 @@ pub struct BloomFilter {
 impl BloomFilter {
     pub fn new(bits_per_key: usize) -> Self {
         // 0.69 =~ ln(2) and we intentionally round down to reduce probing cost a little bit
-        let k = bits_per_key as f32 * 0.69;
-        let mut tk: usize = 1;
-        if k > 30 as f32{
-            tk = 30;
-        } else if k < 1 as f32 {
-            tk = 1;
-        } else {
-            tk = k as usize;
-        };
+        let mut k = bits_per_key as f32 * 0.69;
+        if k > 30f32{
+            k = 30f32;
+        } else if k < 1f32 {
+            k = 1f32;
+        }
         Self {
-            k: tk,
+            k: k as usize,
             bits_per_key,
         }
     }
