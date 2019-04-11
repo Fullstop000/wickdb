@@ -265,11 +265,6 @@ impl Reader {
                 }
             }
 
-            // Skip physical record that started before initial_offset
-            if (self.end_of_buffer_offset - self.buf.len() as u64
-                 - HEADER_SIZE as u64 - record_length as u64 ) < self.initial_offset {
-                return Err(BadRecord);
-            }
             return Ok(Record {
                 t: RecordType::from(record_type as usize),
                 data: Vec::from(&self.buf[self.i+HEADER_SIZE..self.j]),

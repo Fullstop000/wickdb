@@ -23,13 +23,15 @@ extern crate rand;
 extern crate crc;
 
 #[macro_use]
-pub mod util;
+mod util;
 pub mod cache;
 pub mod batch;
 pub mod db;
+mod iterator;
 pub mod options;
 pub mod filter;
-pub mod mem;
-pub mod snapshot;
-pub mod record;
+mod mem;
+mod table;
+mod snapshot;
+mod record;
 pub mod storage;

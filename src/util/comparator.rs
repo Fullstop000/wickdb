@@ -87,8 +87,6 @@ impl Comparator for BytewiseComparator {
             None
         } else {
             let last = a[diff_index];
-            dbg!(diff_index);
-            dbg!(last);
             if last != 0xff && last + 1 < b[diff_index] {
                 let mut res = vec![0;diff_index+1];
                 res[0..=diff_index].copy_from_slice(&(a.to_slice())[0..=diff_index]);
