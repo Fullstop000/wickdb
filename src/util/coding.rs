@@ -52,6 +52,7 @@ pub fn encode_fixed_64(dst: &mut [u8], value: u64) {
     }
 }
 
+
 /// Decodes the first 4-bytes of `src` in little-endian and returns the decoded value.
 ///
 /// If the length of the given `src` is larger than 4, only use `src[0..4]`
@@ -84,6 +85,20 @@ pub fn decode_fixed_64(src: &[u8]) -> u64 {
         }
     }
     data.to_le()
+}
+
+/// Encodes the given u32 to bytes and concatenates the result to `dst`
+pub fn put_fixed_32(dst: &mut Vec<u8>, value: u32) {
+    let mut buf = [0u8;4];
+    encode_fixed_32(&mut buf[..], value);
+    dst.extend_from_slice(&buf);
+}
+
+/// Encodes the given u64 to bytes and concatenates the result to `dst`
+pub fn put_fixed_64(dst: &mut Vec<u8>, value: u64) {
+    let mut buf = [0u8;8];
+    encode_fixed_64(&mut buf[..], value);
+    dst.extend_from_slice(&buf);
 }
 
 #[cfg(test)]
@@ -188,6 +203,39 @@ mod tests {
         for (src, expect) in tests.drain(..) {
             let result = decode_fixed_64(src.as_slice());
             assert_eq!(result, expect);
+        }
+    }
+
+    #[test]
+    fn test_put_fixed32() {
+        let mut s: Vec<u8> = vec![];
+        for i in 0..100000u32 {
+            put_fixed_32(&mut s, i);
+        }
+        for i in 0..100000u32 {
+            let res = decode_fixed_32(s.as_mut_slice());
+            assert_eq!(i, res);
+            s.drain(0..4);
+        }
+    }
+
+    #[test]
+    fn test_put_fixed64() {
+        let mut s: Vec<u8> = vec![];
+        for power in 0..=63u64 {
+            let v = 1 << power;
+            put_fixed_64(&mut s, v - 1);
+            put_fixed_64(&mut s, v);
+            put_fixed_64(&mut s, v + 1);
+        }
+        for power in 0..=63u64 {
+            let v = 1 << power;
+            assert_eq!(v-1, decode_fixed_64(s.as_mut_slice()));
+            s.drain(0..8);
+            assert_eq!(v, decode_fixed_64(s.as_mut_slice()));
+            s.drain(0..8);
+            assert_eq!(v + 1, decode_fixed_64(s.as_mut_slice()));
+            s.drain(0..8);
         }
     }
 }
