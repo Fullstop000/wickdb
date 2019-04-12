@@ -14,7 +14,7 @@
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
-use crate::options::Options;
+
 use crate::filter::FilterPolicy;
 use crate::util::slice::Slice;
 use crate::util::coding::{put_fixed_32, decode_fixed_32};
@@ -25,7 +25,7 @@ const FILTER_BASE: usize = 1<< FILTER_BASE_LG; // 2KiB
 /// A `FilterBlockBuilder` is used to construct all of the filters for a
 /// particular Table.  It generates a single string which is stored as
 /// a special block in the Table.
-struct FilterBlockBuilder {
+pub struct FilterBlockBuilder {
     policy: Box<dyn FilterPolicy>,
     // key contents
     // reused by every block
@@ -105,7 +105,7 @@ impl FilterBlockBuilder {
     }
 }
 
-struct FilterBlockReader <'a> {
+pub struct FilterBlockReader <'a> {
     policy: Box<dyn FilterPolicy>,
     // all filter data
     data: &'a [u8],

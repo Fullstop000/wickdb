@@ -141,5 +141,125 @@
 ///
 /// NOTE: All fixed-length integer are little-endian.
 
-mod format;
+mod block;
 mod filter_block;
+
+use crate::util::varint::{VarintU64, VarintU32, MAX_VARINT_LEN_U64};
+use crate::util::status::{WickErr, Status};
+use crate::util::coding::decode_fixed_64;
+
+const TABLE_MAGIC_NUMBER: u64 = 0xdb4775248b80fb57;
+
+// 1byte compression type + 4bytes cyc
+const BLOCK_TRAILER_SIZE: usize = 5;
+
+// Maximum encoding length of a BlockHandle
+const MAX_BLOCK_HANDLE_ENCODE_LENGTH: usize = 2 * MAX_VARINT_LEN_U64;
+
+// Encoded length of a Footer.  Note that the serialization of a
+// Footer will always occupy exactly this many bytes.  It consists
+// of two block handles and a magic number.
+const FOOTER_ENCODED_LENGTH: usize = 2 * MAX_BLOCK_HANDLE_ENCODE_LENGTH + 8;
+
+/// `BlockHandle` is a pointer to the extent of a file that stores a data
+/// block or a meta block.
+pub struct BlockHandle {
+    offset: u64,
+    size: u64,
+}
+
+impl BlockHandle {
+    pub fn new(offset: u64, size: u64) -> Self {
+        Self {
+            offset,
+            size,
+        }
+    }
+
+    #[inline]
+    pub fn get_offset(&self) -> u64 {
+        self.offset
+    }
+
+    #[inline]
+    pub fn set_offset(&mut self, offset: u64) {
+        self.offset = offset;
+    }
+
+    /// Appends varint encoded offset and size into given `dst`
+    #[inline]
+    pub fn encoded_to(&self, dst: &mut Vec<u8>) {
+        VarintU64::put_varint(dst, self.offset);
+        VarintU64::put_varint(dst, self.size);
+    }
+
+    /// Decodes a BlockHandle from bytes
+    ///
+    /// # Error
+    ///
+    /// If varint decoding fails, return `Status::Corruption` with relative messages
+    #[inline]
+    pub fn decode_from(src: &[u8]) -> Result<(Self, usize), WickErr> {
+        if let Some((offset, n)) = VarintU64::read(src) {
+            if let Some((size, m)) = VarintU64::read(&src[n..]) {
+                Ok((Self::new(offset, size), m + n))
+            } else {
+                Err(WickErr::new(Status::Corruption, Some("bad block handle")))
+            }
+        } else {
+            Err(WickErr::new(Status::Corruption, Some("bad block handle")))
+        }
+    }
+}
+
+/// `Footer` encapsulates the fixed information stored at the tail
+/// end of every table file.
+pub struct Footer {
+    meta_index_handle: BlockHandle,
+    index_handle: BlockHandle,
+}
+
+impl Footer {
+    /// Decodes a `Footer` from the given `src` bytes and returns the decoded length
+    ///
+    /// # Error
+    ///
+    /// Returns `Status::Corruption` when decoding meta index or index handle fails
+    ///
+    pub fn decode_from(src: &[u8]) -> Result<(Self, usize), WickErr> {
+        let magic = decode_fixed_64(&src[FOOTER_ENCODED_LENGTH - 8..]);
+        if magic != TABLE_MAGIC_NUMBER {
+            return Err(WickErr::new(Status::Corruption, Some("not an sstable (bad magic number)")));
+        };
+        let (meta_index_handle, n) = BlockHandle::decode_from(src)?;
+        let (index_handle, m) = BlockHandle::decode_from(&src[n..])?;
+        Ok((Self{
+            meta_index_handle,
+            index_handle,
+        }, m + n))
+    }
+
+    /// Get `meta_index_handle`
+    #[inline]
+    pub fn get_meta_index_handle(&self) -> &BlockHandle {
+        &self.meta_index_handle
+    }
+
+    /// Set `meta_index_handle`
+    #[inline]
+    pub fn set_meta_index_handle(&mut self, meta_index_handle: BlockHandle) {
+        self.meta_index_handle = meta_index_handle;
+    }
+
+    /// Get `index_handle`
+    #[inline]
+    pub fn get_index_handle(&self) -> &BlockHandle {
+        &self.index_handle
+    }
+
+    /// Set `index_handle`
+    #[inline]
+    pub fn set_index_handle(&mut self, index_handle: BlockHandle) {
+        self.index_handle = index_handle;
+    }
+}
