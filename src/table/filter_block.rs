@@ -18,6 +18,7 @@
 use crate::filter::FilterPolicy;
 use crate::util::slice::Slice;
 use crate::util::coding::{put_fixed_32, decode_fixed_32};
+use std::rc::Rc;
 
 const FILTER_BASE_LG: usize = 11;
 const FILTER_BASE: usize = 1<< FILTER_BASE_LG; // 2KiB
@@ -26,7 +27,7 @@ const FILTER_BASE: usize = 1<< FILTER_BASE_LG; // 2KiB
 /// particular Table.  It generates a single string which is stored as
 /// a special block in the Table.
 pub struct FilterBlockBuilder {
-    policy: Box<dyn FilterPolicy>,
+    policy: Rc<Box<dyn FilterPolicy>>,
     // key contents
     // reused by every block
     keys: Vec<Vec<u8>>,
@@ -38,7 +39,7 @@ pub struct FilterBlockBuilder {
 }
 
 impl FilterBlockBuilder {
-    pub fn new(policy: Box<dyn FilterPolicy>) -> Self {
+    pub fn new(policy: Rc<Box<dyn FilterPolicy>>) -> Self {
         Self {
             policy,
             keys: vec![],
@@ -106,7 +107,7 @@ impl FilterBlockBuilder {
 }
 
 pub struct FilterBlockReader <'a> {
-    policy: Box<dyn FilterPolicy>,
+    policy: Rc<Box<dyn FilterPolicy>>,
     // all filter data
     data: &'a [u8],
     // all filter data offsets
@@ -117,7 +118,7 @@ pub struct FilterBlockReader <'a> {
 }
 
 impl<'a> FilterBlockReader<'a> {
-    pub fn new(policy: Box<dyn FilterPolicy>, filter_block: &'a [u8] ) -> Self {
+    pub fn new(policy: Rc<Box<dyn FilterPolicy>>, filter_block: &'a [u8] ) -> Self {
         let mut r = FilterBlockReader {
             policy,
             data: &filter_block[0..0],
@@ -198,10 +199,10 @@ mod tests {
     }
 
     fn new_test_builder() -> FilterBlockBuilder {
-        FilterBlockBuilder::new(Box::new(TestHashFilter{}))
+        FilterBlockBuilder::new(Rc::new(Box::new(TestHashFilter{})))
     }
     fn new_test_reader(block: &[u8]) -> FilterBlockReader {
-        FilterBlockReader::new(Box::new(TestHashFilter{}), block)
+        FilterBlockReader::new(Rc::new(Box::new(TestHashFilter{})), block)
     }
 
     #[test]
