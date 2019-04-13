@@ -23,7 +23,6 @@ use crate::util::comparator::Comparator;
 use crate::iterator::Iterator;
 use std::rc::Rc;
 use crate::util::status::{WickErr, Status};
-use std::thread::current;
 use crate::util::crc32::value;
 
 /// `Block` is consist of one or more key/value entries and a block trailer.
@@ -219,8 +218,8 @@ impl<'a> Iterator for BlockIterator<'a> {
             }
             let key_offset = region_offset + (n0 + n1 + n2) as u32;
             let key_len = (shared + not_shared) as usize;
-            let mid_key = Slice::from(&src[key_offset as usize..key_offset as usize + key_len]);
-            match self.cmp.compare(&mid_key, target) {
+            let mid_key = &src[key_offset as usize..key_offset as usize + key_len];
+            match self.cmp.compare(&mid_key, target.to_slice()) {
                 Ordering::Less => left = mid,
                 _ => right = mid - 1,
             }
@@ -234,7 +233,7 @@ impl<'a> Iterator for BlockIterator<'a> {
             if !self.parse_block_entry() {
                 return;
             }
-            match self.cmp.compare(&Slice::from(self.key.as_slice()), target) {
+            match self.cmp.compare(self.key.as_slice(), target.to_slice()) {
                 Ordering::Less => {},
                 _ => return,
             }
@@ -360,7 +359,7 @@ impl BlockBuilder {
         );
         assert!(
             self.buffer.is_empty() ||
-                self.cmp.compare(&Slice::from(key), &Slice::from(self.last_key.as_slice())) == Ordering::Greater,
+                self.cmp.compare(key, self.last_key.as_slice()) == Ordering::Greater,
             "[block builder] in consistent new key"
         );
         let mut shared = 0;
@@ -387,6 +386,11 @@ impl BlockBuilder {
         // update last_key
         self.last_key.clear();
         self.last_key.extend_from_slice(key);
+    }
+
+    /// Returns true iff no entries have been added since the last `reset()`
+    pub fn empty(&self) -> bool {
+        self.buffer.is_empty()
     }
 }
 

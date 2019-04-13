@@ -144,7 +144,7 @@ impl InternalKeyComparator {
 }
 
 impl Comparator for InternalKeyComparator {
-    fn compare(&self, a: &Slice, b: &Slice) -> Ordering {
+    fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
         let ua = extract_user_key(a);
         let ub = extract_user_key(b);
         // compare user key first
@@ -172,12 +172,12 @@ impl Comparator for InternalKeyComparator {
         "leveldb.InternalKeyComparator"
     }
 
-    fn separator(&self, a: &Slice, b: &Slice) -> Option<Vec<u8>> {
+    fn separator(&self, a: &[u8], b: &[u8]) -> Vec<u8> {
         // TODO
         unimplemented!()
     }
 
-    fn successor(&self, s: &Slice) -> Option<Vec<u8>> {
+    fn successor(&self, s: &[u8]) -> Vec<u8> {
         // TODO
         unimplemented!()
     }
@@ -185,9 +185,9 @@ impl Comparator for InternalKeyComparator {
 
 // use a `Slice` to represent only the user key in a internal key slice
 #[inline]
-fn extract_user_key(key: &Slice) -> Slice {
-    let size = key.size();
-    invarint!(
+fn extract_user_key(key: &[u8]) -> Slice {
+    let size = key.len();
+    assert!(
             size >= 8,
             "[internal key] invalid size of internal key : expect >= 8 but got {}", size
         );
@@ -196,13 +196,13 @@ fn extract_user_key(key: &Slice) -> Slice {
 
 // get the sequence number from a internal key slice
 #[inline]
-fn extract_seq_number(key: &Slice) -> u64 {
-    let size = key.size();
-    invarint!(
+fn extract_seq_number(key: &[u8]) -> u64 {
+    let size = key.len();
+    assert!(
             size >= 8,
             "[internal key] invalid size of internal key : expect >= 8 but got {}", size
         );
-    decode_fixed_64(&(key.to_slice())[size-8..]) >> 8
+    decode_fixed_64(&key[size-8..]) >> 8
 }
 
 #[inline]

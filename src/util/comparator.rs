@@ -17,6 +17,7 @@
 
 use super::slice::Slice;
 use std::cmp::{Ordering, min};
+use crate::util::byte::compare;
 
 /// A Comparator object provides a total order across `Slice` that are
 /// used as keys in an sstable or a database.  A Comparator implementation
@@ -24,10 +25,10 @@ use std::cmp::{Ordering, min};
 /// from multiple threads.
 pub trait Comparator {
     /// Three-way comparison. Returns value:
-    ///   `Ordering::Less`    iff `self` < `b`
-    ///   `Ordering::Equal`   iff `self` = `b`
-    ///   `Ordering::Greater` iff `self` > `b`
-    fn compare(&self, a: &Slice, b: &Slice) -> Ordering;
+    ///   `Ordering::Less`    iff `a` < `b`
+    ///   `Ordering::Equal`   iff `a` = `b`
+    ///   `Ordering::Greater` iff `a` > `b`
+    fn compare(&self, a: &[u8], b: &[u8]) -> Ordering;
 
     /// The name of the comparator.  Used to check for comparator
     /// mismatches (i.e., a DB created with one comparator is
@@ -47,13 +48,18 @@ pub trait Comparator {
     /// 1. Compare(a, k) <= 0, and
     /// 2. Compare(k, b) < 0.
     ///
-    /// Separator is used to construct SSTable index blocks. A trivial implementation
+    /// `separator` is used to construct SSTable index blocks. A trivial implementation
     /// is `return a`, but appending fewer bytes leads to smaller SSTables.
-    fn separator(&self, a: &Slice, b: &Slice) -> Option<Vec<u8>>;
+    ///
+    /// If one key is the prefix of the other or b is smaller than a, returns a
+    // TODO: returns a &[u8] to avoid copy ?
+    fn separator(&self, a: &[u8], b: &[u8]) -> Vec<u8>;
 
-    /// Given a feasible key a, Successor returns feasible key k such that Compare(k,
+    /// Given a feasible key s, Successor returns feasible key k such that Compare(k,
     /// a) >= 0.
-    fn successor(&self, s: &Slice) -> Option<Vec<u8>>;
+    /// If the key is a run of \xff, returns itself
+    // TODO: returns a &[u8] to avoid copy ?
+    fn successor(&self, key: &[u8]) -> Vec<u8>;
 }
 
 pub struct BytewiseComparator {}
@@ -66,8 +72,8 @@ impl BytewiseComparator {
 
 impl Comparator for BytewiseComparator {
     #[inline]
-    fn compare(&self, a: &Slice, b: &Slice) -> Ordering {
-        a.compare(b)
+    fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
+        compare(a, b)
     }
 
     #[inline]
@@ -76,40 +82,39 @@ impl Comparator for BytewiseComparator {
     }
 
     #[inline]
-    fn separator(&self, a: &Slice, b: &Slice) -> Option<Vec<u8>> {
-        let min_size = min(a.size(), b.size());
+    fn separator(&self, a: &[u8], b: &[u8]) -> Vec<u8> {
+        let min_size = min(a.len(), b.len());
         let mut diff_index = 0;
         while diff_index < min_size && a[diff_index] == b[diff_index] {
             diff_index += 1;
         };
         if diff_index >= min_size {
-            // one is the prefix of the other return None
-            None
+            // one is the prefix of the other
         } else {
             let last = a[diff_index];
             if last != 0xff && last + 1 < b[diff_index] {
                 let mut res = vec![0;diff_index+1];
-                res[0..=diff_index].copy_from_slice(&(a.to_slice())[0..=diff_index]);
+                res[0..=diff_index].copy_from_slice(&a[0..=diff_index]);
                 *(res.last_mut().unwrap()) += 1;
-                return Some(res);
+                return res;
             }
-            None
         }
+        Vec::from(a)
     }
 
     #[inline]
-    fn successor(&self, s: &Slice) -> Option<Vec<u8>> {
+    fn successor(&self, key: &[u8]) -> Vec<u8> {
         // Find first character that can be incremented
-        for i in 0..s.size() {
-            let byte = s[i];
+        for i in 0..key.len() {
+            let byte = key[i];
             if byte != 0xff {
                 let mut res : Vec<u8>= vec![0;i+1];
-                res[0..=i].copy_from_slice(&(s.to_slice())[0..=i]);
+                res[0..=i].copy_from_slice(&key[0..=i]);
                 *(res.last_mut().unwrap()) += 1;
-                return Some(res);
+                return res;
             }
         }
-        None
+        Vec::from(key)
     }
 }
 
@@ -120,41 +125,48 @@ mod tests {
     #[test]
     fn test_bytewise_comparator_separator() {
         let mut tests = vec![
-            ("", "1111", None),
-            ("1111", "", None),
-            ("1111", "111", None),
-            ("123", "1234", None),
-            ("1234", "1234", None),
-            ("1111", "12345", None),
-            ("1111", "13345", Some(vec![49,50])),
+            ("", "1111", ""),
+            ("1111", "", "1111"),
+            ("1111", "111", "1111"),
+            ("123", "1234", "123"),
+            ("1234", "1234", "1234"),
+            ("1", "2", "1"),
+            ("1357", "2", "1357"),
+            ("1111", "12345", "1111"),
+            ("1111", "13345", "12"),
         ];
         let c = BytewiseComparator::new();
         for (a, b, expect) in tests.drain(..) {
-            let res = c.separator(&Slice::from(a), &Slice::from(b));
-            assert_eq!(res, expect);
+            let res = c.separator(a.as_bytes(), b.as_bytes());
+            assert_eq!(String::from_utf8(res).unwrap().as_str(), expect);
         }
         // special 0xff case
         let a : Vec<u8> = vec![48, 255];
         let b: Vec<u8> = vec![48, 49, 50, 51];
-        let res = c.separator(&Slice::from(&a), &Slice::from(&b));
-        assert_eq!(res, None);
+        let res = c.separator(a.as_slice(), b.as_slice());
+        assert_eq!(res, a);
     }
 
     #[test]
     fn test_bytewise_comparator_successor() {
         let mut tests = vec![
-            ("", None),
-            ("111", Some(vec![50])),
-            ("222", Some(vec![51])),
+            ("", ""),
+            ("111", "2"),
+            ("222", "3"),
         ];
         let c = BytewiseComparator::new();
         for (input, expect) in tests.drain(..) {
-            let res = c.successor(&Slice::from(input));
-            assert_eq!(res, expect);
+            let res = c.successor(input.as_bytes());
+            assert_eq!(String::from_utf8(res).unwrap().as_str(), expect);
         }
         // special 0xff case
-        let s: Vec<u8> = vec![0xff, 0xff, 1];
-        let res = c.successor(&Slice::from(&s));
-        assert_eq!(res, Some(vec![255u8, 255u8, 2]))
+        let mut corner_tests = vec![
+            (vec![0xff, 0xff, 1], vec![255u8, 255u8, 2]),
+            (vec![0xff, 0xff, 0xff], vec![255u8, 255u8, 255u8]),
+        ];
+        for (input, expect) in corner_tests.drain(..) {
+            let res = c.successor(input.as_slice());
+            assert_eq!(res, expect)
+        }
     }
 }

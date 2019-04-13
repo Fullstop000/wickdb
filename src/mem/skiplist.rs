@@ -201,7 +201,7 @@ impl Skiplist {
             unsafe {
                 let next = (*node).get_next(level);
                 if next.is_null()
-                    || self.comparator.compare(&((*next).key(arena)), key) != CmpOrdering::Less
+                    || self.comparator.compare(&((*next).key(arena)).to_slice(), key.to_slice()) != CmpOrdering::Less
                 {
                     // next is nullptr or next.key >= key
                     if level == 1 {
@@ -246,7 +246,7 @@ impl Skiplist {
             true
         } else {
             let node_key = unsafe { (*n).key(&self.arena) };
-            match self.comparator.compare(key, &node_key) {
+            match self.comparator.compare(key.to_slice(), node_key.to_slice()) {
                 CmpOrdering::Greater => false,
                 _ => true,
             }
@@ -274,6 +274,7 @@ mod tests {
     use crate::util::comparator::BytewiseComparator;
     use std::ptr;
     use std::rc::Rc;
+    use crate::iterator::Iterator;
 
     fn new_test_skl() -> Skiplist {
         Skiplist::new(
