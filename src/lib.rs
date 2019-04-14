@@ -13,6 +13,7 @@
 
 #![allow(dead_code)]
 #![allow(unused_variables)]
+#![feature(integer_atomics)]
 
 #[macro_use]
 extern crate log;

@@ -23,13 +23,57 @@ use std::ptr;
 use std::rc::Rc;
 use crate::cache::{Handle as CacheHandle, Cache, HandleRef};
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const NUM_SHARD_BITS : usize = 4;
 const NUM_SHARD : usize = 1 << NUM_SHARD_BITS;
 
+/// A LRUCache that can be accessed safely in multiple threads
 pub struct SharedLRUCache<T: Default + Debug> {
-    shards: [LRUCache<T>; NUM_SHARD],
-    last_id: u64,
+    shards: Vec<LRUCache<T>>,
+    last_id: AtomicU64,
+}
+
+impl<T:Default + Debug> SharedLRUCache<T> {
+    pub fn new(cap: usize) -> Self {
+        let per_shard = ( cap + NUM_SHARD - 1) / NUM_SHARD;
+        let mut shards = vec![];
+        for _ in 0..NUM_SHARD {
+            shards.push(LRUCache::new(cap));
+        }
+        Self {
+            shards,
+            last_id: AtomicU64::new(0),
+        }
+    }
+}
+
+// TODO: Finish implementation
+impl<T: Default + Debug> Cache<T> for SharedLRUCache<T> {
+    fn insert(&mut self, key: Slice, value: T, charge: usize, deleter: Box<FnMut(&Slice, &T)>) -> HandleRef<T> {
+        unimplemented!()
+    }
+
+    fn look_up(&self, key: &Slice) -> Option<HandleRef<T>> {
+        unimplemented!()
+    }
+
+    fn release(&mut self, handle: HandleRef<T>) {
+        unimplemented!()
+    }
+
+    fn erase(&mut self, key: Slice) {
+        unimplemented!()
+    }
+
+    fn new_id(&mut self) -> u64 {
+        let i = self.last_id.fetch_add(1, Ordering::SeqCst);
+        i + 1
+    }
+
+    fn total_charge(&self) -> usize {
+        unimplemented!()
+    }
 }
 
 pub struct LRUHandle<T: Default + Debug> {
@@ -281,7 +325,7 @@ impl <T: 'static + Default + Debug> Cache<T> for LRUCache<T> {
         }
     }
 
-    fn new_id(&self) -> usize {
+    fn new_id(&mut self) -> u64 {
         return 0
     }
 

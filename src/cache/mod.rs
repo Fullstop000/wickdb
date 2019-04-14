@@ -19,7 +19,7 @@ use crate::util::slice::Slice;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-mod lru;
+pub mod lru;
 
 /// The CacheHandle is a simple trait for the value in Cache
 pub trait Handle<T> {
@@ -81,7 +81,7 @@ pub trait Cache<T> {
     /// sharing the same cache to partition the key space.  Typically the
     /// client will allocate a new id at startup and prepend the id to
     /// its cache keys.
-    fn new_id(&self) -> usize;
+    fn new_id(&mut self) -> u64;
 
     /// Return an estimate of the combined charges of all elements stored in the
     /// cache.
