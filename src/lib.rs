@@ -21,6 +21,7 @@ extern crate libc;
 extern crate lazy_static;
 extern crate rand;
 extern crate crc;
+extern crate snap;
 
 #[macro_use]
 mod util;

@@ -16,8 +16,9 @@
 // found in the LICENSE file.
 
 use std::fmt::{Display, Formatter};
+use std::error::Error;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Status {
     NotFound,
     Corruption,
@@ -42,6 +43,7 @@ impl Status {
 pub struct WickErr {
     t: Status,
     msg: Option<&'static str>,
+    raw: Option<Box<dyn Error>>,
 }
 
 impl WickErr {
@@ -49,6 +51,15 @@ impl WickErr {
         Self {
             t,
             msg,
+            raw: None,
+        }
+    }
+
+    pub fn new_from_raw(t: Status, msg: Option<&'static str>, raw: Box<dyn Error>) -> Self {
+        Self {
+            t,
+            msg,
+            raw: Some(raw),
         }
     }
 }
@@ -56,8 +67,26 @@ impl WickErr {
 impl Display for WickErr {
     fn fmt(&self, f: &mut Formatter) -> ::std::fmt::Result {
         match self.msg {
-            Some(m) => write!(f, "WickDB error [{}] : {}", self.t.as_str(), m),
-            None => write!(f, "WickDB error [{}]", self.t.as_str()),
+            Some(m) => {
+                match &self.raw {
+                    Some(e) => {
+                        return write!(f, "WickDB error [{}] : {} , raw : {}", self.t.as_str(), m, e.description());
+                    },
+                    None => {
+                        return write!(f, "WickDB error [{}] : {}", self.t.as_str(), m);
+                    }
+                }
+            },
+            None => {
+                match &self.raw {
+                    Some(e) => {
+                        return write!(f, "WickDB error [{}] : {}", self.t.as_str(), e.description());
+                    },
+                    None => {
+                        return write!(f, "WickDB error [{}]", self.t.as_str());
+                    }
+                }
+            }
         }
     }
 }
@@ -66,7 +95,12 @@ impl ::std::error::Error for WickErr {
     fn description(&self) -> &str {
         match self.msg {
             Some(m) => m,
-            None => "",
+            None => {
+                match &self.raw {
+                    Some(e) => return e.description(),
+                    None => return "",
+                }
+            },
         }
     }
 }

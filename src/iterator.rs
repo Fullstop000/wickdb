@@ -59,5 +59,5 @@ pub trait Iterator {
     fn value(&self) -> Slice;
 
     /// If an error has occurred, return it.  Else return an ok status.
-    fn status(&self) -> Result<(), WickErr>;
+    fn status(&mut self) -> Result<(), WickErr>;
 }

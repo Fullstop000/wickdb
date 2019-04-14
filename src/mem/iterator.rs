@@ -81,7 +81,7 @@ impl<'a> Iterator for SkiplistIterator<'a > {
         unsafe { (*(self.node)).value(&self.skl.arena) }
     }
 
-    fn status(&self) -> Result<(), WickErr> {
+    fn status(&mut self) -> Result<(), WickErr> {
         Ok(())
     }
 }

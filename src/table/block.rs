@@ -23,7 +23,6 @@ use crate::util::comparator::Comparator;
 use crate::iterator::Iterator;
 use std::rc::Rc;
 use crate::util::status::{WickErr, Status};
-use crate::util::crc32::value;
 
 /// `Block` is consist of one or more key/value entries and a block trailer.
 /// Block entry shares key prefix with its preceding key until a `restart`
@@ -268,9 +267,9 @@ impl<'a> Iterator for BlockIterator<'a> {
         Slice::from(val)
     }
 
-    fn status(&self) -> Result<(), WickErr> {
-        if let Some(err) = self.err.clone() {
-            return Err(err);
+    fn status(&mut self) -> Result<(), WickErr> {
+        if let Some(err) = &self.err {
+            return Err(self.err.take().unwrap());
         }
         Ok(())
     }
@@ -389,7 +388,7 @@ impl BlockBuilder {
     }
 
     /// Returns true iff no entries have been added since the last `reset()`
-    pub fn empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.buffer.is_empty()
     }
 }

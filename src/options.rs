@@ -21,10 +21,12 @@ use crate::filter::FilterPolicy;
 use crate::util::slice::Slice;
 use crate::snapshot::Snapshot;
 use crate::options::CompressionType::SnappyCompression;
+use std::rc::Rc;
 
+#[derive(Clone, Copy, Debug)]
 pub enum CompressionType {
-    NoCompression,
-    SnappyCompression,
+    NoCompression = 0,
+    SnappyCompression = 1,
 }
 
 /// Options to control the behavior of a database (passed to `DB::Open`)
@@ -39,7 +41,7 @@ pub struct Options {
     /// REQUIRES: The client must ensure that the comparator supplied
     /// here has the same name and orders keys *exactly* the same as the
     /// comparator provided to previous open calls on the same DB.
-    pub comparator : Box<dyn Comparator>,
+    pub comparator : Rc<Box<dyn Comparator>>,
 
     /// If true, the database will be created if it is missing.
     pub create_if_missing: bool,
@@ -137,13 +139,13 @@ pub struct Options {
     /// If non-null, use the specified filter policy to reduce disk reads.
     /// Many applications will benefit from passing the result of
     /// NewBloomFilterPolicy() here.
-    pub filter_policy: Option<Box<dyn FilterPolicy>>,
+    pub filter_policy: Option<Rc<Box<dyn FilterPolicy>>>,
 }
 
 impl Default for Options {
     fn default() -> Self {
         Options {
-            comparator: Box::new(BytewiseComparator::new()),
+            comparator: Rc::new(Box::new(BytewiseComparator::new())),
             create_if_missing: false,
             error_if_exists: false,
             paranoid_checks: false,

@@ -12,7 +12,7 @@
 // limitations under the License.
 
 const MAX_VARINT_LEN_U32: usize = 5;
-const MAX_VARINT_LEN_U64: usize = 10;
+pub const MAX_VARINT_LEN_U64: usize = 10;
 
 pub struct VarintU32 {}
 pub struct VarintU64 {}
@@ -71,6 +71,42 @@ macro_rules! impl_varint {
                 }
                 dst.push(n as u8);
                 i + 1
+            }
+
+            /// Decodes a `u64` from given `src` and drains the read bytes.
+            /// Returns decoded u64 and drained bytes
+            /// Returns `(0,0)` if an error occurs
+            pub fn drain_read(src: &mut Vec<u8>) -> ($uint, usize) {
+                let (res, n) = Self::common_read(src.as_mut_slice());
+                src.drain(..n.abs() as usize);
+                (res, n.abs() as usize)
+            }
+
+            /// Decodes a u64 from given bytes and returns that value and the
+            /// number of bytes read ( > 0).If an error occurred, the value is 0
+            /// and the number of bytes n is <= 0 meaning:
+            ///
+            ///  n == 0:buf too small
+            ///  n  < 0: value larger than 64 bits (overflow)
+            ///          and -n is the number of bytes read
+            ///
+            pub fn common_read(src: &[u8]) -> ($uint, isize) {
+                let mut n: $uint = 0;
+                let mut shift: u32 = 0;
+                for (i, &b) in src.iter().enumerate() {
+                    if b < 0b1000_0000 {
+                        return match (b as $uint).checked_shl(shift) {
+                            None => (0, -(i as isize + 1)),
+                            Some(b) => (n | b, (i + 1) as isize),
+                        };
+                    }
+                    match ((b as $uint) & 0b0111_1111).checked_shl(shift) {
+                        None => return (0, -(i as isize)),
+                        Some(b) => n |= b,
+                    }
+                    shift += 7;
+                }
+                (0, 0)
             }
         }
     };

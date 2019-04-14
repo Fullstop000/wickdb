@@ -138,15 +138,23 @@
 ///     | data 1 offset |      ....     | data n offset | data-offsets offset (4-bytes) | base Lg (1-byte) |
 ///     +-------------- +---------------+---------------+-------------------------------+------------------+
 ///
+/// # Index block
+///
+/// Index block consist of one or more block handle data and a common block trailer.
+///
+/// # Meta block
+///
+/// This meta block contains a bunch of stats. The key is the name of the statistic. The value contains the statistic.
 ///
 /// NOTE: All fixed-length integer are little-endian.
 
 mod block;
 mod filter_block;
+mod table;
 
-use crate::util::varint::{VarintU64, VarintU32, MAX_VARINT_LEN_U64};
+use crate::util::varint::{VarintU64, MAX_VARINT_LEN_U64};
 use crate::util::status::{WickErr, Status};
-use crate::util::coding::decode_fixed_64;
+use crate::util::coding::{decode_fixed_64, put_fixed_64};
 
 const TABLE_MAGIC_NUMBER: u64 = 0xdb4775248b80fb57;
 
@@ -186,11 +194,29 @@ impl BlockHandle {
         self.offset = offset;
     }
 
+    #[inline]
+    pub fn get_size(&self) -> u64 {
+        self.size
+    }
+
+    #[inline]
+    pub fn set_size(&mut self, size: u64) {
+        self.size = size
+    }
+
     /// Appends varint encoded offset and size into given `dst`
     #[inline]
     pub fn encoded_to(&self, dst: &mut Vec<u8>) {
         VarintU64::put_varint(dst, self.offset);
         VarintU64::put_varint(dst, self.size);
+    }
+
+    /// Returns bytes for a encoded BlockHandle
+    #[inline]
+    pub fn encoded(&self) -> Vec<u8> {
+        let mut v = vec![];
+        self.encoded_to(&mut v);
+        v
     }
 
     /// Decodes a BlockHandle from bytes
@@ -220,6 +246,15 @@ pub struct Footer {
 }
 
 impl Footer {
+
+    #[inline]
+    pub fn new(meta_index_handle: BlockHandle, index_handle: BlockHandle) -> Self {
+        Self {
+            meta_index_handle,
+            index_handle,
+        }
+    }
+
     /// Decodes a `Footer` from the given `src` bytes and returns the decoded length
     ///
     /// # Error
@@ -237,6 +272,16 @@ impl Footer {
             meta_index_handle,
             index_handle,
         }, m + n))
+    }
+
+    /// Encodes footer and returns the encoded bytes
+    pub fn encoded(&self) -> Vec<u8> {
+        let mut v = vec![];
+        self.meta_index_handle.encoded_to(&mut v);
+        self.index_handle.encoded_to(&mut v);
+        put_fixed_64(&mut v, TABLE_MAGIC_NUMBER);
+        assert_eq!(v.len(), FOOTER_ENCODED_LENGTH, "[footer] the length of encoded footer is {}, expect {}", v.len(), FOOTER_ENCODED_LENGTH);
+        v
     }
 
     /// Get `meta_index_handle`
