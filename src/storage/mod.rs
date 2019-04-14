@@ -94,10 +94,11 @@ impl ReadAt for File {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
-    use std::fs::{remove_file};
+    use std::fs::remove_file;
 
     #[test]
     fn test_read_exact_at() {
@@ -114,11 +115,13 @@ mod tests {
         let rf = File::open("test").expect("");
         let mut buffer = vec![];
         for (offset, expect) in tests.drain(..) {
-            buffer.clear();
             buffer.resize(expect.as_bytes().len(), 0u8);
             rf.read_exact_at(buffer.as_mut_slice(), offset).expect("");
             assert_eq!(buffer, Vec::from(String::from(expect)));
         }
+        // EOF case
+        buffer.resize(100, 0u8);
+        rf.read_exact_at(buffer.as_mut_slice(), 2).expect_err("failed to fill whole buffer");
         remove_file("test").expect("");
     }
 }

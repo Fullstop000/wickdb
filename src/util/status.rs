@@ -24,6 +24,7 @@ pub enum Status {
     Corruption,
     NotSupported,
     InvalidArgument,
+    CompressionError,
     IOError
 }
 
@@ -34,6 +35,7 @@ impl Status {
             Status::Corruption => "CorruptionError",
             Status::NotSupported => "NotSupportedError",
             Status::InvalidArgument => "InvalidArgumentError",
+            Status::CompressionError => "CompressionError",
             Status::IOError => "IOError",
         }
     }

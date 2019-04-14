@@ -20,13 +20,25 @@ use crate::cache::Cache;
 use crate::filter::FilterPolicy;
 use crate::util::slice::Slice;
 use crate::snapshot::Snapshot;
-use crate::options::CompressionType::SnappyCompression;
+use crate::options::CompressionType::{SnappyCompression, NoCompression};
 use std::rc::Rc;
+use std::cell::RefCell;
+use crate::cache::lru::SharedLRUCache;
 
 #[derive(Clone, Copy, Debug)]
 pub enum CompressionType {
     NoCompression = 0,
     SnappyCompression = 1,
+}
+
+impl From<u8> for CompressionType {
+    fn from(i: u8) -> Self {
+        match i {
+            0 => NoCompression,
+            1 => SnappyCompression,
+            _ => panic!("invalid CompressionType value {}", i),
+        }
+    }
 }
 
 /// Options to control the behavior of a database (passed to `DB::Open`)
@@ -104,8 +116,7 @@ pub struct Options {
 
     /// If non-null, use the specified cache for blocks.
     /// If null, we will automatically create and use an 8MB internal cache.
-    // TODO: add option block_cache
-//    pub block_cache: Box<dyn Cache<>>,
+    pub block_cache: Rc<RefCell<dyn Cache<Vec<u8>>>>,
 
     /// Approximate size of user data packed per block.  Note that the
     /// block size specified here corresponds to uncompressed data.  The
@@ -156,6 +167,7 @@ impl Default for Options {
             l1_max_bytes: 64 * 1024 * 1024, // 64MB
             write_buffer_size: 4 * 1024 * 1024, // 4MB
             max_open_files: 500,
+            block_cache: Rc::new(RefCell::new(SharedLRUCache::new(8<<20))),
             block_size: 4 * 1024, // 4KB
             block_restart_interval: 16,
             max_file_size: 2 * 1024 * 1024, // 2MB

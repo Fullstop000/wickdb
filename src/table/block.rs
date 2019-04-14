@@ -43,22 +43,32 @@ pub struct Block {
 
 impl Block {
     /// Create a `Block` instance.
-    /// If the given `data` is invalid, returns `None`
-    pub fn new(data: Vec<u8>) -> Option<Self> {
+    ///
+    /// # Errors
+    ///
+    /// If the given `data` is invalid, return an error with `Status::Corruption`
+    ///
+    pub fn new(data: Vec<u8>) -> Result<Self, WickErr> {
         let size = data.len();
         if size >= 4 {
             let max_restarts_allowed = (size - 4) / 4;
             let restarts_len= Self::restarts_len(data.as_slice()) as usize;
             // make sure the size is enough for restarts
             if restarts_len <= max_restarts_allowed {
-                return Some(Self {
+                return Ok(Self {
                     data,
                     restart_offset: (size - (1 + restarts_len) * 4) as u32,
                 });
             }
-        }
-        None
+        };
+        Err(WickErr::new(Status::Corruption, Some("[block] read invalid block content")))
+    }
 
+    /// Create a BlockIterator for current block.
+    /// NOTICE: the caller's ownership will be moved into the created Iterator
+    pub fn into_iter(self, cmp: Rc<Box<Comparator>>) -> Box<dyn Iterator> {
+        let num_restarts = Self::restarts_len(self.data.as_slice());
+        Box::new(BlockIterator::new(cmp, self.data, self.restart_offset, num_restarts))
     }
 
     // decoded the restarts length from block data
@@ -70,12 +80,12 @@ impl Block {
 
 
 /// Iterator for every entry in the block
-pub struct BlockIterator<'a> {
+pub struct BlockIterator {
     cmp: Rc<Box<dyn Comparator>>,
 
     err: Option<WickErr>,
     // underlying block data
-    data: &'a [u8],
+    data: Vec<u8>,
     /*
       restarts
     */
@@ -96,9 +106,9 @@ pub struct BlockIterator<'a> {
     key: Vec<u8>, // buffer for a concated key
 }
 
-impl<'a> BlockIterator<'a> {
+impl BlockIterator {
 
-    pub fn new(cmp: Rc<Box<Comparator>>, data: &'a [u8], restarts: u32, restarts_len: u32) -> Self {
+    pub fn new(cmp: Rc<Box<Comparator>>, data: Vec<u8>, restarts: u32, restarts_len: u32) -> Self {
         // should be 0
         Self {
             cmp,
@@ -181,7 +191,7 @@ impl<'a> BlockIterator<'a> {
     }
 }
 
-impl<'a> Iterator for BlockIterator<'a> {
+impl Iterator for BlockIterator {
     fn valid(&self) -> bool {
         self.current < self.restarts
     }
@@ -329,7 +339,7 @@ impl BlockBuilder {
         self.last_key.clear();
     }
 
-    /// Appends the block trailers and returns the block data
+    /// Appends the block restarts metadata and returns the block data
     pub fn finish(&mut self) -> &[u8] {
         for restart in self.restarts.iter() {
             put_fixed_32(&mut self.buffer, *restart)

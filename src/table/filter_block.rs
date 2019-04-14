@@ -22,6 +22,7 @@ use std::rc::Rc;
 
 const FILTER_BASE_LG: usize = 11;
 const FILTER_BASE: usize = 1<< FILTER_BASE_LG; // 2KiB
+const FILTER_META_LENGTH: usize = 5; // 4bytes filter offsets length + 1bytes base log
 
 /// A `FilterBlockBuilder` is used to construct all of the filters for a
 /// particular Table.  It generates a single string which is stored as
@@ -66,7 +67,7 @@ impl FilterBlockBuilder {
             "[filter block builder] the filter block index {} should larger than built filters {}",
             filter_index, filters_len,
         );
-        // the loop is a little tricky
+        // the loop here is a little tricky
         while filter_index > self.filter_offsets.len() as u64{
             self.generate_filter();
         }
@@ -106,37 +107,37 @@ impl FilterBlockBuilder {
     }
 }
 
-pub struct FilterBlockReader <'a> {
+pub struct FilterBlockReader {
     policy: Rc<Box<dyn FilterPolicy>>,
-    // all filter data
-    data: &'a [u8],
-    // all filter data offsets
-    offset: &'a [u8],
+    // all filter block data without filter meta
+    // | ----- filter data ----- | ----- filter offsets ----|
+    //                                   num * 4 bytes
+    data: Vec<u8>,
     // the amount of filter data
     num: usize,
     base_lg: usize,
 }
 
-impl<'a> FilterBlockReader<'a> {
-    pub fn new(policy: Rc<Box<dyn FilterPolicy>>, filter_block: &'a [u8] ) -> Self {
+impl FilterBlockReader {
+    pub fn new(policy: Rc<Box<dyn FilterPolicy>>, mut filter_block: Vec<u8> ) -> Self {
         let mut r = FilterBlockReader {
             policy,
-            data: &filter_block[0..0],
-            offset: &filter_block[0..0],
+            data: vec![],
             num: 0,
             base_lg: 0,
         };
         let n = filter_block.len();
-        if n < 5 {
+        if n < FILTER_META_LENGTH {
             return r;
         }
-        r.num = decode_fixed_32(&filter_block[n-5..n-1]) as usize;
-        if r.num * 4 + 5 > n {
+        r.num = decode_fixed_32(&filter_block[n-FILTER_META_LENGTH..n-1]) as usize;
+        // invalid filter offsets length
+        if r.num * 4 + FILTER_META_LENGTH > n {
             return r;
         }
         r.base_lg = filter_block[n - 1] as usize;
-        r.data = &filter_block[..n - 5 - r.num * 4];
-        r.offset = &filter_block[n - 5 - r.num * 4..n-5];
+        filter_block.truncate(n - FILTER_META_LENGTH);
+        r.data = filter_block;
         r
     }
 
@@ -144,13 +145,14 @@ impl<'a> FilterBlockReader<'a> {
     pub fn key_may_match(&self, block_offset: u64, key: &Slice) -> bool {
         let i = block_offset as usize >> self.base_lg; // a >> b == a / (1 << b)
         if i < self.num {
-            let start = decode_fixed_32(&self.offset[i*4..i*4 + 4]) as usize;
+            let (filter, offsets) = self.data.as_slice().split_at(self.data.len() - self.num * 4);
+            let start = decode_fixed_32(&offsets[i*4..i*4 + 4]) as usize;
             let end= {
-                if i * 4 + 4 >= self.offset.len() {
+                if i + 1 >= self.num  {
                     // this is the last filter
-                    self.data.len()
+                    filter.len()
                 } else {
-                    decode_fixed_32(&self.offset[i*4+4..i*4+8]) as usize
+                    decode_fixed_32(&offsets[i*4+4..i*4+8]) as usize
                 }
             };
             let filter = &self.data[start..end];
@@ -201,7 +203,7 @@ mod tests {
     fn new_test_builder() -> FilterBlockBuilder {
         FilterBlockBuilder::new(Rc::new(Box::new(TestHashFilter{})))
     }
-    fn new_test_reader(block: &[u8]) -> FilterBlockReader {
+    fn new_test_reader(block: Vec<u8>) -> FilterBlockReader {
         FilterBlockReader::new(Rc::new(Box::new(TestHashFilter{})), block)
     }
 
@@ -210,7 +212,7 @@ mod tests {
         let mut b = new_test_builder();
         let block = b.finish();
         assert_eq!(&[0,0,0,0,FILTER_BASE_LG as u8], block);
-        let r = new_test_reader(block);
+        let r = new_test_reader(Vec::from(block));
         assert_eq!(r.key_may_match(0, &Slice::from("foo")), true);
         assert_eq!(r.key_may_match(10000, &Slice::from("foo")), true);
     }
@@ -227,7 +229,7 @@ mod tests {
         b.start_block(300);
         b.add_key(&Slice::from("hello"));
         let block = b.finish();
-        let r = new_test_reader(block);
+        let r = new_test_reader(Vec::from(block));
         assert_eq!(r.key_may_match(100, &Slice::from("foo")), true);
         assert_eq!(r.key_may_match(100, &Slice::from("bar")), true);
         assert_eq!(r.key_may_match(100, &Slice::from("box")), true);
@@ -257,7 +259,7 @@ mod tests {
         b.add_key(&Slice::from("box"));
         b.add_key(&Slice::from("hello"));
         let block = b.finish();
-        let r = new_test_reader(block);
+        let r = new_test_reader(Vec::from(block));
 
         // check first filter
         assert_eq!(r.key_may_match(0, &Slice::from("foo")), true);

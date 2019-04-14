@@ -15,9 +15,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-use crate::table::{BlockHandle, BLOCK_TRAILER_SIZE, Footer};
+use crate::table::{BlockHandle, BLOCK_TRAILER_SIZE, Footer, FOOTER_ENCODED_LENGTH};
 use crate::table::block::{Block, BlockBuilder};
-use crate::options::{Options, ReadOptions, CompressionType};
+use crate::options::{Options, CompressionType};
 use std::fs::File;
 use crate::table::filter_block::{FilterBlockReader, FilterBlockBuilder};
 use crate::util::status::{WickErr, Status};
@@ -25,22 +25,78 @@ use std::rc::Rc;
 use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
 use std::cmp::Ordering;
-use std::io::Write;
-use std::error::Error;
-use crate::util::crc32::{value, extend};
-use crate::util::coding::{put_fixed_32};
+use std::io::{Write};
+use crate::util::crc32::{value, extend, unmask};
+use crate::util::coding::{put_fixed_32, decode_fixed_32};
+use crate::storage::ReadAt;
+use core::borrow::Borrow;
 
 /// A `Table` is a sorted map from strings to strings.  Tables are
 /// immutable and persistent.  A Table may be safely accessed from
 /// multiple threads without external synchronization.
-pub struct Table<'a> {
-    options: Options,
+pub struct Table {
+    options: Rc<Options>,
     file: File,
     cache_id: u64,
-    filter_reader: FilterBlockReader<'a>,
-    filter_data: &'a [u8],
-    meta_index_handle: BlockHandle,
+    filter_reader: Option<FilterBlockReader>,
+    // None iff we fail to read meta block
+    meta_block_handle: Option<BlockHandle>,
     index_block: Block,
+}
+
+impl Table {
+
+    /// Attempt to open the table that is stored in bytes `[0..size)`
+    /// of `file`, and read the metadata entries necessary to allow
+    /// retrieving data from the table.
+    pub fn open(file: File, size: u64, options: Rc<Options>) -> Result<Self, WickErr> {
+        if size < FOOTER_ENCODED_LENGTH as u64 {
+            return Err(WickErr::new(Status::Corruption, Some("file is too short to be an sstable")));
+        };
+        // Read footer
+        let mut footer_space = vec![0; FOOTER_ENCODED_LENGTH];
+        if let Err(e) = file.read_exact_at(footer_space.as_mut_slice(), size - FOOTER_ENCODED_LENGTH as u64) {
+            return Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e)));
+        };
+        let (footer, _) = Footer::decode_from(footer_space.as_slice())?;
+
+        // Read the index block
+        let index_block_contents = read_block(&file, &footer.index_handle, options.paranoid_checks)?;
+        let index_block = Block::new(index_block_contents)?;
+
+        let mut t = Self {
+            options: options.clone(),
+            file,
+            cache_id: options.block_cache.borrow_mut().new_id(),
+            filter_reader: None,
+            meta_block_handle: None,
+            index_block,
+        };
+        // Read meta block
+        if footer.meta_index_handle.size > 0 {
+            // ignore the reading errors since meta info is not needed for operation
+            if let Ok(meta_block_contents) = read_block(&t.file, &footer.meta_index_handle, options.paranoid_checks) {
+                if let Ok(meta_block) = Block::new(meta_block_contents) {
+                    let mut iter = meta_block.into_iter(options.comparator.clone());
+                    let filter_key = if let Some(fp) = &options.filter_policy {
+                        "filter.".to_owned() + fp.name()
+                    } else {
+                        String::from("")
+                    };
+                    // Read filter block
+                    iter.seek(&Slice::from(filter_key.as_bytes()));
+                    if iter.valid() && iter.key().as_str() == filter_key.as_str() {
+                        if let Ok((filter_handle, _)) = BlockHandle::decode_from(iter.value().to_slice()) {
+                            if let Ok(filter_block) = read_block(&t.file, &filter_handle, options.paranoid_checks) {
+                                t.filter_reader = Some(FilterBlockReader::new(t.options.filter_policy.clone().unwrap(), filter_block));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(t)
+    }
 }
 
 /// Temperarily stores the contents of the table it is
@@ -150,7 +206,7 @@ impl TableBuilder {
         if !self.data_block.is_empty() {
             assert!(!self.pending_index_entry, "[table builder] the index for the previous data block should never remain when flushing current block data");
             let data_block = self.data_block.finish();
-            let (compressed, compression) = Self::compress_block(data_block, self.options.compression)?;
+            let (compressed, compression) = compress_block(data_block, self.options.compression)?;
             write_raw_block(&mut self.file, compressed.as_slice(), compression, &mut self.pending_handle, &mut self.offset)?;
             self.pending_index_entry = true;
             if let Err(e) = self.file.flush() {
@@ -203,7 +259,7 @@ impl TableBuilder {
         self.maybe_append_index_block(None);
         let index_block = self.index_block.finish();
         let mut index_block_handle = BlockHandle::new(0, 0);
-        let (c_index_block, ct) = Self::compress_block(index_block, self.options.compression)?;
+        let (c_index_block, ct) = compress_block(index_block, self.options.compression)?;
         write_raw_block(&mut self.file, c_index_block.as_slice(), ct, &mut index_block_handle, &mut self.offset)?;
 
         // write footer
@@ -227,10 +283,6 @@ impl TableBuilder {
     #[inline]
     pub fn file_size(&self) -> u64 {
         self.offset
-    }
-
-    pub fn test_mut(&mut self) {
-        self.offset = 0
     }
 
     #[inline]
@@ -257,27 +309,9 @@ impl TableBuilder {
         false
     }
 
-    // Compresses the give raw block by configured compression algorithm.
-    // Returns the compressed data and compression data.
-    // Notice this method will create a buffer for it and copy the compressed data into the buffer.
-    fn compress_block(raw_block: &[u8], compression: CompressionType) -> Result<(Vec<u8>, CompressionType),WickErr> {
-        match compression {
-            CompressionType::SnappyCompression => {
-                let mut enc = snap::Encoder::new();
-                // TODO: avoid this allocate ?
-                let mut buffer = vec![];
-                match enc.compress(raw_block, buffer.as_mut_slice()) {
-                    Ok(_) => {},
-                    Err(e) => return Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e))),
-                }
-                Ok((buffer, CompressionType::SnappyCompression))
-            },
-            CompressionType::NoCompression => Ok((Vec::from(raw_block), CompressionType::NoCompression)),
-        }
-    }
 
     fn write_block(&mut self, raw_block: &[u8], handle: &mut BlockHandle) -> Result<(), WickErr> {
-        let (data, compression) = Self::compress_block(raw_block, self.options.compression)?;
+        let (data, compression) = compress_block(raw_block, self.options.compression)?;
         self.write_raw_block(data.as_slice(), compression, handle)?;
         Ok(())
     }
@@ -303,7 +337,25 @@ impl TableBuilder {
     }
 }
 
-// This func is used to avoid multiple mutable borrows caused by write_raw_block above
+// Compresses the give raw block by configured compression algorithm.
+// Returns the compressed data and compression data.
+fn compress_block(raw_block: &[u8], compression: CompressionType) -> Result<(Vec<u8>, CompressionType),WickErr> {
+    match compression {
+        CompressionType::SnappyCompression => {
+            let mut enc = snap::Encoder::new();
+            // TODO: avoid this allocation ?
+            let mut buffer = vec![];
+            match enc.compress(raw_block, buffer.as_mut_slice()) {
+                Ok(_) => {},
+                Err(e) => return Err(WickErr::new_from_raw(Status::CompressionError, None, Box::new(e))),
+            }
+            Ok((buffer, CompressionType::SnappyCompression))
+        },
+        CompressionType::NoCompression => Ok((Vec::from(raw_block), CompressionType::NoCompression)),
+    }
+}
+
+// This func is used to avoid multiple mutable borrows caused by write_raw_block(&mut self..) above
 fn write_raw_block(file: &mut File, data: &[u8], compression: CompressionType, handle: &mut BlockHandle,  offset: &mut u64) -> Result<(), WickErr> {
     // write block data
     if let Err(e) = file.write_all(data) {
@@ -325,9 +377,45 @@ fn write_raw_block(file: &mut File, data: &[u8], compression: CompressionType, h
     Ok(())
 }
 
-/// Read the block identified by "handle" from "file".  On failure
-/// return non-OK.  On success fill *result and return OK.
-pub fn read_block(file: File, options: ReadOptions, handle: BlockHandle ) -> Result<Vec<u8>, WickErr> {
+/// Read the block identified from `file` according to the given `handle`.
+/// If the read data does not match the checksum, return a error marked as `Status::Corruption`
+pub fn read_block(file: &File, handle: &BlockHandle, verify_checksum: bool ) -> Result<Vec<u8>, WickErr> {
+    let n = handle.size as usize;
+    let mut buffer = vec![0; n + BLOCK_TRAILER_SIZE];
+    if let Err(e) = file.read_at(buffer.as_mut_slice(), handle.offset) {
+        return Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e)));
+    }
+    if verify_checksum {
+        let crc = unmask(decode_fixed_32(&buffer.as_slice()[n + 1..]));
+        let actual = value(&buffer.as_slice()[..n]);
+        if crc != actual {
+            return Err(WickErr::new(Status::Corruption, Some("block checksum mismatch")))
+        }
+    }
 
-    Ok(vec![])
+    let data = {
+        match CompressionType::from(buffer[n]) {
+            CompressionType::NoCompression => {
+                buffer.truncate(BLOCK_TRAILER_SIZE);
+                buffer
+            },
+            CompressionType::SnappyCompression => {
+                let mut decompressed = vec![];
+                match snap::decompress_len(&buffer.as_slice()[..n]) {
+                    Ok(len) => {
+                        decompressed.resize(len, 0u8);
+                    },
+                    Err(e) => {
+                        return Err(WickErr::new_from_raw(Status::CompressionError, None, Box::new(e)));
+                    },
+                }
+                let mut dec = snap::Decoder::new();
+                if let Err(e) = dec.decompress(&buffer.as_slice()[..n], decompressed.as_mut_slice()) {
+                    return Err(WickErr::new_from_raw(Status::CompressionError, None, Box::new(e)));
+                }
+                decompressed
+            }
+        }
+    };
+    Ok(data)
 }
