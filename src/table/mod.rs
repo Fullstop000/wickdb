@@ -136,7 +136,7 @@
 ///      /             \
 ///     +---------------+---------------+---------------+-------------------------------+------------------+
 ///     | data 1 offset |      ....     | data n offset | data-offsets length (4-bytes) | base Lg (1-byte) |
-///     +-------------- +---------------+---------------+-------------------------------+------------------+
+///     +---------------+---------------+---------------+-------------------------------+------------------+
 ///
 /// NOTE: The filter block is not compressed
 ///
@@ -144,16 +144,25 @@
 ///
 /// Index block consist of one or more block handle data and a common block trailer.
 ///
+///     +---------------+--------------+
+///     |      key      |    value     |
+///     +---------------+--------------+
+///     | separator key | block handle |---- a block handle points a data block starting offset and the its size
+///     | ...           | ...          |
+///     +---------------+--------------+
+///
+/// NOTE: All fixed-length integer are little-endian.
+///
 /// # Meta block
 ///
 /// This meta block contains a bunch of stats. The key is the name of the statistic. The value contains the statistic.
 /// For the current implementation, the meta block only contains the filter meta data:
 ///
-///  +-------------+---------------------+
-///  |     key     |        value        |
-///  +-------------+---------------------+
-///  | filter name | filter block handle |
-///  +-------------+---------------------+
+///     +-------------+---------------------+
+///     |     key     |        value        |
+///     +-------------+---------------------+
+///     | filter name | filter block handle |
+///     +-------------+---------------------+
 ///
 /// NOTE: All fixed-length integer are little-endian.
 
