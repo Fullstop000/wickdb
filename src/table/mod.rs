@@ -143,7 +143,7 @@
 /// # Index block
 ///
 /// Index block consist of one or more block handle data and a common block trailer.
-///
+/// The 'separator key' is the key just bigger than the last key in the data block which the 'block handle' pointed to
 ///     +---------------+--------------+
 ///     |      key      |    value     |
 ///     +---------------+--------------+
@@ -166,7 +166,7 @@
 ///
 /// NOTE: All fixed-length integer are little-endian.
 
-mod block;
+pub mod block;
 mod filter_block;
 mod table;
 

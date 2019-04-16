@@ -17,19 +17,21 @@
 
 use crate::table::{BlockHandle, BLOCK_TRAILER_SIZE, Footer, FOOTER_ENCODED_LENGTH};
 use crate::table::block::{Block, BlockBuilder};
-use crate::options::{Options, CompressionType};
+use crate::options::{Options, CompressionType, ReadOptions};
 use std::fs::File;
 use crate::table::filter_block::{FilterBlockReader, FilterBlockBuilder};
 use crate::util::status::{WickErr, Status};
 use std::rc::Rc;
+use std::mem;
 use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
 use std::cmp::Ordering;
 use std::io::{Write};
+use crate::iterator::{Iterator, EmptyIterator};
 use crate::util::crc32::{value, extend, unmask};
-use crate::util::coding::{put_fixed_32, decode_fixed_32};
+use crate::util::coding::{put_fixed_32, decode_fixed_32, put_fixed_64};
 use crate::storage::ReadAt;
-use core::borrow::Borrow;
+use crate::util::byte::compare;
 
 /// A `Table` is a sorted map from strings to strings.  Tables are
 /// immutable and persistent.  A Table may be safely accessed from
@@ -42,10 +44,19 @@ pub struct Table {
     // None iff we fail to read meta block
     meta_block_handle: Option<BlockHandle>,
     index_block: Block,
+
+    // iterating fields
+    read_options: ReadOptions,
+    index_iter: Box<dyn Iterator>,
+    // None: a error happens in the index iterator
+    // EmptyIterator with a WickErr: a error happens in previous data iterator
+    data_block_iter: Option<Box<dyn Iterator>>,
+    current_data_block_handle: Vec<u8>,
+    err: Option<WickErr>,
 }
 
+// Common methods
 impl Table {
-
     /// Attempt to open the table that is stored in bytes `[0..size)`
     /// of `file`, and read the metadata entries necessary to allow
     /// retrieving data from the table.
@@ -64,20 +75,31 @@ impl Table {
         let index_block_contents = read_block(&file, &footer.index_handle, options.paranoid_checks)?;
         let index_block = Block::new(index_block_contents)?;
 
+        let cache_id = if let Some(cache) = &options.block_cache {
+            cache.borrow_mut().new_id()
+        } else {
+            0
+        };
         let mut t = Self {
             options: options.clone(),
             file,
-            cache_id: options.block_cache.borrow_mut().new_id(),
+            cache_id,
             filter_reader: None,
             meta_block_handle: None,
             index_block,
+
+            read_options: ReadOptions::default(),
+            index_iter: EmptyIterator::new(),
+            data_block_iter: None,
+            current_data_block_handle: vec![],
+            err: None,
         };
         // Read meta block
-        if footer.meta_index_handle.size > 0 {
+        if footer.meta_index_handle.size > 0 && options.filter_policy.is_some() {
             // ignore the reading errors since meta info is not needed for operation
             if let Ok(meta_block_contents) = read_block(&t.file, &footer.meta_index_handle, options.paranoid_checks) {
                 if let Ok(meta_block) = Block::new(meta_block_contents) {
-                    let mut iter = meta_block.into_iter(options.comparator.clone());
+                    let mut iter = meta_block.iter(options.comparator.clone());
                     let filter_key = if let Some(fp) = &options.filter_policy {
                         "filter.".to_owned() + fp.name()
                     } else {
@@ -97,9 +119,259 @@ impl Table {
         }
         Ok(t)
     }
+
+    /// Converts an BlockHandle into an iterator over the contents of the corresponding block.
+    pub fn block_reader(&self, data_block_handle: BlockHandle, options: &ReadOptions) -> Result<Box<dyn Iterator>, WickErr> {
+        let block = if let Some(cache) = &self.options.block_cache {
+            let mut cache_key_buffer = vec![0;16];
+            put_fixed_64(&mut cache_key_buffer, self.cache_id);
+            put_fixed_64(&mut cache_key_buffer, data_block_handle.offset);
+            if let Some(cache_handle) = cache.borrow().look_up(&cache_key_buffer.as_slice()) {
+                // TODO: use Rc to avoid value copy ?
+                cache_handle.borrow().get_value().clone()
+            } else {
+                let data = read_block(&self.file, &data_block_handle, options.verify_checksums)?;
+                let charge = data.len();
+                let new_block = Block::new(data)?;
+                if options.fill_cache {
+                    // TODO: avoid clone
+                    cache.borrow_mut().insert(cache_key_buffer, new_block.clone(), charge, None);
+                }
+                new_block
+            }
+        } else {
+            let data = read_block(&self.file, &data_block_handle, options.verify_checksums)?;
+            Block::new(data)?
+        };
+        Ok(block.iter(self.options.comparator.clone()))
+    }
+
+    /// Creates index iterator and assigns given ReadOptions
+    pub fn init_iter(&mut self, options: ReadOptions) {
+        let cmp = self.options.comparator.clone();
+        self.index_iter = self.index_block.iter(cmp.clone());
+        self.read_options = options;
+    }
+
+    /// Given a key, return an approximate byte offset in the file where
+    /// the data for that key begins (or would begin if the key were
+    /// present in the file).  The returned value is in terms of file
+    /// bytes, and so includes effects like compression of the underlying data.
+    /// E.g., the approximate offset of the last key in the table will
+    /// be close to the file length.
+    pub fn approximate_offset_of(&self, key: &[u8]) -> u64 {
+        let mut index_iter = self.index_block.iter(self.options.comparator.clone());
+        index_iter.seek(&Slice::from(key));
+        if index_iter.valid() {
+            let val = index_iter.value();
+            if let Ok((h, _)) = BlockHandle::decode_from(val.to_slice()) {
+                return h.offset;
+            }
+        }
+        if let Some(meta) = &self.meta_block_handle {
+            return meta.offset;
+        }
+        0
+    }
+
+    // Gets the first entry with the key equal or greater than target, then calls the 'callback'
+    fn internal_get(&self, options: ReadOptions, key: &[u8], mut callback: Box<FnMut(&[u8], &[u8])>) -> Result<(), WickErr> {
+        let mut index_iter = self.index_block.iter(self.options.comparator.clone());
+        // seek to the first 'last key' bigger than 'key'
+        index_iter.seek(&Slice::from(key));
+        if index_iter.valid() {
+
+            // It's called 'maybe_contained' not only because the filter policy may report the falsy result,
+            // but also even if we've find a block with the last key bigger than the target
+            // the key may not be contained if the block is the first block of the sstable.
+            let mut maybe_contained = true;
+
+            let handle_val = index_iter.value();
+            // check the filter block
+            if let Some(filter) = &self.filter_reader {
+                if let Ok((handle, _)) = BlockHandle::decode_from(handle_val.to_slice()) {
+                    if !filter.key_may_match(handle.offset, &Slice::from(key)) {
+                        maybe_contained = false;
+                    }
+                }
+            }
+            if maybe_contained {
+                let (data_block_handle, _)  = BlockHandle::decode_from(handle_val.to_slice())?;
+                let mut block_iter = self.block_reader(data_block_handle, &options)?;
+                block_iter.seek(&Slice::from(key));
+                if block_iter.valid() {
+                    callback(block_iter.key().to_slice(), block_iter.value().to_slice());
+                }
+                block_iter.status()?
+            }
+        }
+        index_iter.status()
+    }
+
 }
 
-/// Temperarily stores the contents of the table it is
+// Iterator private methods
+// TODO: use a trait to describe behaviors below
+impl Table {
+    #[inline]
+    fn maybe_save_err(old: &mut Option<WickErr>, new: Result<(), WickErr>) {
+        if old.is_none() && new.is_err() {
+            mem::replace::<Option<WickErr>>(old, Some(new.unwrap_err()));
+        }
+    }
+    // Try to read data block according to the current value of index iterator.
+    fn init_data_block(&mut self) {
+        if !self.index_iter.valid() {
+            self.data_block_iter = None;
+        } else {
+            let v = self.index_iter.value();
+            if self.data_block_iter.is_none() || compare(self.current_data_block_handle.as_slice(), v.to_slice()) != Ordering::Greater {
+                match BlockHandle::decode_from(v.to_slice()) {
+                    Ok((handle, _)) => {
+                        match self.block_reader(handle, &self.read_options) {
+                            Ok(bi) => {
+                                self.set_data_iter(Some(bi))
+                            },
+                            Err(e) => {
+                                self.set_data_iter(Some(EmptyIterator::new_with_err(e)))
+                            }
+                        }
+                    },
+                    Err(e) => {
+                        self.set_data_iter(Some(EmptyIterator::new_with_err(e)))
+                    },
+                }
+            }
+        }
+    }
+
+    fn set_data_iter(&mut self, iter: Option<Box<dyn Iterator>>) {
+        if let Some(di) = &mut self.data_block_iter {
+            Self::maybe_save_err(&mut self.err, di.status());
+        }
+        self.data_block_iter = iter
+    }
+
+    // Used to skip invalid data blocks util finding a valid data block by `next()`
+    // If found, set data block to the first
+    fn skip_forward(&mut self) {
+        while let Some(di) = &self.data_block_iter {
+            if !di.valid() {
+                break
+            }
+            // Move to next data block
+            if !self.index_iter.valid() {
+                self.set_data_iter(None)
+            } else {
+                self.index_iter.next();
+                self.init_data_block();
+                if let Some(i) = &mut self.data_block_iter {
+                    // init to the first
+                    i.seek_to_first();
+                }
+            }
+        }
+    }
+
+    // Used to skip invalid data blocks util finding a valid data block by `prev()`
+    // If found, set data block to the last
+    fn skip_backward(&mut self) {
+        while let Some(di) = &self.data_block_iter {
+            if !di.valid() {
+                break
+            }
+            // Move to next data block
+            if !self.index_iter.valid() {
+                self.set_data_iter(None)
+            } else {
+                self.index_iter.prev();
+                self.init_data_block();
+                if let Some(i) = &mut self.data_block_iter {
+                    // init to the first
+                    i.seek_to_last();
+                }
+            }
+        }
+    }
+    #[inline]
+    fn valid_or_panic(&self) {
+        assert!(self.valid(), "[table iterator] invalid data iterator")
+    }
+}
+impl Iterator for Table {
+    fn valid(&self) -> bool {
+        if let Some(data_iter) = &self.data_block_iter {
+            return data_iter.valid();
+        } else {
+            // we have a err in the index iterator
+            return false;
+        }
+    }
+
+    fn seek_to_first(&mut self) {
+        self.index_iter.seek_to_first();
+        self.init_data_block();
+        if let Some(di) = &mut self.data_block_iter {
+            di.seek_to_first();
+        }
+        // to the first valid
+        self.skip_forward();
+    }
+
+    fn seek_to_last(&mut self) {
+        self.index_iter.seek_to_last();
+        self.init_data_block();
+        if let Some(di) = &mut self.data_block_iter {
+            di.seek_to_last();
+        }
+        // to the last valid
+        self.skip_backward();
+    }
+
+    fn seek(&mut self, target: &Slice) {
+        self.index_iter.seek(target);
+        if let Some(di) = &mut self.data_block_iter {
+            di.seek(target);
+        }
+        // to the first valid
+        self.skip_forward();
+    }
+
+    fn next(&mut self) {
+        self.valid_or_panic();
+        self.data_block_iter.as_mut().map_or((), |di| di.next());
+        self.skip_forward();
+    }
+
+    fn prev(&mut self) {
+        self.valid_or_panic();
+        self.data_block_iter.as_mut().map_or((), |di| di.prev());
+        self.skip_backward();
+    }
+
+    fn key(&self) -> Slice {
+        self.valid_or_panic();
+        self.data_block_iter.as_ref().map_or(Slice::new_empty(), |di| di.key())
+    }
+
+    fn value(&self) -> Slice {
+        self.valid_or_panic();
+        self.data_block_iter.as_ref().map_or(Slice::new_empty(), |di| di.value())
+    }
+
+    fn status(&mut self) -> Result<(), WickErr> {
+        self.index_iter.status()?;
+        if let Some(di) = &mut self.data_block_iter {
+            di.status()?
+        };
+        if let Some(e) = self.err.take() {
+            Err(e)?
+        }
+        Ok(())
+    }
+}
+
+/// Temporarily stores the contents of the table it is
 /// building in .sst file but does not close the file. It is up to the
 /// caller to close the file after calling `Finish()`.
 pub struct TableBuilder {
@@ -108,6 +380,7 @@ pub struct TableBuilder {
     // underlying sst file
     file: File,
     // the written data length
+    // updated only after the pending_handle is stored in the index block
     offset: u64,
     data_block: BlockBuilder,
     index_block: BlockBuilder,
@@ -119,11 +392,12 @@ pub struct TableBuilder {
     closed: bool,
     filter_block: Option<FilterBlockBuilder>,
     // indicates iff we have to add a index to index_block
+    //
     // We do not emit the index entry for a block until we have seen the
     // first key for the next data block. This allows us to use shorter
     // keys in the index block.
     pending_index_entry: bool,
-    // handle to add to index block
+    // handle for current block to add to index block
     pending_handle: BlockHandle,
     err: Option<WickErr>,
 }
@@ -418,4 +692,9 @@ pub fn read_block(file: &File, handle: &BlockHandle, verify_checksum: bool ) -> 
         }
     };
     Ok(data)
+}
+
+#[cfg(test)]
+mod tests {
+    // TODO: add tests case after finishing the storage
 }

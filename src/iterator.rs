@@ -61,3 +61,65 @@ pub trait Iterator {
     /// If an error has occurred, return it.  Else return an ok status.
     fn status(&mut self) -> Result<(), WickErr>;
 }
+
+
+/// A plain iterator used as default
+///
+/// # Notice
+///
+/// The `valid()` is always `false`
+pub struct EmptyIterator {
+    err: Option<WickErr>
+}
+
+impl EmptyIterator {
+    #[inline]
+    pub fn new() -> Box<dyn Iterator> {
+        box Self {
+            err: None,
+        }
+    }
+
+    #[inline]
+    pub fn new_with_err(e: WickErr) -> Box<dyn Iterator> {
+        box Self {
+            err: Some(e)
+        }
+    }
+}
+
+impl Iterator for EmptyIterator {
+    fn valid(&self) -> bool {
+        false
+    }
+
+    fn seek_to_first(&mut self) {
+    }
+
+    fn seek_to_last(&mut self) {
+    }
+
+    fn seek(&mut self, target: &Slice) {
+    }
+
+    fn next(&mut self) {
+    }
+
+    fn prev(&mut self) {
+    }
+
+    fn key(&self) -> Slice {
+        Slice::new_empty()
+    }
+
+    fn value(&self) -> Slice {
+        Slice::new_empty()
+    }
+
+    fn status(&mut self) -> Result<(), WickErr> {
+        match self.err.take() {
+            Some(e) => Err(e),
+            None => Ok(())
+        }
+    }
+}

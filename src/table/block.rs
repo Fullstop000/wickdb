@@ -35,8 +35,9 @@ use crate::util::status::{WickErr, Status};
 ///     | shared (varint) | not shared (varint) | value len (varint) | key (varlen) | value (varlen) |
 ///     +-----------------+---------------------+--------------------+--------------+----------------+
 ///
+#[derive(Clone, Debug)]
 pub struct Block {
-    data: Vec<u8>,
+    data: Rc<Vec<u8>>,
     // offset in data of restart array
     restart_offset: u32,
 }
@@ -56,7 +57,7 @@ impl Block {
             // make sure the size is enough for restarts
             if restarts_len <= max_restarts_allowed {
                 return Ok(Self {
-                    data,
+                    data: Rc::new(data),
                     restart_offset: (size - (1 + restarts_len) * 4) as u32,
                 });
             }
@@ -65,18 +66,29 @@ impl Block {
     }
 
     /// Create a BlockIterator for current block.
-    /// NOTICE: the caller's ownership will be moved into the created Iterator
-    pub fn into_iter(self, cmp: Rc<Box<Comparator>>) -> Box<dyn Iterator> {
+    pub fn iter(&self, cmp: Rc<Box<dyn Comparator>>) -> Box<dyn Iterator> {
         let num_restarts = Self::restarts_len(self.data.as_slice());
-        Box::new(BlockIterator::new(cmp, self.data, self.restart_offset, num_restarts))
+        Box::new(BlockIterator::new(cmp, self.data.clone(), self.restart_offset, num_restarts))
     }
 
     // decoded the restarts length from block data
+    #[inline]
     fn restarts_len(data: &[u8]) -> u32 {
         let size = data.len();
         decode_fixed_32(&data[size - 4..])
     }
 }
+
+impl Default for Block {
+    fn default() -> Self {
+        Self {
+            data: Rc::new(vec![]),
+            restart_offset: 0,
+        }
+    }
+}
+unsafe impl Send for Block {}
+unsafe impl Sync for Block {}
 
 
 /// Iterator for every entry in the block
@@ -85,7 +97,8 @@ pub struct BlockIterator {
 
     err: Option<WickErr>,
     // underlying block data
-    data: Vec<u8>,
+    // should never be modified in iterator
+    data: Rc<Vec<u8>>,
     /*
       restarts
     */
@@ -106,9 +119,9 @@ pub struct BlockIterator {
     key: Vec<u8>, // buffer for a concated key
 }
 
-impl BlockIterator {
+impl BlockIterator{
 
-    pub fn new(cmp: Rc<Box<Comparator>>, data: Vec<u8>, restarts: u32, restarts_len: u32) -> Self {
+    pub fn new(cmp: Rc<Box<Comparator>>, data: Rc<Vec<u8>>, restarts: u32, restarts_len: u32) -> Self {
         // should be 0
         Self {
             cmp,
@@ -127,10 +140,12 @@ impl BlockIterator {
     }
 
     // return the offset in data just past the end of the current entry
+    #[inline]
     fn next_entry_offset(&self) -> u32 {
         self.key_offset + self.shared + self.not_shared + self.value_len
     }
 
+    #[inline]
     fn get_restart_point(&self, index: u32) -> u32 {
         decode_fixed_32(&self.data[self.restarts as usize + index as usize * 4..])
     }
@@ -173,6 +188,7 @@ impl BlockIterator {
         true
     }
 
+    #[inline]
     fn corruption_err(&mut self) {
         self.err = Some(WickErr::new(Status::Corruption, Some("bad entry in block")));
         self.key.clear();
@@ -180,6 +196,7 @@ impl BlockIterator {
         self.restart_index = self.restarts_len
     }
 
+    #[inline]
     fn valid_or_panic(&self) -> bool {
         if !self.valid() {
             panic!(
@@ -192,6 +209,7 @@ impl BlockIterator {
 }
 
 impl Iterator for BlockIterator {
+    #[inline]
     fn valid(&self) -> bool {
         self.current < self.restarts
     }
