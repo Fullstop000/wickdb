@@ -14,6 +14,7 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 #![feature(integer_atomics)]
+#![feature(box_syntax)]
 
 #[macro_use]
 extern crate log;

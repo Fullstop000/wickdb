@@ -21,12 +21,13 @@ use std::rc::Rc;
 
 pub mod lru;
 
-/// The CacheHandle is a simple trait for the value in Cache
+/// The `Handle` is a simple trait for the value in Cache
 pub trait Handle<T> {
+    /// Returns the value the Handle pointing to
     fn get_value(&self) -> &T;
 }
 
-/// A Cache is an interface that maps keys to values.
+/// A `Cache` is an interface that maps keys to values.
 /// It has internal synchronization and may be safely accessed concurrently from
 /// multiple threads.
 /// It may automatically evict entries to make room
@@ -54,20 +55,20 @@ pub trait Cache<T> {
     /// value will be passed to "deleter".
     fn insert(
         &mut self,
-        key: Slice,
+        key: Vec<u8>,
         value: T,
         charge: usize,
-        deleter: Box<FnMut(&Slice, &T)>,
+        deleter: Option<Box<FnMut(&[u8], &T)>>,
     ) -> HandleRef<T>;
 
-    /// If the cache has no mapping for "key", returns NULL.
+    /// If the cache has no mapping for `key`, returns `None`.
     ///
     /// Else return a handle that corresponds to the mapping.  The caller
-    /// must call this->Release(handle) when the returned mapping is no
+    /// must call `release(handle)` when the returned mapping is no
     /// longer needed.
-    fn look_up(&self, key: &Slice) -> Option<HandleRef<T>>;
+    fn look_up(&self, key: &[u8]) -> Option<HandleRef<T>>;
 
-    /// Release a mapping returned by a previous Lookup().
+    /// Release a mapping returned by a previous `look_up()`.
     /// REQUIRES: handle must not have been released yet.
     /// REQUIRES: handle must have been returned by a method on *this.
     fn release(&mut self, handle: HandleRef<T>);
@@ -75,7 +76,7 @@ pub trait Cache<T> {
     /// If the cache contains entry for key, erase it.  Note that the
     /// underlying entry will be kept around until all existing handles
     /// to it have been released.
-    fn erase(&mut self, key: Slice);
+    fn erase(&mut self, key: &[u8]);
 
     /// Return a new numeric id.  May be used by multiple clients who are
     /// sharing the same cache to partition the key space.  Typically the
@@ -83,10 +84,14 @@ pub trait Cache<T> {
     /// its cache keys.
     fn new_id(&mut self) -> u64;
 
+    /// Remove all cache entries that are not actively in use. Memory-constrained
+    /// applications may wish to call this method to reduce memory usage.
+    fn prune(&mut self);
+
     /// Return an estimate of the combined charges of all elements stored in the
     /// cache.
     fn total_charge(&self) -> usize;
 }
 
-pub type HandleRef<T> = Rc<RefCell<Handle<T>>>;
+pub type HandleRef<T> = Rc<RefCell<dyn Handle<T>>>;
 

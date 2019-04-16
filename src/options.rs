@@ -24,6 +24,8 @@ use crate::options::CompressionType::{SnappyCompression, NoCompression};
 use std::rc::Rc;
 use std::cell::RefCell;
 use crate::cache::lru::SharedLRUCache;
+use std::sync::Arc;
+use crate::table::block::Block;
 
 #[derive(Clone, Copy, Debug)]
 pub enum CompressionType {
@@ -116,7 +118,7 @@ pub struct Options {
 
     /// If non-null, use the specified cache for blocks.
     /// If null, we will automatically create and use an 8MB internal cache.
-    pub block_cache: Rc<RefCell<dyn Cache<Vec<u8>>>>,
+    pub block_cache: Option<Arc<RefCell<dyn Cache<Block>>>>,
 
     /// Approximate size of user data packed per block.  Note that the
     /// block size specified here corresponds to uncompressed data.  The
@@ -167,7 +169,7 @@ impl Default for Options {
             l1_max_bytes: 64 * 1024 * 1024, // 64MB
             write_buffer_size: 4 * 1024 * 1024, // 4MB
             max_open_files: 500,
-            block_cache: Rc::new(RefCell::new(SharedLRUCache::new(8<<20))),
+            block_cache: Some(Arc::new(RefCell::new(SharedLRUCache::new(8<<20)))),
             block_size: 4 * 1024, // 4KB
             block_restart_interval: 16,
             max_file_size: 2 * 1024 * 1024, // 2MB
