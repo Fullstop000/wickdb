@@ -15,14 +15,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::fs::File;
-use std::io::{Seek, SeekFrom, Read};
 use crate::record::{BLOCK_SIZE, MAX_RECORD_TYPE, RecordType, HEADER_SIZE};
 use core::borrow::BorrowMut;
 use std::error::Error;
 use crate::record::reader::ReaderError::{BadRecord, EOF};
 use crate::util::crc32::{value, unmask};
 use crate::util::coding::decode_fixed_32;
+use crate::storage::File;
+use std::io::SeekFrom;
 
 enum ReaderError {
     // * We have an internal reading file error
@@ -63,7 +63,7 @@ pub trait Reporter {
 /// A `Reader` is used for reading records from log file.
 /// The `Reader` always starts reading the records at `initial_offset` of the `file`.
 pub struct Reader {
-    file: File,
+    file: Box<dyn File>,
     reporter: Option<Box<dyn Reporter>>,
     // iff check sum for the record
     checksum: bool,
@@ -87,7 +87,7 @@ pub struct Reader {
 }
 
 impl Reader {
-    pub fn new(file: File, reporter: Option<Box<dyn Reporter>>, checksum: bool, initial_offset: u64) -> Self {
+    pub fn new(file: Box<dyn File>, reporter: Option<Box<dyn Reporter>>, checksum: bool, initial_offset: u64) -> Self {
         Reader {
             file,
             reporter,
@@ -194,13 +194,14 @@ impl Reader {
     }
 
     fn read_physical_record(&mut self) -> Result<Record, ReaderError> {
+        // TODO: the loop here is a little confusing
         loop {
             // we've reached the end of a block and do not have a valid header
             if self.buf_length - self.j < HEADER_SIZE {
                 self.clear_buf();
                 if !self.eof {
                     // try to read a block into the buf
-                    match self.file.read(&mut self.buf) {
+                    match self.file.f_read(&mut self.buf) {
                         Ok(read) => {
                             self.end_of_buffer_offset += read as u64; // update the end offset here
                             self.buf_length = read;
@@ -306,7 +307,7 @@ impl Reader {
         }
         self.end_of_buffer_offset = block_start_location;
         if block_start_location > 0 {
-            let res = self.file.seek(SeekFrom::Start(block_start_location));
+            let res = self.file.f_seek(SeekFrom::Start(block_start_location));
             if !res.is_err() {
                 self.report_drop(block_start_location, res.unwrap_err().description());
                 return false;

@@ -15,6 +15,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+/// The log file contents are a sequence of 32KB blocks. The only exception is that the tail of the file may contain a partial block.
+
 mod reader;
 mod writer;
 

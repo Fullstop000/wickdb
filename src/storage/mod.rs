@@ -17,35 +17,55 @@
 
 mod file;
 
-use std::fs::{File, Metadata};
-use std::io::Result;
+use std::io::{Result, SeekFrom};
 use std::io;
+use std::path::{Path, PathBuf};
 
 /// Storage is a namespace for files.
 ///
 /// The names are filepath names: they may be / separated or \ separated,
 /// depending on the underlying operating system.
 pub trait Storage {
-    // TODO: abstract File as a trait
 
-    fn create(name: &str) -> Result<File>;
+    /// Create a file with given name
+    fn create(name: &str) -> Result<Box<dyn File>>;
 
-    fn open(name: &str) -> Result<File>;
+    /// Open a file with given name
+    fn open(name: &str) -> Result<Box<dyn File>>;
 
+    /// Delete the named file
     fn remove(name: &str) -> Result<()>;
 
+    /// Returns true iff the named file exists.
+    fn exists(name: &str) -> bool;
+
+    /// Rename a file or directory to a new name, replacing the original file if
+    /// `new` already exists.
     fn rename(old: &str, new: &str) -> Result<()>;
 
+    /// Recursively create a directory and all of its parent components if they
+    /// are missing.
     fn mkdir_all(dir: &str) -> Result<()>;
 
-    fn lock(name: &str) -> Result<()>;
-
-    fn list(dir: &str) -> Result<Vec<&str>>;
-
-    fn stat(name: &str) -> Result<Metadata>;
+    /// Returns a list of file names in given
+    fn list(dir: &Path) -> Result<Vec<PathBuf>>;
 }
 
-pub trait ReadAt {
+/// A file abstraction for IO operations
+/// NOTE: SFile stands for StorageFile
+pub trait File {
+    fn f_write(&mut self, buf: &[u8]) -> Result<usize>;
+    fn f_flush(&mut self) -> Result<()>;
+    fn f_close(&mut self) -> Result<()>;
+    fn f_seek(&mut self, pos: SeekFrom) -> Result<u64>;
+    fn f_read(&mut self, buf: &mut [u8]) -> Result<usize>;
+
+    /// Locks the file for exclusive usage, blocking if the file is currently
+    /// locked.
+    fn f_lock(&self) -> Result<()>;
+
+    fn f_unlock(&self) -> Result<()>;
+
     /// Reads bytes from an offset in this source into a buffer, returning how
     /// many bytes were read.
     ///
@@ -54,7 +74,7 @@ pub trait ReadAt {
     ///
     /// See [`Read::read()`](https://doc.rust-lang.org/std/io/trait.Read.html#tymethod.read)
     /// for details.
-    fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<usize>;
+    fn f_read_at(&self, buf: &mut [u8], offset: u64) -> Result<usize>;
 
     /// Reads the exact number of bytes required to fill `buf` from an `offset`.
     ///
@@ -62,9 +82,9 @@ pub trait ReadAt {
     ///
     /// See [`Read::read_exact()`](https://doc.rust-lang.org/std/io/trait.Read.html#method.read_exact)
     /// for details.
-    fn read_exact_at(&self, mut buf: &mut [u8], mut offset: u64) -> io::Result<()> {
+    fn read_exact_at(&self, mut buf: &mut [u8], mut offset: u64) -> Result<()> {
         while !buf.is_empty() {
-            match self.read_at(buf, offset) {
+            match self.f_read_at(buf, offset) {
                 Ok(0) => break,
                 Ok(n) => {
                     let tmp = buf;
@@ -83,45 +103,3 @@ pub trait ReadAt {
     }
 }
 
-impl ReadAt for File {
-    #[cfg(unix)]
-    fn read_at(&self,  buf: &mut [u8], offset: u64) -> io::Result<usize>{
-        std::os::unix::prelude::FileExt::read_at(self, buf, offset)
-    }
-    #[cfg(windows)]
-    fn read_at(&self,  buf: &mut [u8], offset: u64) -> io::Result<usize>{
-        std::os::windows::prelude::FileExt::seek_read(buf, offset)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use std::fs::remove_file;
-
-    #[test]
-    fn test_read_exact_at() {
-        let mut f = File::create("test").expect("");
-        f.write_all("hello world".as_bytes()).expect("");
-        f.sync_all().expect("");
-        let mut tests = vec![
-            (0, "hello world"),
-            (0, ""),
-            (1, "ello"),
-            (4, "o world"),
-            (100, ""),
-        ];
-        let rf = File::open("test").expect("");
-        let mut buffer = vec![];
-        for (offset, expect) in tests.drain(..) {
-            buffer.resize(expect.as_bytes().len(), 0u8);
-            rf.read_exact_at(buffer.as_mut_slice(), offset).expect("");
-            assert_eq!(buffer, Vec::from(String::from(expect)));
-        }
-        // EOF case
-        buffer.resize(100, 0u8);
-        rf.read_exact_at(buffer.as_mut_slice(), 2).expect_err("failed to fill whole buffer");
-        remove_file("test").expect("");
-    }
-}

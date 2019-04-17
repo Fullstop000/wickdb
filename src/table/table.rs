@@ -18,7 +18,6 @@
 use crate::table::{BlockHandle, BLOCK_TRAILER_SIZE, Footer, FOOTER_ENCODED_LENGTH};
 use crate::table::block::{Block, BlockBuilder};
 use crate::options::{Options, CompressionType, ReadOptions};
-use std::fs::File;
 use crate::table::filter_block::{FilterBlockReader, FilterBlockBuilder};
 use crate::util::status::{WickErr, Status};
 use std::rc::Rc;
@@ -26,11 +25,10 @@ use std::mem;
 use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
 use std::cmp::Ordering;
-use std::io::{Write};
 use crate::iterator::{Iterator, EmptyIterator};
 use crate::util::crc32::{value, extend, unmask};
 use crate::util::coding::{put_fixed_32, decode_fixed_32, put_fixed_64};
-use crate::storage::ReadAt;
+use crate::storage::File;
 use crate::util::byte::compare;
 
 /// A `Table` is a sorted map from strings to strings.  Tables are
@@ -38,7 +36,7 @@ use crate::util::byte::compare;
 /// multiple threads without external synchronization.
 pub struct Table {
     options: Rc<Options>,
-    file: File,
+    file: Box<dyn File>,
     cache_id: u64,
     filter_reader: Option<FilterBlockReader>,
     // None iff we fail to read meta block
@@ -60,7 +58,7 @@ impl Table {
     /// Attempt to open the table that is stored in bytes `[0..size)`
     /// of `file`, and read the metadata entries necessary to allow
     /// retrieving data from the table.
-    pub fn open(file: File, size: u64, options: Rc<Options>) -> Result<Self, WickErr> {
+    pub fn open(file: Box<dyn File>, size: u64, options: Rc<Options>) -> Result<Self, WickErr> {
         if size < FOOTER_ENCODED_LENGTH as u64 {
             return Err(WickErr::new(Status::Corruption, Some("file is too short to be an sstable")));
         };
@@ -378,7 +376,7 @@ pub struct TableBuilder {
     options: Rc<Options>,
     cmp: Rc<Box<dyn Comparator>>,
     // underlying sst file
-    file: File,
+    file: Box<dyn File>,
     // the written data length
     // updated only after the pending_handle is stored in the index block
     offset: u64,
@@ -403,7 +401,7 @@ pub struct TableBuilder {
 }
 
 impl TableBuilder {
-    pub fn new(file: File, options: Rc<Options>) -> Self {
+    pub fn new(file: Box<dyn File>, options: Rc<Options>) -> Self {
         let opt = options.clone();
         let db_builder = BlockBuilder::new(options.block_restart_interval, options.comparator.clone());
         let ib_builder = BlockBuilder::new(options.block_restart_interval, options.comparator.clone());
@@ -483,7 +481,7 @@ impl TableBuilder {
             let (compressed, compression) = compress_block(data_block, self.options.compression)?;
             write_raw_block(&mut self.file, compressed.as_slice(), compression, &mut self.pending_handle, &mut self.offset)?;
             self.pending_index_entry = true;
-            if let Err(e) = self.file.flush() {
+            if let Err(e) = self.file.f_flush() {
                 return Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e)));
             }
             if let Some(fb) = &mut self.filter_block {
@@ -538,7 +536,7 @@ impl TableBuilder {
 
         // write footer
         let footer = Footer::new(meta_block_handle,index_block_handle).encoded();
-        if let Err(e) = self.file.write_all(footer.as_slice()) {
+        if let Err(e) = self.file.f_write(footer.as_slice()) {
             return Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e)));
         } else {
             self.offset += footer.len() as u64;
@@ -595,7 +593,7 @@ impl TableBuilder {
         handle.set_offset(self.offset);
         handle.set_size(data.len() as u64);
         // write block data
-        if let Err(e) = self.file.write_all(data) {
+        if let Err(e) = self.file.f_write(data) {
             return Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e)));
         };
         // write trailer
@@ -603,7 +601,7 @@ impl TableBuilder {
         trailer[0] = compression as u8;
         let crc = extend(value(data), &[compression as u8]);
         put_fixed_32(&mut trailer, crc);
-        if let Err(e) = self.file.write_all(trailer.as_slice()) {
+        if let Err(e) = self.file.f_write(trailer.as_slice()) {
             return Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e)));
         }
         self.offset += (data.len() + BLOCK_TRAILER_SIZE) as u64;
@@ -630,9 +628,9 @@ fn compress_block(raw_block: &[u8], compression: CompressionType) -> Result<(Vec
 }
 
 // This func is used to avoid multiple mutable borrows caused by write_raw_block(&mut self..) above
-fn write_raw_block(file: &mut File, data: &[u8], compression: CompressionType, handle: &mut BlockHandle,  offset: &mut u64) -> Result<(), WickErr> {
+fn write_raw_block(file: &mut Box<dyn File>, data: &[u8], compression: CompressionType, handle: &mut BlockHandle,  offset: &mut u64) -> Result<(), WickErr> {
     // write block data
-    if let Err(e) = file.write_all(data) {
+    if let Err(e) = file.f_write(data) {
         return Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e)));
     };
     // update the block handle
@@ -643,7 +641,7 @@ fn write_raw_block(file: &mut File, data: &[u8], compression: CompressionType, h
     trailer[0] = compression as u8;
     let crc = extend(value(data), &[compression as u8]);
     put_fixed_32(&mut trailer, crc);
-    if let Err(e) = file.write_all(trailer.as_slice()) {
+    if let Err(e) = file.f_write(trailer.as_slice()) {
         return Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e)));
     }
     // update offset
@@ -653,10 +651,10 @@ fn write_raw_block(file: &mut File, data: &[u8], compression: CompressionType, h
 
 /// Read the block identified from `file` according to the given `handle`.
 /// If the read data does not match the checksum, return a error marked as `Status::Corruption`
-pub fn read_block(file: &File, handle: &BlockHandle, verify_checksum: bool ) -> Result<Vec<u8>, WickErr> {
+pub fn read_block(file: &Box<dyn File>, handle: &BlockHandle, verify_checksum: bool ) -> Result<Vec<u8>, WickErr> {
     let n = handle.size as usize;
     let mut buffer = vec![0; n + BLOCK_TRAILER_SIZE];
-    if let Err(e) = file.read_at(buffer.as_mut_slice(), handle.offset) {
+    if let Err(e) = file.f_read_at(buffer.as_mut_slice(), handle.offset) {
         return Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e)));
     }
     if verify_checksum {
