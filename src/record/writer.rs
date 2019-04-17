@@ -15,13 +15,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::io::{Result, SeekFrom};
+use std::io::{SeekFrom};
 use crate::util::slice::Slice;
 use crate::record::{RecordType, BLOCK_SIZE, HEADER_SIZE};
 use crate::util::crc32;
 use std::mem;
 use crate::util::coding::encode_fixed_32;
 use crate::storage::File;
+use crate::util::status::Result;
 
 /// Writer writes records to an underlying log `File`.
 pub struct Writer {

@@ -23,6 +23,7 @@ use crate::util::crc32::{value, unmask};
 use crate::util::coding::decode_fixed_32;
 use crate::storage::File;
 use std::io::SeekFrom;
+use std::rc::Rc;
 
 enum ReaderError {
     // * We have an internal reading file error

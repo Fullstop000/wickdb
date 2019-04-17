@@ -16,10 +16,11 @@
 // found in the LICENSE SysFile. See the AUTHORS SysFile for names of contributors.
 
 use crate::storage::{Storage, File};
-use std::io::{Result, SeekFrom, Write, Seek, Read};
+use std::io::{SeekFrom, Write, Seek, Read};
 use std::fs::{File as SysFile, remove_file, rename, create_dir_all, read_dir};
 use fs2::FileExt;
 use std::path::{Path, PathBuf};
+use crate::util::status::{Result, WickErr, Status};
 
 pub struct FileStorage {
 }
@@ -27,18 +28,22 @@ pub struct FileStorage {
 impl Storage for FileStorage {
 
     fn create(name: &str) -> Result<Box<dyn File>> {
-        let f = SysFile::create(name)?;
-        Ok(Box::new(f))
-
+        match SysFile::create(name) {
+            Ok(f) => Ok(box f),
+            Err(e) => Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e))),
+        }
     }
 
     fn open(name: &str) -> Result<Box<dyn File>> {
-        let f = SysFile::open(name)?;
-        Ok(box f)
+        match SysFile::open(name) {
+            Ok(f) => Ok(box f),
+            Err(e) => Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e))),
+        }
     }
 
     fn remove(name: &str) -> Result<()> {
-        remove_file(name)
+        let r = remove_file(name);
+        w_io_result!(r)
     }
 
     fn exists(name: &str) -> bool {
@@ -46,21 +51,29 @@ impl Storage for FileStorage {
     }
 
     fn rename(old: &str, new: &str) -> Result<()> {
-        rename(old, new)
+        w_io_result!(rename(old, new))
     }
 
     fn mkdir_all(dir: &str) -> Result<()> {
-        create_dir_all(dir)
+        let r= create_dir_all(dir);
+        w_io_result!(r)
     }
 
     fn list(dir: &Path) -> Result<Vec<PathBuf>> {
         if dir.is_dir() {
             let mut v = vec![];
-            for d in read_dir(dir)? {
-                let p = d?;
-                v.push(p.path())
+            match read_dir(dir) {
+                Ok(rd) => {
+                    for entry in rd {
+                        match entry {
+                            Ok(p) => v.push(p.path()),
+                            Err(e) => return Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e))),
+                        }
+                    }
+                    return Ok(v);
+                },
+                Err(e) => return Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e))),
             }
-            return Ok(v);
         }
         Ok(vec![])
     }
@@ -68,11 +81,11 @@ impl Storage for FileStorage {
 
 impl File for SysFile {
     fn f_write(&mut self, buf: &[u8]) -> Result<usize> {
-        SysFile::write(self, buf)
+        w_io_result!(SysFile::write(self, buf))
     }
 
     fn f_flush(&mut self) -> Result<()> {
-        SysFile::flush(self)
+        w_io_result!(SysFile::flush(self))
     }
 
     fn f_close(&mut self) -> Result<()> {
@@ -80,28 +93,34 @@ impl File for SysFile {
     }
 
     fn f_seek(&mut self, pos: SeekFrom) -> Result<u64> {
-        SysFile::seek(self, pos)
+        let r= SysFile::seek(self, pos);
+        w_io_result!(r)
     }
 
     fn f_read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        SysFile::read(self, buf)
+        let r = SysFile::read(self, buf);
+        w_io_result!(r)
     }
 
     fn f_lock(&self) -> Result<()> {
-        SysFile::try_lock_exclusive(self)
+        let r= SysFile::try_lock_exclusive(self);
+        w_io_result!(r)
     }
 
     fn f_unlock(&self) -> Result<()> {
-        SysFile::unlock(self)
+        let r = SysFile::unlock(self);
+        w_io_result!(r)
     }
 
     #[cfg(unix)]
     fn f_read_at(&self,  buf: &mut [u8], offset: u64) -> Result<usize>{
-        std::os::unix::prelude::FileExt::read_at(self, buf, offset)
+        let r = std::os::unix::prelude::FileExt::read_at(self, buf, offset);
+        w_io_result!(r)
     }
     #[cfg(windows)]
     fn f_read_at(&self,  buf: &mut [u8], offset: u64) -> Result<usize>{
-        std::os::windows::prelude::FileExt::seek_read(buf, offset)
+        let r = std::os::windows::prelude::FileExt::seek_read(buf, offset);
+        w_io_result!(r)
     }
 }
 #[cfg(test)]

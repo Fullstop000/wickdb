@@ -17,6 +17,9 @@
 
 use std::fmt::{Display, Formatter};
 use std::error::Error;
+use std::result;
+use std::mem;
+use std::io::Result as IOResult;
 
 #[derive(Debug, Clone)]
 pub enum Status {
@@ -64,8 +67,29 @@ impl WickErr {
             raw: Some(raw),
         }
     }
+
+    #[inline]
+    pub fn take_raw(&mut self) -> Option<Box<dyn Error>> {
+        mem::replace(&mut self.raw, None)
+    }
+
+    #[inline]
+    pub fn status(&self) -> Status {
+        self.t.clone()
+    }
 }
 
+pub type Result<T> = result::Result<T, WickErr>;
+
+#[macro_export]
+macro_rules! w_io_result {
+    ($result:expr) => {
+        match $result {
+            Ok(v) => Ok(v),
+            Err(e) => Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e))),
+        }
+    };
+}
 impl Display for WickErr {
     fn fmt(&self, f: &mut Formatter) -> ::std::fmt::Result {
         match self.msg {

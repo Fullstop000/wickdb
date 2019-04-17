@@ -17,9 +17,12 @@
 
 mod file;
 
-use std::io::{Result, SeekFrom};
+use std::io::{SeekFrom};
 use std::io;
 use std::path::{Path, PathBuf};
+use crate::util::status::{Result, WickErr, Status};
+use std::mem;
+use std::error::Error;
 
 /// Storage is a namespace for files.
 ///
@@ -91,12 +94,26 @@ pub trait File {
                     buf = &mut tmp[n..];
                     offset += n as u64;
                 }
-                Err(ref e) if e.kind() == io::ErrorKind::Interrupted => {}
-                Err(e) => return Err(e),
+                Err(mut e) => {
+                    match e.status() {
+                        Status::IOError => {
+                            if let Some(raw) = e.take_raw() {
+                                // DANGER: the raw error must be a io::Error otherwise we got UB
+                                let raw_ptr = Box::into_raw(raw) as *mut io::Error;
+                                match (unsafe { &*raw_ptr }).kind() {
+                                    io::ErrorKind::Interrupted => {},
+                                    _ => return Err(e),
+                                }
+                            }
+                        },
+                        _ => return Err(e),
+                    }
+                },
             }
         }
         if !buf.is_empty() {
-            Err(io::Error::new(io::ErrorKind::UnexpectedEof, "failed to fill whole buffer"))
+            let e = io::Error::new(io::ErrorKind::UnexpectedEof, "failed to fill whole buffer");
+            Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e)))
         } else {
             Ok(())
         }

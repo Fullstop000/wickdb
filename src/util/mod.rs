@@ -17,6 +17,7 @@ pub mod byte;
 pub mod coding;
 pub mod crc32;
 pub mod comparator;
+#[macro_use]
 pub mod status;
 pub mod hash;
 pub mod slice;

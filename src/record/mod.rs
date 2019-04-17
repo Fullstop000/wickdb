@@ -57,5 +57,89 @@ pub const MAX_RECORD_TYPE: usize = RecordType::Last as usize;
 
 #[cfg(test)]
 mod tests {
-    // TODO
+    use super::*;
+    use rand::{Rng, ErrorKind};
+    use std::io::{SeekFrom};
+    use crate::storage::File;
+    use crate::util::status::Result;
+
+    // Construct a string of the specified length made out of the supplied
+    // partial string.
+    fn big_string(partial_str: &str, n: usize) -> String {
+        let mut s = String::new();
+        while s.len() < n {
+            s.push_str(partial_str);
+        }
+        s.truncate(n);
+        s
+    }
+
+    // Construct a String from a number
+    fn num_to_string(n: usize) -> String {
+        n.to_string()
+    }
+
+    // Return a skewed potentially long string
+    fn random_skewed_string(i: usize) -> String {
+        let r = rand::thread_rng().gen_range(0, 1<<17);
+        big_string(&num_to_string(i),  r)
+    }
+
+    struct StringFile {
+        contents: Vec<u8>,
+        force_err: bool,
+        returned_partial: bool,
+    }
+
+    impl StringFile {
+        pub fn new() -> Self {
+            Self {
+                contents: vec![],
+                force_err: false,
+                returned_partial: false,
+            }
+        }
+    }
+
+    impl File for StringFile {
+        fn f_write(&mut self, buf: &[u8]) -> Result<usize> {
+            self.contents.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn f_flush(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        fn f_close(&mut self) -> Result<()> {
+            unimplemented!()
+        }
+
+        fn f_seek(&mut self, pos: SeekFrom) -> Result<u64> {
+            unimplemented!()
+        }
+
+        fn f_read(&mut self, buf: &mut [u8]) -> Result<usize> {
+            assert!(!self.returned_partial, "must not read() after eof/error");
+//            if self.force_err {
+//                self.force_err = false;
+//                self.returned_partial = true;
+//                return Err()
+//            }
+            Ok(0)
+        }
+
+        fn f_lock(&self) -> Result<()> {
+            unimplemented!()
+        }
+
+        fn f_unlock(&self) -> Result<()> {
+            unimplemented!()
+        }
+
+        fn f_read_at(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
+            unimplemented!()
+        }
+    }
+    struct RecordTest {}
 }
