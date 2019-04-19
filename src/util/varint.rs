@@ -46,12 +46,12 @@ macro_rules! impl_varint {
                 let mut shift: u32 = 0;
                 for (i, &b) in src.iter().enumerate() {
                     if b < 0b1000_0000 {
-                        return match (b as $uint).checked_shl(shift) {
+                        return match (<$uint>::from(b)).checked_shl(shift) {
                             None => None,
                             Some(b) => Some((n | b, (i + 1) as usize)),
                         };
                     }
-                    match ((b as $uint) & 0b0111_1111).checked_shl(shift) {
+                    match ((<$uint>::from(b)) & 0b0111_1111).checked_shl(shift) {
                         None => return None,
                         Some(b) => n |= b,
                     }
@@ -95,12 +95,12 @@ macro_rules! impl_varint {
                 let mut shift: u32 = 0;
                 for (i, &b) in src.iter().enumerate() {
                     if b < 0b1000_0000 {
-                        return match (b as $uint).checked_shl(shift) {
+                        return match (<$uint>::from(b)).checked_shl(shift) {
                             None => (0, -(i as isize + 1)),
                             Some(b) => (n | b, (i + 1) as isize),
                         };
                     }
-                    match ((b as $uint) & 0b0111_1111).checked_shl(shift) {
+                    match ((<$uint>::from(b)) & 0b0111_1111).checked_shl(shift) {
                         None => return (0, -(i as isize)),
                         Some(b) => n |= b,
                     }

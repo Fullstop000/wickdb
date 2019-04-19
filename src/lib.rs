@@ -11,8 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// TODO: remove this two when the implementation is stable
 #![allow(dead_code)]
 #![allow(unused_variables)]
+#![allow(clippy::unreadable_literal)]
+#![allow(clippy::new_ret_no_self)]
+#![allow(clippy::type_complexity)]
+// See https://github.com/rust-lang/rust-clippy/issues/1608
+#![allow(clippy::redundant_closure)]
 #![feature(integer_atomics)]
 #![feature(box_syntax)]
 
@@ -34,5 +40,5 @@ mod mem;
 pub mod options;
 mod record;
 mod snapshot;
+mod sstable;
 pub mod storage;
-mod table;

@@ -71,13 +71,13 @@ impl<'a> Iterator for SkiplistIterator<'a> {
     #[inline]
     fn key(&self) -> Slice {
         self.panic_valid();
-        unsafe { (*(self.node)).key(&self.skl.arena) }
+        unsafe { (*(self.node)).key(self.skl.arena.as_ref()) }
     }
     /// Return the value of node in current position
     #[inline]
     fn value(&self) -> Slice {
         self.panic_valid();
-        unsafe { (*(self.node)).value(&self.skl.arena) }
+        unsafe { (*(self.node)).value(self.skl.arena.as_ref()) }
     }
 
     fn status(&mut self) -> Result<(), WickErr> {

@@ -35,7 +35,7 @@ pub enum ValueType {
 
 impl ValueType {
     #[inline]
-    fn as_u64(&self) -> u64 {
+    fn as_u64(self) -> u64 {
         match self {
             ValueType::Value => 1,
             ValueType::Deletion => 0,

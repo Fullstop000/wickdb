@@ -17,6 +17,7 @@
 
 use super::coding::decode_fixed_32;
 
+#[allow(clippy::many_single_char_names)]
 pub fn hash(data: &[u8], seed: u32) -> u32 {
     // Similar to murmur hash
     let n = data.len();
@@ -36,13 +37,13 @@ pub fn hash(data: &[u8], seed: u32) -> u32 {
     // Pick up remaining bytes
     let diff = n - i;
     if diff >= 3 {
-        h += (data[i + 2] as u32) << 16
+        h += (u32::from(data[i + 2])) << 16
     };
     if diff >= 2 {
-        h += (data[i + 1] as u32) << 8
+        h += (u32::from(data[i + 1])) << 8
     };
     if diff >= 1 {
-        h += data[i] as u32;
+        h += u32::from(data[i]);
         h = h.wrapping_mul(m);
         h ^= h >> 24;
     }

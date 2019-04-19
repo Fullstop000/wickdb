@@ -56,18 +56,18 @@ pub fn generate_filename(dirname: &str, filetype: FileType, seq: u64) -> String 
 pub fn parse_filename(filename: &str) -> Option<(FileType, u64)> {
     let invalid = "invalid";
     let path = Path::new(filename);
-    let file_stem = path.file_stem().unwrap_or(OsStr::new(invalid));
+    let file_stem = path.file_stem().unwrap_or_else(|| OsStr::new(invalid));
     match file_stem.to_str() {
         Some("CURRENT") => Some((FileType::Current, 0)),
         Some("LOCK") => Some((FileType::Lock, 0)),
-        Some("LOG") => match path.file_name().unwrap_or(OsStr::new("")).to_str() {
+        Some("LOG") => match path.file_name().unwrap_or_else(|| OsStr::new("")).to_str() {
             Some("LOG") => Some((FileType::InfoLog, 0)),
             Some("LOG.old") => Some((FileType::OldInfoLog, 0)),
             _ => None,
         },
         Some(with_seq) => {
             if with_seq.starts_with("MANIFEST") {
-                let strs: Vec<&str> = with_seq.split("-").collect();
+                let strs: Vec<&str> = with_seq.split('-').collect();
                 if strs.len() != 2 {
                     return None;
                 }
@@ -77,7 +77,11 @@ pub fn parse_filename(filename: &str) -> Option<(FileType, u64)> {
                 return None;
             };
             if let Ok(seq) = with_seq.parse::<u64>() {
-                match path.extension().unwrap_or(OsStr::new(invalid)).to_str() {
+                match path
+                    .extension()
+                    .unwrap_or_else(|| OsStr::new(invalid))
+                    .to_str()
+                {
                     Some("log") => {
                         return Some((FileType::Log, seq));
                     }

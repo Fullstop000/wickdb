@@ -90,8 +90,10 @@ impl Arena for AggressiveArena {
             // nexts part: the pre allocated memory used by elements of next_nodes
             let (node_part, nexts_part) = slice::from_raw_parts_mut(node_ptr, used_node_size)
                 .split_at_mut(used_node_size - height * ptr_size);
+            #[allow(clippy::cast_ptr_alignment)]
             let node = node_part.as_mut_ptr() as *mut Node;
             // FIXME: Box::from_raw can be unsafe when releasing memory
+            #[allow(clippy::cast_ptr_alignment)]
             let next_nodes = Box::from_raw(slice::from_raw_parts_mut(
                 nexts_part.as_mut_ptr() as *mut AtomicPtr<Node>,
                 height,

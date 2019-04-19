@@ -22,7 +22,7 @@ use crate::util::comparator::{BytewiseComparator, Comparator};
 use crate::cache::lru::SharedLRUCache;
 use crate::options::CompressionType::{NoCompression, SnappyCompression};
 use crate::snapshot::Snapshot;
-use crate::table::block::Block;
+use crate::sstable::block::Block;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;

@@ -17,10 +17,10 @@
 
 use crate::iterator::{EmptyIterator, Iterator};
 use crate::options::{CompressionType, Options, ReadOptions};
+use crate::sstable::block::{Block, BlockBuilder};
+use crate::sstable::filter_block::{FilterBlockBuilder, FilterBlockReader};
+use crate::sstable::{BlockHandle, Footer, BLOCK_TRAILER_SIZE, FOOTER_ENCODED_LENGTH};
 use crate::storage::File;
-use crate::table::block::{Block, BlockBuilder};
-use crate::table::filter_block::{FilterBlockBuilder, FilterBlockReader};
-use crate::table::{BlockHandle, Footer, BLOCK_TRAILER_SIZE, FOOTER_ENCODED_LENGTH};
 use crate::util::byte::compare;
 use crate::util::coding::{decode_fixed_32, put_fixed_32, put_fixed_64};
 use crate::util::comparator::Comparator;
@@ -75,7 +75,7 @@ impl Table {
 
         // Read the index block
         let index_block_contents =
-            read_block(&file, &footer.index_handle, options.paranoid_checks)?;
+            read_block(file.as_ref(), &footer.index_handle, options.paranoid_checks)?;
         let index_block = Block::new(index_block_contents)?;
 
         let cache_id = if let Some(cache) = &options.block_cache {
@@ -100,9 +100,11 @@ impl Table {
         // Read meta block
         if footer.meta_index_handle.size > 0 && options.filter_policy.is_some() {
             // ignore the reading errors since meta info is not needed for operation
-            if let Ok(meta_block_contents) =
-                read_block(&t.file, &footer.meta_index_handle, options.paranoid_checks)
-            {
+            if let Ok(meta_block_contents) = read_block(
+                t.file.as_ref(),
+                &footer.meta_index_handle,
+                options.paranoid_checks,
+            ) {
                 if let Ok(meta_block) = Block::new(meta_block_contents) {
                     let mut iter = meta_block.iter(options.comparator.clone());
                     let filter_key = if let Some(fp) = &options.filter_policy {
@@ -117,7 +119,7 @@ impl Table {
                             BlockHandle::decode_from(iter.value().to_slice())
                         {
                             if let Ok(filter_block) =
-                                read_block(&t.file, &filter_handle, options.paranoid_checks)
+                                read_block(t.file.as_ref(), &filter_handle, options.paranoid_checks)
                             {
                                 t.filter_reader = Some(FilterBlockReader::new(
                                     t.options.filter_policy.clone().unwrap(),
@@ -146,7 +148,11 @@ impl Table {
                 // TODO: use Rc to avoid value copy ?
                 cache_handle.borrow().get_value().clone()
             } else {
-                let data = read_block(&self.file, &data_block_handle, options.verify_checksums)?;
+                let data = read_block(
+                    self.file.as_ref(),
+                    &data_block_handle,
+                    options.verify_checksums,
+                )?;
                 let charge = data.len();
                 let new_block = Block::new(data)?;
                 if options.fill_cache {
@@ -158,7 +164,11 @@ impl Table {
                 new_block
             }
         } else {
-            let data = read_block(&self.file, &data_block_handle, options.verify_checksums)?;
+            let data = read_block(
+                self.file.as_ref(),
+                &data_block_handle,
+                options.verify_checksums,
+            )?;
             Block::new(data)?
         };
         Ok(block.iter(self.options.comparator.clone()))
@@ -476,9 +486,9 @@ impl TableBuilder {
         // check iff we need to add a new entry into the index block
         self.maybe_append_index_block(Some(key));
         // write to filter block
-        self.filter_block
-            .as_mut()
-            .map(|fb| fb.add_key(&Slice::from(key)));
+        if let Some(fb) = self.filter_block.as_mut() {
+            fb.add_key(&Slice::from(key))
+        }
         // TODO: avoid the copy
         self.last_key.resize(key.len(), 0);
         self.last_key.copy_from_slice(key);
@@ -508,7 +518,7 @@ impl TableBuilder {
             let data_block = self.data_block.finish();
             let (compressed, compression) = compress_block(data_block, self.options.compression)?;
             write_raw_block(
-                &mut self.file,
+                self.file.as_mut(),
                 compressed.as_slice(),
                 compression,
                 &mut self.pending_handle,
@@ -542,7 +552,7 @@ impl TableBuilder {
         if let Some(fb) = &mut self.filter_block {
             let data = fb.finish();
             write_raw_block(
-                &mut self.file,
+                self.file.as_mut(),
                 data,
                 CompressionType::NoCompression,
                 &mut filter_block_handler,
@@ -577,7 +587,7 @@ impl TableBuilder {
         let mut index_block_handle = BlockHandle::new(0, 0);
         let (c_index_block, ct) = compress_block(index_block, self.options.compression)?;
         write_raw_block(
-            &mut self.file,
+            self.file.as_mut(),
             c_index_block.as_slice(),
             ct,
             &mut index_block_handle,
@@ -691,7 +701,7 @@ fn compress_block(
 
 // This func is used to avoid multiple mutable borrows caused by write_raw_block(&mut self..) above
 fn write_raw_block(
-    file: &mut Box<dyn File>,
+    file: &mut dyn File,
     data: &[u8],
     compression: CompressionType,
     handle: &mut BlockHandle,
@@ -715,11 +725,7 @@ fn write_raw_block(
 
 /// Read the block identified from `file` according to the given `handle`.
 /// If the read data does not match the checksum, return a error marked as `Status::Corruption`
-pub fn read_block(
-    file: &Box<dyn File>,
-    handle: &BlockHandle,
-    verify_checksum: bool,
-) -> Result<Vec<u8>> {
+pub fn read_block(file: &dyn File, handle: &BlockHandle, verify_checksum: bool) -> Result<Vec<u8>> {
     let n = handle.size as usize;
     let mut buffer = vec![0; n + BLOCK_TRAILER_SIZE];
     file.read_exact_at(buffer.as_mut_slice(), handle.offset)?;

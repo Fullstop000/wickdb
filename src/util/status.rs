@@ -124,8 +124,8 @@ impl ::std::error::Error for WickErr {
         match self.msg {
             Some(m) => m,
             None => match &self.raw {
-                Some(e) => return e.description(),
-                None => return "",
+                Some(e) => e.description(),
+                None => "",
             },
         }
     }

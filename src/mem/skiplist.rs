@@ -52,7 +52,7 @@ pub struct Node {
 
 impl Node {
     /// Allocates memory in the given arena for Node
-    pub fn new(key: &Slice, value: &Slice, height: usize, arena: &Box<Arena>) -> *mut Node {
+    pub fn new(key: &Slice, value: &Slice, height: usize, arena: &Arena) -> *mut Node {
         let node = arena.alloc_node(height);
         unsafe {
             (*node).key_size = key.size() as u64;
@@ -86,15 +86,13 @@ impl Node {
     }
 
     #[inline]
-    pub fn key(&self, arena: &Box<Arena>) -> Slice {
-        let raw = arena.get(self.key_offset as usize, self.key_size as usize);
-        Slice::from(raw)
+    pub fn key(&self, arena: &Arena) -> Slice {
+        arena.get(self.key_offset as usize, self.key_size as usize)
     }
 
     #[inline]
-    pub fn value(&self, arena: &Box<Arena>) -> Slice {
-        let raw = arena.get(self.value_offset as usize, self.value_size as usize);
-        Slice::from(raw)
+    pub fn value(&self, arena: &Arena) -> Slice {
+        arena.get(self.value_offset as usize, self.value_size as usize)
     }
 }
 
@@ -134,8 +132,8 @@ impl Skiplist {
         let node = self.find_greater_or_equal(key, Some(&mut prev));
         if !node.is_null() {
             unsafe {
-                invarint!(
-                    &(*node).key(&self.arena) != key,
+                assert!(
+                    &(*node).key(self.arena.as_ref()) != key,
                     "[skiplist] duplicate insertion [key={:?}] is not allowed",
                     key
                 );
@@ -144,12 +142,13 @@ impl Skiplist {
         let height = rand_height();
         let max_height = self.max_height.load(Ordering::Acquire);
         if height > max_height {
+            #[allow(clippy::needless_range_loop)]
             for i in max_height..height {
                 prev[i] = self.head;
             }
             self.max_height.store(height, Ordering::Release);
         }
-        let new_node = Node::new(key, value, height, &self.arena);
+        let new_node = Node::new(key, value, height, self.arena.as_ref());
         unsafe {
             for i in 1..=height {
                 (*new_node).set_next(i, (*(prev[i - 1])).get_next(i));
@@ -196,15 +195,14 @@ impl Skiplist {
     pub fn find_less_than(&self, key: &Slice) -> *mut Node {
         let mut level = self.max_height.load(Ordering::Acquire);
         let mut node = self.head;
-        let arena = &self.arena;
         loop {
             unsafe {
                 let next = (*node).get_next(level);
                 if next.is_null()
-                    || self
-                        .comparator
-                        .compare(&((*next).key(arena)).to_slice(), key.to_slice())
-                        != CmpOrdering::Less
+                    || self.comparator.compare(
+                        &((*next).key(self.arena.as_ref())).to_slice(),
+                        key.to_slice(),
+                    ) != CmpOrdering::Less
                 {
                     // next is nullptr or next.key >= key
                     if level == 1 {
@@ -248,7 +246,7 @@ impl Skiplist {
             // take nullptr as +infinite large
             true
         } else {
-            let node_key = unsafe { (*n).key(&self.arena) };
+            let node_key = unsafe { (*n).key(self.arena.as_ref()) };
             match self.comparator.compare(key.to_slice(), node_key.to_slice()) {
                 CmpOrdering::Greater => false,
                 _ => true,
@@ -295,7 +293,7 @@ mod tests {
         let mut prev_nodes = vec![skl.head; MAX_HEIGHT];
         let mut max_height = 1;
         for (key, value, height) in nodes.drain(..) {
-            let n = Node::new(&key, &value, height, &skl.arena);
+            let n = Node::new(&key, &value, height, skl.arena.as_ref());
             for (h, prev_node) in prev_nodes[0..height].iter().enumerate() {
                 unsafe {
                     (**prev_node).set_next(h + 1, n);
@@ -340,7 +338,7 @@ mod tests {
                 &Slice::from(node_key.as_slice()),
                 &Slice::from(""),
                 1,
-                &skl.arena,
+                skl.arena.as_ref(),
             );
             assert_eq!(expected, skl.key_is_less_than_or_equal(&key, node))
         }
@@ -365,11 +363,11 @@ mod tests {
         let target_key = Slice::from("key4");
         let res = skl.find_greater_or_equal(&target_key, Some(&mut prev_nodes));
         unsafe {
-            assert_eq!((*res).key(&skl.arena).as_str(), "key5");
+            assert_eq!((*res).key(skl.arena.as_ref()).as_str(), "key5");
             // prev_nodes should be correct
-            assert_eq!((*(prev_nodes[0])).key(&skl.arena).as_str(), "key3");
+            assert_eq!((*(prev_nodes[0])).key(skl.arena.as_ref()).as_str(), "key3");
             for node in prev_nodes[1..5].iter() {
-                assert_eq!((**node).key(&skl.arena).as_str(), "key1");
+                assert_eq!((**node).key(skl.arena.as_ref()).as_str(), "key1");
             }
         }
         prev_nodes = vec![ptr::null_mut(); 5];
@@ -377,11 +375,11 @@ mod tests {
         let target_key2 = Slice::from("key5");
         let res2 = skl.find_greater_or_equal(&target_key2, Some(&mut prev_nodes));
         unsafe {
-            assert_eq!((*res2).key(&skl.arena).as_str(), "key5");
+            assert_eq!((*res2).key(skl.arena.as_ref()).as_str(), "key5");
             // prev_nodes should be correct
-            assert_eq!((*(prev_nodes[0])).key(&skl.arena).as_str(), "key3");
+            assert_eq!((*(prev_nodes[0])).key(skl.arena.as_ref()).as_str(), "key3");
             for node in prev_nodes[1..5].iter() {
-                assert_eq!((**node).key(&skl.arena).as_str(), "key1");
+                assert_eq!((**node).key(skl.arena.as_ref()).as_str(), "key1");
             }
         }
     }
@@ -405,14 +403,14 @@ mod tests {
         let target_key = Slice::from("key4");
         let res = skl.find_less_than(&target_key);
         unsafe {
-            assert_eq!((*res).key(&skl.arena).as_str(), "key3");
+            assert_eq!((*res).key(skl.arena.as_ref()).as_str(), "key3");
         }
 
         // test scenario for inserted key
         let target_key = Slice::from("key5");
         let res = skl.find_less_than(&target_key);
         unsafe {
-            assert_eq!((*res).key(&skl.arena).as_str(), "key3");
+            assert_eq!((*res).key(skl.arena.as_ref()).as_str(), "key3");
         }
     }
 
@@ -432,7 +430,7 @@ mod tests {
         let skl = construct_skl_from_nodes(nodes);
         let last = skl.find_last();
         unsafe {
-            assert_eq!((*last).key(&skl.arena).as_str(), "key9");
+            assert_eq!((*last).key(skl.arena.as_ref()).as_str(), "key9");
         }
     }
 
@@ -454,8 +452,8 @@ mod tests {
         for (input_key, input_val) in inputs.clone() {
             unsafe {
                 let next = (*node).get_next(1);
-                let key = (*next).key(&skl.arena);
-                let val = (*next).value(&skl.arena);
+                let key = (*next).key(skl.arena.as_ref());
+                let val = (*next).value(skl.arena.as_ref());
                 assert_eq!(key.as_str(), input_key);
                 assert_eq!(val.as_str(), input_val);
                 node = next;
@@ -510,7 +508,7 @@ mod tests {
         // the first node is head
         skl_iterator.seek_to_first();
         assert_eq!(
-            unsafe { (*skl.head).key(&skl.arena).as_str() },
+            unsafe { (*skl.head).key(skl.arena.as_ref()).as_str() },
             skl_iterator.key().as_str()
         );
         skl_iterator.seek_to_last();

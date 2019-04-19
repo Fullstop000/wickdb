@@ -62,8 +62,8 @@ pub fn decode_fixed_32(src: &[u8]) -> u32 {
             copy_nonoverlapping(src.as_ptr(), &mut data as *mut u32 as *mut u8, 4);
         }
     } else {
-        for i in 0..src.len() {
-            data += (src[i] as u32) << (i * 8);
+        for (i, b) in src.iter().enumerate() {
+            data += (u32::from(*b)) << (i * 8);
         }
     }
     data.to_le()
@@ -79,8 +79,8 @@ pub fn decode_fixed_64(src: &[u8]) -> u64 {
             copy_nonoverlapping(src.as_ptr(), &mut data as *mut u64 as *mut u8, 8);
         }
     } else {
-        for i in 0..src.len() {
-            data += (src[i] as u64) << (i * 8);
+        for (i, b) in src.iter().enumerate() {
+            data += (u64::from(*b)) << (i * 8);
         }
     }
     data.to_le()

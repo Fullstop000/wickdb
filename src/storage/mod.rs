@@ -98,6 +98,7 @@ pub trait File {
                         Status::IOError => {
                             if let Some(raw) = e.take_raw() {
                                 // DANGER: the raw error must be a io::Error otherwise we got UB
+                                #[allow(clippy::cast_ptr_alignment)]
                                 let raw_ptr = Box::into_raw(raw) as *mut io::Error;
                                 match (unsafe { &*raw_ptr }).kind() {
                                     io::ErrorKind::Interrupted => {}

@@ -105,7 +105,7 @@ impl Index<usize> for Slice {
             self.size,
             index
         );
-        unsafe { &*self.data.offset(index as isize) }
+        unsafe { &*self.data.add(index) }
     }
 }
 

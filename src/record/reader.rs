@@ -108,10 +108,8 @@ impl Reader {
 
     /// Read the next complete record and returns a Vec for it.
     pub fn read_record(&mut self) -> Option<Vec<u8>> {
-        if self.last_record_offset < self.initial_offset {
-            if !self.skip_to_initial_block() {
-                return None;
-            }
+        if self.last_record_offset < self.initial_offset && !self.skip_to_initial_block() {
+            return None;
         }
         // indicates that a record has been spilt into fragments
         let mut in_fragmented_record = false;

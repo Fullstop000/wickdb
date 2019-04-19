@@ -371,8 +371,9 @@ impl<T: 'static + Default + Debug> Cache<T> for LRUCache<T> {
         }
     }
 
+    #[inline]
     fn new_id(&mut self) -> u64 {
-        return 0;
+        0
     }
 
     fn prune(&mut self) {
@@ -388,6 +389,7 @@ impl<T: 'static + Default + Debug> Cache<T> for LRUCache<T> {
         }
     }
 
+    #[inline]
     fn total_charge(&self) -> usize {
         self.mutex.lock().unwrap().usage
     }

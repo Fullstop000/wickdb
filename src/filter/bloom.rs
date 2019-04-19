@@ -51,7 +51,7 @@ impl FilterPolicy for BloomFilter {
 
     fn may_contain(&self, filter: &[u8], key: &Slice) -> bool {
         let n = filter.len() - 1; // exclude the k
-        if filter.len() == 0 || n < 1 {
+        if filter.is_empty() || n < 1 {
             return false;
         };
         let bits = n * 8;
