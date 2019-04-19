@@ -16,8 +16,8 @@
 // found in the LICENSE file.
 
 use crate::filter::FilterPolicy;
-use crate::util::slice::Slice;
 use crate::util::hash::hash;
+use crate::util::slice::Slice;
 
 pub struct BloomFilter {
     // the hash count for a key
@@ -29,7 +29,7 @@ impl BloomFilter {
     pub fn new(bits_per_key: usize) -> Self {
         // 0.69 =~ ln(2) and we intentionally round down to reduce probing cost a little bit
         let mut k = bits_per_key as f32 * 0.69;
-        if k > 30f32{
+        if k > 30f32 {
             k = 30f32;
         } else if k < 1f32 {
             k = 1f32;
@@ -65,10 +65,10 @@ impl FilterPolicy for BloomFilter {
             return true;
         };
         let mut h = Self::bloom_hash(key.to_slice());
-        let delta = (h >> 17) | ( h<< 15); // rotate right 17 bits
+        let delta = (h >> 17) | (h << 15); // rotate right 17 bits
         for i in 0..k {
             let bit_pos = h % (bits as u32);
-            if (filter[(bit_pos/8) as usize] & (1 << (bit_pos % 8))) == 0 {
+            if (filter[(bit_pos / 8) as usize] & (1 << (bit_pos % 8))) == 0 {
                 return false;
             }
             h = h.wrapping_add(delta);
@@ -88,22 +88,20 @@ impl FilterPolicy for BloomFilter {
         let bytes = (bits + 7) / 8;
         bits = bytes * 8; // round to multi 8
 
-        let mut dst : Vec<u8>= vec![0; bytes + 1]; // the extra place of the length bits
+        let mut dst: Vec<u8> = vec![0; bytes + 1]; // the extra place of the length bits
         dst[bytes] = self.k as u8;
 
         for key in keys {
             let mut h = Self::bloom_hash(key.as_slice());
-            let delta = (h >> 17) | ( h<< 15); // rotate right 17 bits
+            let delta = (h >> 17) | (h << 15); // rotate right 17 bits
             for i in 0..self.k {
                 let bit_pos = h % (bits as u32);
-                dst[(bit_pos / 8) as usize] |= (1<< (bit_pos % 8));
+                dst[(bit_pos / 8) as usize] |= 1 << (bit_pos % 8);
                 h = h.wrapping_add(delta);
             }
         }
         dst
     }
-
-
 }
 
 #[cfg(test)]
@@ -131,7 +129,7 @@ mod tests {
         }
 
         pub fn add_num(&mut self, num: u32) {
-            let mut k: Vec<u8> = vec![0;4];
+            let mut k: Vec<u8> = vec![0; 4];
             encode_fixed_32(k.as_mut_slice(), num);
             self.add_key(k);
         }
@@ -141,7 +139,9 @@ mod tests {
         }
 
         pub fn assert_or_return(&self, key: &[u8], want: bool, assert: bool) -> bool {
-            let got = (&self).policy.may_contain(self.filter.as_slice(), &Slice::from(key));
+            let got = (&self)
+                .policy
+                .may_contain(self.filter.as_slice(), &Slice::from(key));
             if assert {
                 assert_eq!(got, want);
             };
@@ -149,7 +149,7 @@ mod tests {
         }
 
         pub fn assert_num(&self, key: u32, want: bool, silent: bool) -> bool {
-            let mut k: Vec<u8> = vec![0;4];
+            let mut k: Vec<u8> = vec![0; 4];
             encode_fixed_32(k.as_mut_slice(), key);
             self.assert_or_return(k.as_slice(), want, !silent)
         }
@@ -166,10 +166,16 @@ mod tests {
 
     fn next_n(n: u32) -> u32 {
         match n {
-            _ if n < 10 => { return n + 1; },
-            _ if n < 100 => { return n + 10; },
-            _ if n < 1000 => { return n + 100; },
-            _ => { return n + 1000},
+            _ if n < 10 => {
+                return n + 1;
+            }
+            _ if n < 100 => {
+                return n + 10;
+            }
+            _ if n < 1000 => {
+                return n + 100;
+            }
+            _ => return n + 1000,
         };
     }
 
@@ -203,11 +209,17 @@ mod tests {
             h.reset();
             for i in 0..n {
                 h.add_num(i);
-            };
+            }
             h.build();
             let got = h.filter_len();
             let want = (n * 10 / 8) + 40;
-            assert_eq!(got as u32 <= want, true, "filter len test failed, '{}' > '{}'", got, want);
+            assert_eq!(
+                got as u32 <= want,
+                true,
+                "filter len test failed, '{}' > '{}'",
+                got,
+                want
+            );
             for i in 0..n {
                 h.assert_num(i, true, false);
             }
@@ -219,7 +231,12 @@ mod tests {
                 }
             }
             rate /= 10000.0;
-            assert!(rate <= 0.02, "false positive rate is more than 2%%, got {}, at len {}", rate, n);
+            assert!(
+                rate <= 0.02,
+                "false positive rate is more than 2%%, got {}, at len {}",
+                rate,
+                n
+            );
             if rate > 0.0125 {
                 mediocre += 1;
             } else {
@@ -227,6 +244,9 @@ mod tests {
             }
             n = next_n(n);
         }
-        assert!(mediocre <= good / 5, "mediocre false positive rate is more than expected");
+        assert!(
+            mediocre <= good / 5,
+            "mediocre false positive rate is more than expected"
+        );
     }
 }

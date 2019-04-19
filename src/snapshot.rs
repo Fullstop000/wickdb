@@ -19,11 +19,10 @@
 /// A `Snapshot` is an immutable object and can therefore be safely
 /// accessed from multiple threads without any external synchronization.
 pub struct Snapshot {
-
     /// The sequence number pointing to the view of db
-    pub sequence_number : usize,
+    pub sequence_number: usize,
 
     /// The next/prev link for the  doubly-linked list of snapshots.
-    pub next : *mut Snapshot,
-    pub prev : *mut Snapshot,
+    pub next: *mut Snapshot,
+    pub prev: *mut Snapshot,
 }

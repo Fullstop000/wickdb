@@ -201,7 +201,10 @@ impl Skiplist {
             unsafe {
                 let next = (*node).get_next(level);
                 if next.is_null()
-                    || self.comparator.compare(&((*next).key(arena)).to_slice(), key.to_slice()) != CmpOrdering::Less
+                    || self
+                        .comparator
+                        .compare(&((*next).key(arena)).to_slice(), key.to_slice())
+                        != CmpOrdering::Less
                 {
                     // next is nullptr or next.key >= key
                     if level == 1 {
@@ -270,11 +273,11 @@ pub fn rand_height() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::iterator::Iterator;
     use crate::mem::iterator::SkiplistIterator;
     use crate::util::comparator::BytewiseComparator;
     use std::ptr;
     use std::rc::Rc;
-    use crate::iterator::Iterator;
 
     fn new_test_skl() -> Skiplist {
         Skiplist::new(

@@ -62,29 +62,24 @@ pub trait Iterator {
     fn status(&mut self) -> Result<(), WickErr>;
 }
 
-
 /// A plain iterator used as default
 ///
 /// # Notice
 ///
 /// The `valid()` is always `false`
 pub struct EmptyIterator {
-    err: Option<WickErr>
+    err: Option<WickErr>,
 }
 
 impl EmptyIterator {
     #[inline]
     pub fn new() -> Box<dyn Iterator> {
-        box Self {
-            err: None,
-        }
+        box Self { err: None }
     }
 
     #[inline]
     pub fn new_with_err(e: WickErr) -> Box<dyn Iterator> {
-        box Self {
-            err: Some(e)
-        }
+        box Self { err: Some(e) }
     }
 }
 
@@ -93,20 +88,15 @@ impl Iterator for EmptyIterator {
         false
     }
 
-    fn seek_to_first(&mut self) {
-    }
+    fn seek_to_first(&mut self) {}
 
-    fn seek_to_last(&mut self) {
-    }
+    fn seek_to_last(&mut self) {}
 
-    fn seek(&mut self, target: &Slice) {
-    }
+    fn seek(&mut self, target: &Slice) {}
 
-    fn next(&mut self) {
-    }
+    fn next(&mut self) {}
 
-    fn prev(&mut self) {
-    }
+    fn prev(&mut self) {}
 
     fn key(&self) -> Slice {
         Slice::new_empty()
@@ -119,7 +109,7 @@ impl Iterator for EmptyIterator {
     fn status(&mut self) -> Result<(), WickErr> {
         match self.err.take() {
             Some(e) => Err(e),
-            None => Ok(())
+            None => Ok(()),
         }
     }
 }

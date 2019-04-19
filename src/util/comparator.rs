@@ -15,9 +15,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use super::slice::Slice;
-use std::cmp::{Ordering, min};
 use crate::util::byte::compare;
+use std::cmp::{min, Ordering};
 
 /// A Comparator object provides a total order across `Slice` that are
 /// used as keys in an sstable or a database.  A Comparator implementation
@@ -87,13 +86,13 @@ impl Comparator for BytewiseComparator {
         let mut diff_index = 0;
         while diff_index < min_size && a[diff_index] == b[diff_index] {
             diff_index += 1;
-        };
+        }
         if diff_index >= min_size {
             // one is the prefix of the other
         } else {
             let last = a[diff_index];
             if last != 0xff && last + 1 < b[diff_index] {
-                let mut res = vec![0;diff_index+1];
+                let mut res = vec![0; diff_index + 1];
                 res[0..=diff_index].copy_from_slice(&a[0..=diff_index]);
                 *(res.last_mut().unwrap()) += 1;
                 return res;
@@ -108,7 +107,7 @@ impl Comparator for BytewiseComparator {
         for i in 0..key.len() {
             let byte = key[i];
             if byte != 0xff {
-                let mut res : Vec<u8>= vec![0;i+1];
+                let mut res: Vec<u8> = vec![0; i + 1];
                 res[0..=i].copy_from_slice(&key[0..=i]);
                 *(res.last_mut().unwrap()) += 1;
                 return res;
@@ -141,7 +140,7 @@ mod tests {
             assert_eq!(String::from_utf8(res).unwrap().as_str(), expect);
         }
         // special 0xff case
-        let a : Vec<u8> = vec![48, 255];
+        let a: Vec<u8> = vec![48, 255];
         let b: Vec<u8> = vec![48, 49, 50, 51];
         let res = c.separator(a.as_slice(), b.as_slice());
         assert_eq!(res, a);
@@ -149,11 +148,7 @@ mod tests {
 
     #[test]
     fn test_bytewise_comparator_successor() {
-        let mut tests = vec![
-            ("", ""),
-            ("111", "2"),
-            ("222", "3"),
-        ];
+        let mut tests = vec![("", ""), ("111", "2"), ("222", "3")];
         let c = BytewiseComparator::new();
         for (input, expect) in tests.drain(..) {
             let res = c.successor(input.as_bytes());

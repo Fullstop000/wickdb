@@ -14,11 +14,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-use super::arena::Arena;
 use super::skiplist::{Node, Skiplist};
-use crate::util::slice::Slice;
 use crate::iterator::Iterator;
-use std::ptr;
+use crate::util::slice::Slice;
+
 use crate::util::status::WickErr;
 
 /// Iteration over the contents of a skip list
@@ -27,7 +26,7 @@ pub struct SkiplistIterator<'a> {
     node: *mut Node,
 }
 
-impl<'a> Iterator for SkiplistIterator<'a > {
+impl<'a> Iterator for SkiplistIterator<'a> {
     /// Returns true whether the iterator is positioned at a valid node
     #[inline]
     fn valid(&self) -> bool {
@@ -97,6 +96,4 @@ impl<'a> SkiplistIterator<'a> {
         invarint!(self.valid(), "[skl] Invalid iterator head",);
         true
     }
-
-
 }

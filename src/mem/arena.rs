@@ -12,9 +12,9 @@
 // limitations under the License.
 
 use crate::util::slice::Slice;
-use std::fmt::Display;
+
 use std::mem;
-use std::ptr;
+
 use std::slice;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 

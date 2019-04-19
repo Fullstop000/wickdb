@@ -10,22 +10,15 @@ use crate::util::status::Status;
 /// external synchronization, but if any of the threads may call a
 /// non-const method, all threads accessing the same WriteBatch must use
 /// external synchronization.
-pub struct  WriteBatch {
-}
+pub struct WriteBatch {}
 
 impl WriteBatch {
-    fn put(&mut self, key: Slice, value: Slice) {
-
-    }
-    fn delete(&mut self, key: Slice) {
-
-    }
+    fn put(&mut self, key: Slice, value: Slice) {}
+    fn delete(&mut self, key: Slice) {}
 
     fn get(&self, key: Slice) -> Result<(), Status> {
         Ok(())
     }
 
-    fn apply(&mut self, batch: WriteBatch) {
-
-    }
+    fn apply(&mut self, batch: WriteBatch) {}
 }

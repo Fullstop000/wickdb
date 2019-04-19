@@ -16,7 +16,6 @@
 // found in the LICENSE file.
 
 /// The log file contents are a sequence of 32KB blocks. The only exception is that the tail of the file may contain a partial block.
-
 mod reader;
 mod writer;
 
@@ -41,7 +40,7 @@ impl From<usize> for RecordType {
             2 => RecordType::First,
             3 => RecordType::Middle,
             4 => RecordType::Last,
-            _ => panic!("invalid RecordType: {}", v)
+            _ => panic!("invalid RecordType: {}", v),
         }
     }
 }
@@ -60,20 +59,20 @@ pub const MAX_RECORD_TYPE: usize = RecordType::Last as usize;
 
 #[cfg(test)]
 mod tests {
-    use rand::Rng;
-    use std::io::{SeekFrom};
-    use crate::storage::File;
-    use crate::util::status::{Result, WickErr, Status};
-    use std::cmp::min;
     use crate::record::reader::{Reader, Reporter};
     use crate::record::writer::Writer;
-    use std::rc::Rc;
-    use std::cell::{RefCell};
-    use crate::util::slice::Slice;
+    use crate::record::RecordType::{First, Last, Middle};
+    use crate::record::{BLOCK_SIZE, HEADER_SIZE};
+    use crate::storage::File;
     use crate::util::coding::encode_fixed_32;
-    use crate::util::crc32::{value, mask};
-    use crate::record::{HEADER_SIZE, BLOCK_SIZE};
-    use crate::record::RecordType::{Middle, Last, First};
+    use crate::util::crc32::{mask, value};
+    use crate::util::slice::Slice;
+    use crate::util::status::{Result, Status, WickErr};
+    use rand::Rng;
+    use std::cell::RefCell;
+    use std::cmp::min;
+    use std::io::SeekFrom;
+    use std::rc::Rc;
 
     // Construct a string of the specified length made out of the supplied
     // partial string.
@@ -93,8 +92,8 @@ mod tests {
 
     // Return a skewed potentially long string
     fn random_skewed_string(i: usize) -> String {
-        let r = rand::thread_rng().gen_range(0, 1<<17);
-        big_string(&num_to_string(i),  r)
+        let r = rand::thread_rng().gen_range(0, 1 << 17);
+        big_string(&num_to_string(i), r)
     }
 
     struct StringFile {
@@ -131,12 +130,15 @@ mod tests {
             match pos {
                 SeekFrom::Start(p) => {
                     if p > (self.contents.len() - 1) as u64 {
-                        return Err(WickErr::new(Status::NotFound, Some("in-memory file seeking pasts the end")));
+                        return Err(WickErr::new(
+                            Status::NotFound,
+                            Some("in-memory file seeking pasts the end"),
+                        ));
                     }
                     self.contents.drain(0..p as usize);
                     Ok(p)
-                },
-                _ => panic!("only support seeking from starting point")
+                }
+                _ => panic!("only support seeking from starting point"),
             }
         }
 
@@ -213,18 +215,14 @@ mod tests {
         HEADER_SIZE + 10000,
         2 * (HEADER_SIZE + 10000),
         2 * (HEADER_SIZE + 10000) + (2 * BLOCK_SIZE - 1000) + 3 * HEADER_SIZE,
-        2 * (HEADER_SIZE + 10000)
-            + (2 * BLOCK_SIZE - 1000)
-            + 3 * HEADER_SIZE
-            + HEADER_SIZE
-            + 1,
+        2 * (HEADER_SIZE + 10000) + (2 * BLOCK_SIZE - 1000) + 3 * HEADER_SIZE + HEADER_SIZE + 1,
         3 * BLOCK_SIZE,
     ];
 
     const EOF: &'static str = "EOF";
 
     impl RecordTest {
-        pub fn new(file: StringFile, reporter: ReportCollector) -> Self{
+        pub fn new(file: StringFile, reporter: ReportCollector) -> Self {
             let f = Rc::new(RefCell::new(file));
             let r = Rc::new(RefCell::new(reporter));
             let writer = match Writer::new(f.clone()) {
@@ -251,10 +249,12 @@ mod tests {
 
         pub fn write(&mut self, msg: &str) {
             assert!(!self.reading, "cannot write() when some others are reading");
-            self.writer.add_record(&Slice::from(msg)).expect("fail to write: ");
+            self.writer
+                .add_record(&Slice::from(msg))
+                .expect("fail to write: ");
         }
 
-        pub fn written_bytes(&self) -> usize{
+        pub fn written_bytes(&self) -> usize {
             self.file.borrow().contents.len()
         }
 
@@ -278,14 +278,17 @@ mod tests {
 
         pub fn shrink_size(&mut self, bytes: usize) {
             let written_bytes = self.file.borrow().contents.len();
-            self.file.borrow_mut().contents.truncate(written_bytes - bytes)
+            self.file
+                .borrow_mut()
+                .contents
+                .truncate(written_bytes - bytes)
         }
 
         pub fn fix_checksum(&mut self, header_offset: usize, len: usize) {
             let mut f = self.file.borrow_mut();
             let contents = f.contents.as_mut_slice();
             // 6 = actual crc (4) + data length (2)
-            let mut crc = value(&contents[header_offset + 6.. header_offset + 6 + len + 1 ]);
+            let mut crc = value(&contents[header_offset + 6..header_offset + 6 + len + 1]);
             crc = mask(crc);
             encode_fixed_32(&mut contents[header_offset..header_offset + 4], crc)
         }
@@ -319,7 +322,12 @@ mod tests {
         }
 
         pub fn start_reading_at(&mut self, initial_offset: u64) {
-            self.reader = Reader::new(self.file.clone(), Some(self.reporter.clone()), true, initial_offset)
+            self.reader = Reader::new(
+                self.file.clone(),
+                Some(self.reporter.clone()),
+                true,
+                initial_offset,
+            )
         }
 
         // ensure that a reader never read a record from a offset beyond the whole file
@@ -327,21 +335,47 @@ mod tests {
             self.write_initial_offset_log();
             self.reading = true;
             let size = self.written_bytes() as u64;
-            let mut reader = Reader::new(self.file.clone(), Some(self.reporter.clone()), true, size + offset_past_end);
+            let mut reader = Reader::new(
+                self.file.clone(),
+                Some(self.reporter.clone()),
+                true,
+                size + offset_past_end,
+            );
             assert_eq!(None, reader.read_record());
         }
 
         // ensure that every records after the initial_offset matches
-        pub fn check_initial_offset_record(&mut self, initial_offset: u64, mut expected_record_index: usize) {
+        pub fn check_initial_offset_record(
+            &mut self,
+            initial_offset: u64,
+            mut expected_record_index: usize,
+        ) {
             self.write_initial_offset_log();
             self.reading = true;
-            let mut reader = Reader::new(self.file.clone(), Some(self.reporter.clone()), true, initial_offset);
+            let mut reader = Reader::new(
+                self.file.clone(),
+                Some(self.reporter.clone()),
+                true,
+                initial_offset,
+            );
             assert!(expected_record_index < INITIAL_OFFSET_LAST_RECORD_OFFSETS.len());
             while expected_record_index < INITIAL_OFFSET_LAST_RECORD_OFFSETS.len() {
                 let record = reader.read_record().expect("read_record() should work");
-                assert_eq!(record.len(), INITIAL_OFFSET_RECORD_SIZES[expected_record_index], "record length should match");
-                assert_eq!(reader.last_record_offset(), INITIAL_OFFSET_LAST_RECORD_OFFSETS[expected_record_index] as u64, "last record offset should match");
-                assert_eq!('a' as u8 + expected_record_index as u8, record[0], "record content should match");
+                assert_eq!(
+                    record.len(),
+                    INITIAL_OFFSET_RECORD_SIZES[expected_record_index],
+                    "record length should match"
+                );
+                assert_eq!(
+                    reader.last_record_offset(),
+                    INITIAL_OFFSET_LAST_RECORD_OFFSETS[expected_record_index] as u64,
+                    "last record offset should match"
+                );
+                assert_eq!(
+                    'a' as u8 + expected_record_index as u8,
+                    record[0],
+                    "record content should match"
+                );
                 expected_record_index += 1;
             }
         }
@@ -429,12 +463,12 @@ mod tests {
     #[test]
     fn test_short_trailer() {
         let mut log = new_record_test();
-        let n = BLOCK_SIZE - 2 * HEADER_SIZE + 4 ;
-        log.write(big_string("foo", n ).as_str());
+        let n = BLOCK_SIZE - 2 * HEADER_SIZE + 4;
+        log.write(big_string("foo", n).as_str());
         assert_eq!(BLOCK_SIZE - HEADER_SIZE + 4, log.written_bytes());
         log.write("");
         log.write("bar");
-        assert_eq!(big_string("foo", n ).as_str(), log.read());
+        assert_eq!(big_string("foo", n).as_str(), log.read());
         assert_eq!("", log.read());
         assert_eq!("bar", log.read());
         assert_eq!(EOF, log.read());
@@ -443,10 +477,10 @@ mod tests {
     #[test]
     fn test_aligned_eof() {
         let mut log = new_record_test();
-        let n = BLOCK_SIZE - 2 * HEADER_SIZE + 4 ;
-        log.write(big_string("foo", n ).as_str());
+        let n = BLOCK_SIZE - 2 * HEADER_SIZE + 4;
+        log.write(big_string("foo", n).as_str());
         assert_eq!(BLOCK_SIZE - HEADER_SIZE + 4, log.written_bytes());
-        assert_eq!(big_string("foo", n ).as_str(), log.read());
+        assert_eq!(big_string("foo", n).as_str(), log.read());
         assert_eq!(EOF, log.read());
     }
 
@@ -598,7 +632,7 @@ mod tests {
         log.write(big_string("bar", BLOCK_SIZE).as_str());
         // Remove the LAST block, including header.
         log.shrink_size(14);
-        assert_eq!(EOF,log.read());
+        assert_eq!(EOF, log.read());
         assert_eq!(0, log.dropped_bytes());
         assert_eq!("", log.reported_msg());
     }

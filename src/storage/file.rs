@@ -15,18 +15,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE SysFile. See the AUTHORS SysFile for names of contributors.
 
-use crate::storage::{Storage, File};
-use std::io::{SeekFrom, Write, Seek, Read};
-use std::fs::{File as SysFile, remove_file, rename, create_dir_all, read_dir};
+use crate::storage::{File, Storage};
+use crate::util::status::{Result, Status, WickErr};
 use fs2::FileExt;
+use std::fs::{create_dir_all, read_dir, remove_file, rename, File as SysFile};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use crate::util::status::{Result, WickErr, Status};
 
 pub struct FileStorage;
 
-
 impl Storage for FileStorage {
-
     fn create(name: &str) -> Result<Box<dyn File>> {
         match SysFile::create(name) {
             Ok(f) => Ok(box f),
@@ -55,7 +53,7 @@ impl Storage for FileStorage {
     }
 
     fn mkdir_all(dir: &str) -> Result<()> {
-        let r= create_dir_all(dir);
+        let r = create_dir_all(dir);
         w_io_result!(r)
     }
 
@@ -67,11 +65,17 @@ impl Storage for FileStorage {
                     for entry in rd {
                         match entry {
                             Ok(p) => v.push(p.path()),
-                            Err(e) => return Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e))),
+                            Err(e) => {
+                                return Err(WickErr::new_from_raw(
+                                    Status::IOError,
+                                    None,
+                                    Box::new(e),
+                                ))
+                            }
                         }
                     }
                     return Ok(v);
-                },
+                }
                 Err(e) => return Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e))),
             }
         }
@@ -93,7 +97,7 @@ impl File for SysFile {
     }
 
     fn f_seek(&mut self, pos: SeekFrom) -> Result<u64> {
-        let r= SysFile::seek(self, pos);
+        let r = SysFile::seek(self, pos);
         w_io_result!(r)
     }
 
@@ -103,7 +107,7 @@ impl File for SysFile {
     }
 
     fn f_lock(&self) -> Result<()> {
-        let r= SysFile::try_lock_exclusive(self);
+        let r = SysFile::try_lock_exclusive(self);
         w_io_result!(r)
     }
 
@@ -113,12 +117,12 @@ impl File for SysFile {
     }
 
     #[cfg(unix)]
-    fn f_read_at(&self,  buf: &mut [u8], offset: u64) -> Result<usize>{
+    fn f_read_at(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
         let r = std::os::unix::prelude::FileExt::read_at(self, buf, offset);
         w_io_result!(r)
     }
     #[cfg(windows)]
-    fn f_read_at(&self,  buf: &mut [u8], offset: u64) -> Result<usize>{
+    fn f_read_at(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
         let r = std::os::windows::prelude::FileExt::seek_read(buf, offset);
         w_io_result!(r)
     }
@@ -126,8 +130,8 @@ impl File for SysFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
     use std::fs::remove_file;
+    use std::io::Write;
 
     #[test]
     fn test_read_exact_at() {
@@ -150,8 +154,8 @@ mod tests {
         }
         // EOF case
         buffer.resize(100, 0u8);
-        rf.read_exact_at(buffer.as_mut_slice(), 2).expect_err("failed to fill whole buffer");
+        rf.read_exact_at(buffer.as_mut_slice(), 2)
+            .expect_err("failed to fill whole buffer");
         remove_file("test").expect("");
     }
 }
-

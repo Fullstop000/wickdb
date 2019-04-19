@@ -17,11 +17,11 @@
 
 mod file;
 
-use std::io::{SeekFrom};
-use std::io;
-use std::path::{Path, PathBuf};
-use crate::util::status::{Result, WickErr, Status};
+use crate::util::status::{Result, Status, WickErr};
 use std::cell::RefCell;
+use std::io;
+use std::io::SeekFrom;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 /// Storage is a namespace for files.
@@ -29,7 +29,6 @@ use std::rc::Rc;
 /// The names are filepath names: they may be / separated or \ separated,
 /// depending on the underlying operating system.
 pub trait Storage {
-
     /// Create a file with given name
     fn create(name: &str) -> Result<Box<dyn File>>;
 
@@ -101,14 +100,14 @@ pub trait File {
                                 // DANGER: the raw error must be a io::Error otherwise we got UB
                                 let raw_ptr = Box::into_raw(raw) as *mut io::Error;
                                 match (unsafe { &*raw_ptr }).kind() {
-                                    io::ErrorKind::Interrupted => {},
+                                    io::ErrorKind::Interrupted => {}
                                     _ => return Err(e),
                                 }
                             }
-                        },
+                        }
                         _ => return Err(e),
                     }
-                },
+                }
             }
         }
         if !buf.is_empty() {
@@ -121,4 +120,3 @@ pub trait File {
 }
 
 pub type FilePtr = Rc<RefCell<dyn File>>;
-

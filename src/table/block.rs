@@ -15,14 +15,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-use crate::util::coding::{put_fixed_32, decode_fixed_32};
-use std::cmp::{Ordering, min};
-use crate::util::slice::Slice;
-use crate::util::varint::{VarintU32};
-use crate::util::comparator::Comparator;
 use crate::iterator::Iterator;
+use crate::util::coding::{decode_fixed_32, put_fixed_32};
+use crate::util::comparator::Comparator;
+use crate::util::slice::Slice;
+use crate::util::status::{Status, WickErr};
+use crate::util::varint::VarintU32;
+use std::cmp::{min, Ordering};
 use std::rc::Rc;
-use crate::util::status::{WickErr, Status};
 
 /// `Block` is consist of one or more key/value entries and a block trailer.
 /// Block entry shares key prefix with its preceding key until a `restart`
@@ -31,9 +31,13 @@ use crate::util::status::{WickErr, Status};
 ///
 /// Block Key/value entry:
 ///
+/// ```text
+///
 ///     +-------+---------+-----------+---------+--------------------+--------------+----------------+
 ///     | shared (varint) | not shared (varint) | value len (varint) | key (varlen) | value (varlen) |
 ///     +-----------------+---------------------+--------------------+--------------+----------------+
+///
+/// ```
 ///
 #[derive(Clone, Debug)]
 pub struct Block {
@@ -53,7 +57,7 @@ impl Block {
         let size = data.len();
         if size >= 4 {
             let max_restarts_allowed = (size - 4) / 4;
-            let restarts_len= Self::restarts_len(data.as_slice()) as usize;
+            let restarts_len = Self::restarts_len(data.as_slice()) as usize;
             // make sure the size is enough for restarts
             if restarts_len <= max_restarts_allowed {
                 return Ok(Self {
@@ -62,13 +66,21 @@ impl Block {
                 });
             }
         };
-        Err(WickErr::new(Status::Corruption, Some("[block] read invalid block content")))
+        Err(WickErr::new(
+            Status::Corruption,
+            Some("[block] read invalid block content"),
+        ))
     }
 
     /// Create a BlockIterator for current block.
     pub fn iter(&self, cmp: Rc<Box<dyn Comparator>>) -> Box<dyn Iterator> {
         let num_restarts = Self::restarts_len(self.data.as_slice());
-        Box::new(BlockIterator::new(cmp, self.data.clone(), self.restart_offset, num_restarts))
+        Box::new(BlockIterator::new(
+            cmp,
+            self.data.clone(),
+            self.restart_offset,
+            num_restarts,
+        ))
     }
 
     // decoded the restarts length from block data
@@ -90,7 +102,6 @@ impl Default for Block {
 unsafe impl Send for Block {}
 unsafe impl Sync for Block {}
 
-
 /// Iterator for every entry in the block
 pub struct BlockIterator {
     cmp: Rc<Box<dyn Comparator>>,
@@ -102,8 +113,8 @@ pub struct BlockIterator {
     /*
       restarts
     */
-    restarts: u32, // restarts array starting offset
-    restarts_len: u32, // length of restarts array
+    restarts: u32,      // restarts array starting offset
+    restarts_len: u32,  // length of restarts array
     restart_index: u32, // current restart index
 
     // current block offset entry
@@ -112,16 +123,20 @@ pub struct BlockIterator {
     /*
      entry
     */
-    shared: u32, // shared length
+    shared: u32,     // shared length
     not_shared: u32, // not shared length
-    value_len: u32, // value length
+    value_len: u32,  // value length
     key_offset: u32, // the offset of the key in the block
-    key: Vec<u8>, // buffer for a concated key
+    key: Vec<u8>,    // buffer for a concated key
 }
 
-impl BlockIterator{
-
-    pub fn new(cmp: Rc<Box<Comparator>>, data: Rc<Vec<u8>>, restarts: u32, restarts_len: u32) -> Self {
+impl BlockIterator {
+    pub fn new(
+        cmp: Rc<Box<Comparator>>,
+        data: Rc<Vec<u8>>,
+        restarts: u32,
+        restarts_len: u32,
+    ) -> Self {
         // should be 0
         Self {
             cmp,
@@ -182,7 +197,10 @@ impl BlockIterator{
             self.key[i] = delta[i - shared as usize]
         }
         // update restart index
-        if shared == 0 && self.restart_index + 1 < self.restarts_len && self.get_restart_point(self.restart_index + 1) == self.current {
+        if shared == 0
+            && self.restart_index + 1 < self.restarts_len
+            && self.get_restart_point(self.restart_index + 1) == self.current
+        {
             self.restart_index += 1
         }
         true
@@ -223,8 +241,7 @@ impl Iterator for BlockIterator {
         self.seek_to_restart_point(self.restarts_len - 1);
         // keep parsing block
         // TODO: the buffered key cost a lot waste here
-        while self.parse_block_entry() && self.next_entry_offset() < self.restarts {
-        }
+        while self.parse_block_entry() && self.next_entry_offset() < self.restarts {}
     }
 
     // find the first entry in block with key>= target
@@ -261,7 +278,7 @@ impl Iterator for BlockIterator {
                 return;
             }
             match self.cmp.compare(self.key.as_slice(), target.to_slice()) {
-                Ordering::Less => {},
+                Ordering::Less => {}
                 _ => return,
             }
             self.current = self.next_entry_offset();
@@ -278,9 +295,7 @@ impl Iterator for BlockIterator {
     // seek to prev restart offset and scan backwards to a restart point before current
     fn prev(&mut self) {
         let original = self.current;
-        while self.get_restart_point(self.restart_index) >= original {
-
-        }
+        while self.get_restart_point(self.restart_index) >= original {}
     }
 
     fn key(&self) -> Slice {
@@ -291,7 +306,7 @@ impl Iterator for BlockIterator {
     fn value(&self) -> Slice {
         self.valid_or_panic();
         let val_offset = self.next_entry_offset() - self.value_len;
-        let val = &self.data[val_offset as usize.. (val_offset + self.value_len) as usize];
+        let val = &self.data[val_offset as usize..(val_offset + self.value_len) as usize];
         Slice::from(val)
     }
 
@@ -330,7 +345,8 @@ impl BlockBuilder {
     pub fn new(block_restart_interval: usize, cmp: Rc<Box<dyn Comparator>>) -> Self {
         assert!(
             block_restart_interval >= 1,
-            "[block builder] invalid 'block_restart_interval' {} ", block_restart_interval,
+            "[block builder] invalid 'block_restart_interval' {} ",
+            block_restart_interval,
         );
         Self {
             block_restart_interval,
@@ -338,7 +354,7 @@ impl BlockBuilder {
             buffer: vec![],
             finished: false,
             counter: 0,
-            restarts: vec![0;1], //first restart point is at offset 0
+            restarts: vec![0; 1], //first restart point is at offset 0
             last_key: vec![],
         }
     }
@@ -361,7 +377,7 @@ impl BlockBuilder {
     pub fn finish(&mut self) -> &[u8] {
         for restart in self.restarts.iter() {
             put_fixed_32(&mut self.buffer, *restart)
-        };
+        }
         put_fixed_32(&mut self.buffer, self.restarts.len() as u32);
         self.finished = true;
         self.buffer.as_slice()
@@ -385,8 +401,8 @@ impl BlockBuilder {
             self.block_restart_interval,
         );
         assert!(
-            self.buffer.is_empty() ||
-                self.cmp.compare(key, self.last_key.as_slice()) == Ordering::Greater,
+            self.buffer.is_empty()
+                || self.cmp.compare(key, self.last_key.as_slice()) == Ordering::Greater,
             "[block builder] in consistent new key"
         );
         let mut shared = 0;
@@ -420,4 +436,3 @@ impl BlockBuilder {
         self.buffer.is_empty()
     }
 }
-

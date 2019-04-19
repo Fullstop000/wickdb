@@ -16,7 +16,7 @@
 // found in the LICENSE file.
 
 use std::path::{Path, MAIN_SEPARATOR};
-use crate::util::status::Status;
+
 use std::ffi::OsStr;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -41,7 +41,7 @@ pub enum FileType {
 /// Returns a filename for a certain `FileType` by given sequence number and a `dirname`.
 pub fn generate_filename(dirname: &str, filetype: FileType, seq: u64) -> String {
     match filetype {
-        FileType::Log=> format!("{}{}{:06}.log", dirname, MAIN_SEPARATOR, seq),
+        FileType::Log => format!("{}{}{:06}.log", dirname, MAIN_SEPARATOR, seq),
         FileType::Lock => format!("{}{}LOCK", dirname, MAIN_SEPARATOR),
         FileType::Table => format!("{}{}{:06}.sst", dirname, MAIN_SEPARATOR, seq),
         FileType::Manifest => format!("{}{}MANIFEST-{:06}", dirname, MAIN_SEPARATOR, seq),
@@ -60,12 +60,10 @@ pub fn parse_filename(filename: &str) -> Option<(FileType, u64)> {
     match file_stem.to_str() {
         Some("CURRENT") => Some((FileType::Current, 0)),
         Some("LOCK") => Some((FileType::Lock, 0)),
-        Some("LOG") => {
-            match path.file_name().unwrap_or(OsStr::new("")).to_str() {
-                Some("LOG") => Some((FileType::InfoLog, 0)),
-                Some("LOG.old") => Some((FileType::OldInfoLog, 0)),
-                _ => None,
-            }
+        Some("LOG") => match path.file_name().unwrap_or(OsStr::new("")).to_str() {
+            Some("LOG") => Some((FileType::InfoLog, 0)),
+            Some("LOG.old") => Some((FileType::OldInfoLog, 0)),
+            _ => None,
         },
         Some(with_seq) => {
             if with_seq.starts_with("MANIFEST") {
@@ -80,16 +78,20 @@ pub fn parse_filename(filename: &str) -> Option<(FileType, u64)> {
             };
             if let Ok(seq) = with_seq.parse::<u64>() {
                 match path.extension().unwrap_or(OsStr::new(invalid)).to_str() {
-                    Some("log") => {return Some((FileType::Log, seq ));},
-                    Some("sst") => {return Some((FileType::Table, seq));},
+                    Some("log") => {
+                        return Some((FileType::Log, seq));
+                    }
+                    Some("sst") => {
+                        return Some((FileType::Table, seq));
+                    }
                     _ => {
                         return None;
                     }
                 }
             };
             None
-        },
-        _ => None
+        }
+        _ => None,
     }
 }
 
@@ -101,13 +103,13 @@ mod tests {
     fn test_generate_filename() {
         let dirname = "test";
         let mut tests = vec![
-            (FileType::Log, 10,  "test/000010.log"),
-            (FileType::Lock, 1,  "test/LOCK"),
-            (FileType::Table, 123,  "test/000123.sst"),
-            (FileType::Manifest, 9,  "test/MANIFEST-000009"),
-            (FileType::Current, 1,  "test/CURRENT"),
-            (FileType::InfoLog, 1,  "test/LOG"),
-            (FileType::OldInfoLog, 1,  "test/LOG.old"),
+            (FileType::Log, 10, "test/000010.log"),
+            (FileType::Lock, 1, "test/LOCK"),
+            (FileType::Table, 123, "test/000123.sst"),
+            (FileType::Manifest, 9, "test/MANIFEST-000009"),
+            (FileType::Current, 1, "test/CURRENT"),
+            (FileType::InfoLog, 1, "test/LOG"),
+            (FileType::OldInfoLog, 1, "test/LOG.old"),
         ];
         for (ft, seq, expect) in tests.drain(..) {
             let name = generate_filename(dirname, ft, seq);
@@ -132,7 +134,7 @@ mod tests {
             ("a/b/c/000def.log", None),
             ("a/b/c/MANIFEST-abcedf", None),
             ("a/b/c/MANIFEST", None),
-            ("a/b/c/MANIFEST-123123-abcdef", None)
+            ("a/b/c/MANIFEST-123123-abcdef", None),
         ];
         for (filename, expect) in tests.drain(..) {
             let result = parse_filename(filename);

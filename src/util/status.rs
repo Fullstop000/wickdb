@@ -15,11 +15,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::fmt::{Display, Formatter};
 use std::error::Error;
-use std::result;
+use std::fmt::{Display, Formatter};
 use std::mem;
-use std::io::Result as IOResult;
+use std::result;
 
 #[derive(Debug, Clone)]
 pub enum Status {
@@ -28,7 +27,7 @@ pub enum Status {
     NotSupported,
     InvalidArgument,
     CompressionError,
-    IOError
+    IOError,
 }
 
 impl Status {
@@ -53,11 +52,7 @@ pub struct WickErr {
 
 impl WickErr {
     pub fn new(t: Status, msg: Option<&'static str>) -> Self {
-        Self {
-            t,
-            msg,
-            raw: None,
-        }
+        Self { t, msg, raw: None }
     }
 
     pub fn new_from_raw(t: Status, msg: Option<&'static str>, raw: Box<dyn Error>) -> Self {
@@ -93,26 +88,33 @@ macro_rules! w_io_result {
 impl Display for WickErr {
     fn fmt(&self, f: &mut Formatter) -> ::std::fmt::Result {
         match self.msg {
-            Some(m) => {
-                match &self.raw {
-                    Some(e) => {
-                        return write!(f, "WickDB error [{}] : {} , raw : {}", self.t.as_str(), m, e.description());
-                    },
-                    None => {
-                        return write!(f, "WickDB error [{}] : {}", self.t.as_str(), m);
-                    }
+            Some(m) => match &self.raw {
+                Some(e) => {
+                    return write!(
+                        f,
+                        "WickDB error [{}] : {} , raw : {}",
+                        self.t.as_str(),
+                        m,
+                        e.description()
+                    );
+                }
+                None => {
+                    return write!(f, "WickDB error [{}] : {}", self.t.as_str(), m);
                 }
             },
-            None => {
-                match &self.raw {
-                    Some(e) => {
-                        return write!(f, "WickDB error [{}] : {}", self.t.as_str(), e.description());
-                    },
-                    None => {
-                        return write!(f, "WickDB error [{}]", self.t.as_str());
-                    }
+            None => match &self.raw {
+                Some(e) => {
+                    return write!(
+                        f,
+                        "WickDB error [{}] : {}",
+                        self.t.as_str(),
+                        e.description()
+                    );
                 }
-            }
+                None => {
+                    return write!(f, "WickDB error [{}]", self.t.as_str());
+                }
+            },
         }
     }
 }
@@ -121,11 +123,9 @@ impl ::std::error::Error for WickErr {
     fn description(&self) -> &str {
         match self.msg {
             Some(m) => m,
-            None => {
-                match &self.raw {
-                    Some(e) => return e.description(),
-                    None => return "",
-                }
+            None => match &self.raw {
+                Some(e) => return e.description(),
+                None => return "",
             },
         }
     }

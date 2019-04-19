@@ -15,11 +15,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use crate::util::slice::Slice;
 use crate::record::{RecordType, BLOCK_SIZE, HEADER_SIZE};
-use crate::util::crc32;
-use crate::util::coding::encode_fixed_32;
 use crate::storage::FilePtr;
+use crate::util::coding::encode_fixed_32;
+use crate::util::crc32;
+use crate::util::slice::Slice;
 use crate::util::status::Result;
 
 /// Writer writes records to an underlying log `File`.
@@ -30,7 +30,7 @@ pub struct Writer {
     // crc32c values for all supported record types.  These are
     // pre-computed to reduce the overhead of computing the crc of the
     // record type stored in the header.
-    crc_cache: [u32; (RecordType::Last as usize + 1) as usize]
+    crc_cache: [u32; (RecordType::Last as usize + 1) as usize],
 }
 
 impl Writer {
@@ -58,7 +58,8 @@ impl Writer {
             assert!(
                 BLOCK_SIZE >= self.block_offset,
                 "[record writer] the 'block_offset' {} overflows the max BLOCK_SIZE {}",
-                self.block_offset, BLOCK_SIZE,
+                self.block_offset,
+                BLOCK_SIZE,
             );
             let leftover = BLOCK_SIZE - self.block_offset;
 
@@ -67,21 +68,18 @@ impl Writer {
             if leftover < HEADER_SIZE {
                 if leftover != 0 {
                     // fill the rest of the block with zero
-                    self.dest.borrow_mut().f_write(&[0;6][..leftover])?;
+                    self.dest.borrow_mut().f_write(&[0; 6][..leftover])?;
                 }
                 self.block_offset = 0; // use a new block
             };
             assert!(
                 BLOCK_SIZE >= self.block_offset + HEADER_SIZE,
                 "[record writer] the left space of block {} is less than header size {}",
-                BLOCK_SIZE - self.block_offset, HEADER_SIZE,
+                BLOCK_SIZE - self.block_offset,
+                HEADER_SIZE,
             );
             let space = BLOCK_SIZE - self.block_offset - HEADER_SIZE;
-            let to_write = if left < space {
-                left
-            } else {
-                space
-            };
+            let to_write = if left < space { left } else { space };
             // indicates iff the data exhausts a record
             let end = to_write == left;
             let t = {
@@ -101,9 +99,8 @@ impl Writer {
             left -= to_write;
             begin = false;
             left > 0
-        }{ /* empty here */ };
+        } { /* empty here */ }
         Ok(())
-
     }
 
     // create formatted bytes and write into the file
@@ -117,7 +114,8 @@ impl Writer {
         assert!(
             self.block_offset + HEADER_SIZE + size <= BLOCK_SIZE,
             "[record writer] new record [{:?}] overflows the BLOCK_SIZE [{}]",
-            rt, BLOCK_SIZE,
+            rt,
+            BLOCK_SIZE,
         );
         // encode header
         let mut buf: [u8; HEADER_SIZE] = [0; HEADER_SIZE];

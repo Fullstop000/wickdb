@@ -202,14 +202,13 @@
 /// ```
 ///
 /// NOTE: All fixed-length integer are little-endian.
-
 pub mod block;
 mod filter_block;
 mod table;
 
-use crate::util::varint::{VarintU64, MAX_VARINT_LEN_U64};
-use crate::util::status::{WickErr, Status};
 use crate::util::coding::{decode_fixed_64, put_fixed_64};
+use crate::util::status::{Status, WickErr};
+use crate::util::varint::{VarintU64, MAX_VARINT_LEN_U64};
 
 const TABLE_MAGIC_NUMBER: u64 = 0xdb4775248b80fb57;
 
@@ -234,10 +233,7 @@ pub struct BlockHandle {
 
 impl BlockHandle {
     pub fn new(offset: u64, size: u64) -> Self {
-        Self {
-            offset,
-            size,
-        }
+        Self { offset, size }
     }
 
     #[inline]
@@ -302,7 +298,6 @@ pub struct Footer {
 }
 
 impl Footer {
-
     #[inline]
     pub fn new(meta_index_handle: BlockHandle, index_handle: BlockHandle) -> Self {
         Self {
@@ -320,14 +315,20 @@ impl Footer {
     pub fn decode_from(src: &[u8]) -> Result<(Self, usize), WickErr> {
         let magic = decode_fixed_64(&src[FOOTER_ENCODED_LENGTH - 8..]);
         if magic != TABLE_MAGIC_NUMBER {
-            return Err(WickErr::new(Status::Corruption, Some("not an sstable (bad magic number)")));
+            return Err(WickErr::new(
+                Status::Corruption,
+                Some("not an sstable (bad magic number)"),
+            ));
         };
         let (meta_index_handle, n) = BlockHandle::decode_from(src)?;
         let (index_handle, m) = BlockHandle::decode_from(&src[n..])?;
-        Ok((Self{
-            meta_index_handle,
-            index_handle,
-        }, m + n))
+        Ok((
+            Self {
+                meta_index_handle,
+                index_handle,
+            },
+            m + n,
+        ))
     }
 
     /// Encodes footer and returns the encoded bytes
@@ -336,7 +337,13 @@ impl Footer {
         self.meta_index_handle.encoded_to(&mut v);
         self.index_handle.encoded_to(&mut v);
         put_fixed_64(&mut v, TABLE_MAGIC_NUMBER);
-        assert_eq!(v.len(), FOOTER_ENCODED_LENGTH, "[footer] the length of encoded footer is {}, expect {}", v.len(), FOOTER_ENCODED_LENGTH);
+        assert_eq!(
+            v.len(),
+            FOOTER_ENCODED_LENGTH,
+            "[footer] the length of encoded footer is {}, expect {}",
+            v.len(),
+            FOOTER_ENCODED_LENGTH
+        );
         v
     }
 

@@ -15,17 +15,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-use crate::util::comparator::{Comparator, BytewiseComparator};
 use crate::cache::Cache;
 use crate::filter::FilterPolicy;
-use crate::util::slice::Slice;
-use crate::snapshot::Snapshot;
-use crate::options::CompressionType::{SnappyCompression, NoCompression};
-use std::rc::Rc;
-use std::cell::RefCell;
+use crate::util::comparator::{BytewiseComparator, Comparator};
+
 use crate::cache::lru::SharedLRUCache;
-use std::sync::Arc;
+use crate::options::CompressionType::{NoCompression, SnappyCompression};
+use crate::snapshot::Snapshot;
 use crate::table::block::Block;
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug)]
 pub enum CompressionType {
@@ -45,17 +45,15 @@ impl From<u8> for CompressionType {
 
 /// Options to control the behavior of a database (passed to `DB::Open`)
 pub struct Options {
-
     // -------------------
     // Parameters that affect behavior:
-
     /// Comparator used to define the order of keys in the table.
     /// Default: a comparator that uses lexicographic byte-wise ordering
     ///
     /// REQUIRES: The client must ensure that the comparator supplied
     /// here has the same name and orders keys *exactly* the same as the
     /// comparator provided to previous open calls on the same DB.
-    pub comparator : Rc<Box<dyn Comparator>>,
+    pub comparator: Rc<Box<dyn Comparator>>,
 
     /// If true, the database will be created if it is missing.
     pub create_if_missing: bool,
@@ -74,7 +72,6 @@ pub struct Options {
 
     // -------------------
     // Parameters that affect compaction:
-
     /// The max number of levels except L)
     pub max_levels: i8,
 
@@ -96,7 +93,6 @@ pub struct Options {
 
     // -------------------
     // Parameters that affect performance:
-
     /// Amount of data to build up in memory (backed by an unsorted log
     /// on disk) before converting to a sorted on-disk file.
     ///
@@ -115,7 +111,6 @@ pub struct Options {
     // -------------------
     // Control over blocks (user data is stored in a set of blocks, and
     // a block is the unit of reading from disk).
-
     /// If non-null, use the specified cache for blocks.
     /// If null, we will automatically create and use an 8MB internal cache.
     pub block_cache: Option<Arc<RefCell<dyn Cache<Block>>>>,
@@ -166,10 +161,10 @@ impl Default for Options {
             l0_compaction_threshold: 4,
             l0_slowdown_writes_threshold: 8,
             l0_stop_writes_threshold: 12,
-            l1_max_bytes: 64 * 1024 * 1024, // 64MB
+            l1_max_bytes: 64 * 1024 * 1024,     // 64MB
             write_buffer_size: 4 * 1024 * 1024, // 4MB
             max_open_files: 500,
-            block_cache: Some(Arc::new(RefCell::new(SharedLRUCache::new(8<<20)))),
+            block_cache: Some(Arc::new(RefCell::new(SharedLRUCache::new(8 << 20)))),
             block_size: 4 * 1024, // 4KB
             block_restart_interval: 16,
             max_file_size: 2 * 1024 * 1024, // 2MB
@@ -194,7 +189,7 @@ pub struct ReadOptions {
     /// (which must belong to the DB that is being read and which must
     /// not have been released).  If `snapshot` is `None`, use an implicit
     /// snapshot of the state at the beginning of this read operation.
-    pub snapshot : Option<Snapshot>,
+    pub snapshot: Option<Snapshot>,
 }
 
 impl Default for ReadOptions {
@@ -210,7 +205,6 @@ impl Default for ReadOptions {
 /// Options that control write operations
 #[derive(Default)]
 pub struct WriteOptions {
-
     /// If true, the write will be flushed from the operating system
     /// buffer cache before the write is considered complete.
     /// If this flag is true, writes will be slower.
@@ -224,5 +218,5 @@ pub struct WriteOptions {
     /// crash semantics as the "write()" system call.  A DB write
     /// with sync==true has similar crash semantics to a "write()"
     /// system call followed by "fsync()".
-    pub sync : bool
+    pub sync: bool,
 }

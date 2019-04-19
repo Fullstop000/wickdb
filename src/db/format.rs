@@ -15,11 +15,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use crate::util::slice::Slice;
-use crate::util::comparator::Comparator;
-use std::cmp::Ordering;
 use crate::util::coding::{decode_fixed_64, encode_fixed_64};
-use std::fmt::{Display, Formatter, Error, Debug};
+use crate::util::comparator::Comparator;
+use crate::util::slice::Slice;
+use std::cmp::Ordering;
+use std::fmt::{Debug, Error, Formatter};
 
 /// The max key sequence number. The value is 2^56 - 1 because the seq number
 /// only takes 56 bits when is serialized to `InternalKey`
@@ -34,7 +34,6 @@ pub enum ValueType {
 }
 
 impl ValueType {
-
     #[inline]
     fn as_u64(&self) -> u64 {
         match self {
@@ -49,7 +48,7 @@ impl From<u64> for ValueType {
         match v {
             1 => ValueType::Value,
             0 => ValueType::Deletion,
-            _ => panic!("invalid value for ValueType, expect 0 or 1 but got {}", v)
+            _ => panic!("invalid value for ValueType, expect 0 or 1 but got {}", v),
         }
     }
 }
@@ -67,7 +66,7 @@ pub struct ParsedInternalKey {
 
 impl ParsedInternalKey {
     pub fn new(key: Slice, seq: u64, v_type: ValueType) -> Self {
-        ParsedInternalKey{
+        ParsedInternalKey {
             user_key: key,
             seq,
             value_type: v_type,
@@ -83,7 +82,11 @@ impl ParsedInternalKey {
 
 impl Debug for ParsedInternalKey {
     fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
-        write!(f, "{:?} @ {} : {:?}", self.user_key, self.seq, self.value_type)
+        write!(
+            f,
+            "{:?} @ {} : {:?}",
+            self.user_key, self.seq, self.value_type
+        )
     }
 }
 
@@ -101,21 +104,18 @@ pub struct InternalKey {
 }
 
 impl InternalKey {
-
     pub fn new(key: &Slice, seq: u64, t: ValueType) -> Self {
         let mut v = Vec::from(key.to_slice());
         let mut p = pack_seq_and_type(seq, t);
         v.append(&mut p);
-        InternalKey {
-            data: v
-        }
+        InternalKey { data: v }
     }
 
     /// Returns a `ParsedInternalKey`
     pub fn decode(&self) -> ParsedInternalKey {
         let size = self.data.len();
         let user_key = Slice::from(&(self.data.as_slice())[0..size - 8]);
-        let num = decode_fixed_64(&(self.data.as_slice())[size-8..]);
+        let num = decode_fixed_64(&(self.data.as_slice())[size - 8..]);
         let t = ValueType::from(num & 0xff as u64);
         ParsedInternalKey {
             user_key,
@@ -132,7 +132,7 @@ impl InternalKey {
 ///    decreasing type (though sequence# should be enough to disambiguate)
 pub struct InternalKeyComparator {
     /// The comparator defined in `Options`
-    user_comparator: Box<dyn Comparator>
+    user_comparator: Box<dyn Comparator>,
 }
 
 impl InternalKeyComparator {
@@ -188,9 +188,10 @@ impl Comparator for InternalKeyComparator {
 fn extract_user_key(key: &[u8]) -> Slice {
     let size = key.len();
     assert!(
-            size >= 8,
-            "[internal key] invalid size of internal key : expect >= 8 but got {}", size
-        );
+        size >= 8,
+        "[internal key] invalid size of internal key : expect >= 8 but got {}",
+        size
+    );
     Slice::new(key.as_ptr(), size - 8)
 }
 
@@ -199,10 +200,11 @@ fn extract_user_key(key: &[u8]) -> Slice {
 fn extract_seq_number(key: &[u8]) -> u64 {
     let size = key.len();
     assert!(
-            size >= 8,
-            "[internal key] invalid size of internal key : expect >= 8 but got {}", size
-        );
-    decode_fixed_64(&key[size-8..]) >> 8
+        size >= 8,
+        "[internal key] invalid size of internal key : expect >= 8 but got {}",
+        size
+    );
+    decode_fixed_64(&key[size - 8..]) >> 8
 }
 
 #[inline]
@@ -210,9 +212,11 @@ fn extract_seq_number(key: &[u8]) -> u64 {
 fn pack_seq_and_type(seq: u64, v_type: ValueType) -> Vec<u8> {
     invarint!(
         seq <= MAX_KEY_SEQUENCE,
-        "[key seq] the sequence number should be <= {}, but got {}", MAX_KEY_SEQUENCE, seq
+        "[key seq] the sequence number should be <= {}, but got {}",
+        MAX_KEY_SEQUENCE,
+        seq
     );
-    let mut v = vec![0u8;8];
+    let mut v = vec![0u8; 8];
     encode_fixed_64(v.as_mut_slice(), seq << 8 | v_type.as_u64());
     v
 }
@@ -224,9 +228,13 @@ mod tests {
     #[test]
     fn test_pack_seq_and_type() {
         let mut tests: Vec<(u64, ValueType, Vec<u8>)> = vec![
-            (1, ValueType::Value, vec![1, 1, 0, 0, 0,0 ,0, 0]),
-            (2, ValueType::Deletion, vec![0, 2, 0,0,0,0,0,0]),
-            (MAX_KEY_SEQUENCE, ValueType::Deletion, vec![0, 255, 255,255,255,255,255,255]),
+            (1, ValueType::Value, vec![1, 1, 0, 0, 0, 0, 0, 0]),
+            (2, ValueType::Deletion, vec![0, 2, 0, 0, 0, 0, 0, 0]),
+            (
+                MAX_KEY_SEQUENCE,
+                ValueType::Deletion,
+                vec![0, 255, 255, 255, 255, 255, 255, 255],
+            ),
         ];
         for (seq, t, expect) in tests.drain(..) {
             assert_eq!(pack_seq_and_type(seq, t), expect);
@@ -236,7 +244,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_pack_seq_and_type_panic() {
-        pack_seq_and_type(1<<56, ValueType::Value);
+        pack_seq_and_type(1 << 56, ValueType::Value);
     }
 
     fn assert_encoded_decoded(key: &str, seq: u64, vt: ValueType) {
@@ -251,10 +259,18 @@ mod tests {
     fn test_internal_key_encode_decode() {
         let test_keys = ["", "k", "hello", "longggggggggggggggggggggg"];
         let test_seqs = [
-            1, 2, 3,
-            (1u64 << 8) - 1, 1u64 << 8, (1u64 << 8) + 1,
-            (1u64 << 16) - 1, 1u64 << 16, (1u64 << 16) + 1,
-            (1u64 << 32) - 1, 1u64 << 32, (1u64 << 32) + 1
+            1,
+            2,
+            3,
+            (1u64 << 8) - 1,
+            1u64 << 8,
+            (1u64 << 8) + 1,
+            (1u64 << 16) - 1,
+            1u64 << 16,
+            (1u64 << 16) + 1,
+            (1u64 << 32) - 1,
+            1u64 << 32,
+            (1u64 << 32) + 1,
         ];
         for i in 0..test_keys.len() {
             for j in 0..test_seqs.len() {

@@ -16,25 +16,23 @@
 #![feature(integer_atomics)]
 #![feature(box_syntax)]
 
-#[macro_use]
-extern crate log;
 extern crate libc;
 #[macro_use]
 extern crate lazy_static;
-extern crate rand;
 extern crate crc;
+extern crate rand;
 extern crate snap;
 
 #[macro_use]
 mod util;
-pub mod cache;
 pub mod batch;
+pub mod cache;
 pub mod db;
-mod iterator;
-pub mod options;
 pub mod filter;
+mod iterator;
 mod mem;
-mod table;
-mod snapshot;
+pub mod options;
 mod record;
+mod snapshot;
 pub mod storage;
+mod table;

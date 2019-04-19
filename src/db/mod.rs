@@ -14,19 +14,23 @@
 mod filename;
 mod format;
 
-use crate::util::status::Status;
-use crate::util::slice::Slice;
-use crate::options::{Options, WriteOptions, ReadOptions};
 use crate::batch::WriteBatch;
+use crate::options::{ReadOptions, WriteOptions};
+use crate::util::slice::Slice;
+use crate::util::status::Status;
 
 /// A `DB` is a persistent ordered map from keys to values.
 /// A `DB` is safe for concurrent access from multiple threads without
 /// any external synchronization.
 pub trait DB {
-
     /// `put` sets the value for the given key. It overwrites any previous value
     /// for that key; a DB is not a multi-map.
-    fn put(&mut self, write_opt: Option<WriteOptions>, key: Slice, value: Slice) -> Result<(), Status>;
+    fn put(
+        &mut self,
+        write_opt: Option<WriteOptions>,
+        key: Slice,
+        value: Slice,
+    ) -> Result<(), Status>;
 
     /// `get` gets the value for the given key. It returns `Status::NotFound` if the DB
     /// does not contain the key.

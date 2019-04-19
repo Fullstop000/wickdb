@@ -16,12 +16,12 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
 use crate::filter::FilterPolicy;
+use crate::util::coding::{decode_fixed_32, put_fixed_32};
 use crate::util::slice::Slice;
-use crate::util::coding::{put_fixed_32, decode_fixed_32};
 use std::rc::Rc;
 
 const FILTER_BASE_LG: usize = 11;
-const FILTER_BASE: usize = 1<< FILTER_BASE_LG; // 2KiB
+const FILTER_BASE: usize = 1 << FILTER_BASE_LG; // 2KiB
 const FILTER_META_LENGTH: usize = 5; // 4bytes filter offsets length + 1bytes base log
 
 /// A `FilterBlockBuilder` is used to construct all of the filters for a
@@ -65,10 +65,11 @@ impl FilterBlockBuilder {
         assert!(
             filter_index >= filters_len,
             "[filter block builder] the filter block index {} should larger than built filters {}",
-            filter_index, filters_len,
+            filter_index,
+            filters_len,
         );
         // the loop here is a little tricky
-        while filter_index > self.filter_offsets.len() as u64{
+        while filter_index > self.filter_offsets.len() as u64 {
             self.generate_filter();
         }
     }
@@ -80,11 +81,11 @@ impl FilterBlockBuilder {
             self.generate_filter();
         };
         let size = self.data.len();
-        let b = [0u8;4];
+        let b = [0u8; 4];
         // append per-filter offsets
         for i in 0..self.filter_offsets.len() {
             put_fixed_32(&mut self.data, self.filter_offsets[i]);
-        };
+        }
         // append the 4bytes offset length
         put_fixed_32(&mut self.data, self.filter_offsets.len() as u32);
         // append the 1byte base lg
@@ -119,7 +120,7 @@ pub struct FilterBlockReader {
 }
 
 impl FilterBlockReader {
-    pub fn new(policy: Rc<Box<dyn FilterPolicy>>, mut filter_block: Vec<u8> ) -> Self {
+    pub fn new(policy: Rc<Box<dyn FilterPolicy>>, mut filter_block: Vec<u8>) -> Self {
         let mut r = FilterBlockReader {
             policy,
             data: vec![],
@@ -130,7 +131,7 @@ impl FilterBlockReader {
         if n < FILTER_META_LENGTH {
             return r;
         }
-        r.num = decode_fixed_32(&filter_block[n-FILTER_META_LENGTH..n-1]) as usize;
+        r.num = decode_fixed_32(&filter_block[n - FILTER_META_LENGTH..n - 1]) as usize;
         // invalid filter offsets length
         if r.num * 4 + FILTER_META_LENGTH > n {
             return r;
@@ -145,14 +146,17 @@ impl FilterBlockReader {
     pub fn key_may_match(&self, block_offset: u64, key: &Slice) -> bool {
         let i = block_offset as usize >> self.base_lg; // a >> b == a / (1 << b)
         if i < self.num {
-            let (filter, offsets) = self.data.as_slice().split_at(self.data.len() - self.num * 4);
-            let start = decode_fixed_32(&offsets[i*4..i*4 + 4]) as usize;
-            let end= {
-                if i + 1 >= self.num  {
+            let (filter, offsets) = self
+                .data
+                .as_slice()
+                .split_at(self.data.len() - self.num * 4);
+            let start = decode_fixed_32(&offsets[i * 4..i * 4 + 4]) as usize;
+            let end = {
+                if i + 1 >= self.num {
                     // this is the last filter
                     filter.len()
                 } else {
-                    decode_fixed_32(&offsets[i*4+4..i*4+8]) as usize
+                    decode_fixed_32(&offsets[i * 4 + 4..i * 4 + 8]) as usize
                 }
             };
             let filter = &self.data[start..end];
@@ -170,8 +174,7 @@ mod tests {
     use crate::filter::FilterPolicy;
     use crate::util::hash::hash;
 
-    struct TestHashFilter {
-    }
+    struct TestHashFilter {}
 
     impl FilterPolicy for TestHashFilter {
         fn name(&self) -> &str {
@@ -182,11 +185,11 @@ mod tests {
             let h = hash(key.to_slice(), 1);
             let mut i = 0;
             while i + 4 <= filter.len() {
-                if h == decode_fixed_32(&filter[i..i+4]) {
+                if h == decode_fixed_32(&filter[i..i + 4]) {
                     return true;
                 }
-                i+=4;
-            };
+                i += 4;
+            }
             false
         }
 
@@ -201,17 +204,17 @@ mod tests {
     }
 
     fn new_test_builder() -> FilterBlockBuilder {
-        FilterBlockBuilder::new(Rc::new(Box::new(TestHashFilter{})))
+        FilterBlockBuilder::new(Rc::new(Box::new(TestHashFilter {})))
     }
     fn new_test_reader(block: Vec<u8>) -> FilterBlockReader {
-        FilterBlockReader::new(Rc::new(Box::new(TestHashFilter{})), block)
+        FilterBlockReader::new(Rc::new(Box::new(TestHashFilter {})), block)
     }
 
     #[test]
     fn test_empty_builder() {
         let mut b = new_test_builder();
         let block = b.finish();
-        assert_eq!(&[0,0,0,0,FILTER_BASE_LG as u8], block);
+        assert_eq!(&[0, 0, 0, 0, FILTER_BASE_LG as u8], block);
         let r = new_test_reader(Vec::from(block));
         assert_eq!(r.key_may_match(0, &Slice::from("foo")), true);
         assert_eq!(r.key_may_match(10000, &Slice::from("foo")), true);

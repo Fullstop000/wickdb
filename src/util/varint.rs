@@ -42,7 +42,7 @@ macro_rules! impl_varint {
             /// number of bytes read ( > 0).
             /// If an error or overflow occurred, returns `None`
             pub fn read(src: &[u8]) -> Option<($uint, usize)> {
-               let mut n: $uint  = 0;
+                let mut n: $uint = 0;
                 let mut shift: u32 = 0;
                 for (i, &b) in src.iter().enumerate() {
                     if b < 0b1000_0000 {
@@ -118,12 +118,11 @@ impl_varint!(VarintU64, u64);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs::read;
 
     /*
-        we just use VarintU64 here for testing because the implementation of VarintU32
-        is as same as VarintU64
-     */
+       we just use VarintU64 here for testing because the implementation of VarintU32
+       is as same as VarintU64
+    */
     #[test]
     fn test_write_u64() {
         // (input u64 , expected bytes)
@@ -176,13 +175,13 @@ mod tests {
                 Some((i, n)) => {
                     assert_eq!(Some((i, n)), expects[idx]);
                     test_data.drain(0..n);
-                },
+                }
                 None => {
                     assert_eq!(None, expects[idx]);
                     test_data.drain(..);
-                },
+                }
             }
-            idx+=1;
+            idx += 1;
         }
     }
 
@@ -193,15 +192,15 @@ mod tests {
         let n = 100;
         for i in 0..n {
             let r = rand::random::<u64>();
-            VarintU64::put_varint(&mut buf, r );
+            VarintU64::put_varint(&mut buf, r);
             numbers.push(r);
         }
         let mut start = 0;
         for i in 0..n {
-             if let Some((res, n)) = VarintU64::read(&buf.as_slice()[start..]) {
-                 assert_eq!(numbers[i], res);
-                 start += n
-             }
+            if let Some((res, n)) = VarintU64::read(&buf.as_slice()[start..]) {
+                assert_eq!(numbers[i], res);
+                start += n
+            }
         }
     }
 }

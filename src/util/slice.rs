@@ -16,13 +16,13 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
 use super::byte::compare;
+use crate::util::hash::hash;
 use std::cmp::Ordering;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::ops::Index;
 use std::ptr;
 use std::slice;
-use std::hash::{Hash, Hasher};
-use crate::util::hash::hash;
 
 // TODO: use &[u8] instead of this
 
@@ -102,7 +102,8 @@ impl Index<usize> for Slice {
         invarint!(
             index < self.size,
             "[slice] out of range. Slice size is [{}] but try to get [{}]",
-            self.size, index
+            self.size,
+            index
         );
         unsafe { &*self.data.offset(index as isize) }
     }

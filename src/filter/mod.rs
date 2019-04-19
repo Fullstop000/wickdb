@@ -32,7 +32,6 @@ mod bloom;
 /// name at the time of reading. If they do not match, the filters will be
 /// ignored, which will not affect correctness but may affect performance.
 pub trait FilterPolicy {
-
     /// Return the name of this policy.  Note that if the filter encoding
     /// changes in an incompatible way, the name returned by this method
     /// must be changed.  Otherwise, old incompatible filters may be

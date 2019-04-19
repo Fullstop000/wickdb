@@ -18,8 +18,6 @@
 use std::mem::transmute;
 use std::ptr::copy_nonoverlapping;
 
-use super::slice::Slice;
-
 /// Encodes `value` in little-endian and puts it in the first 4-bytes of `dst`.
 ///
 /// # Panics
@@ -28,7 +26,8 @@ use super::slice::Slice;
 pub fn encode_fixed_32(dst: &mut [u8], value: u32) {
     invarint!(
         dst.len() >= 4,
-        "the length of 'dst' must be at least 4 for a u32, but got {}", dst.len()
+        "the length of 'dst' must be at least 4 for a u32, but got {}",
+        dst.len()
     );
     unsafe {
         let bytes = transmute::<u32, [u8; 4]>(value.to_le());
@@ -44,14 +43,14 @@ pub fn encode_fixed_32(dst: &mut [u8], value: u32) {
 pub fn encode_fixed_64(dst: &mut [u8], value: u64) {
     invarint!(
         dst.len() >= 8,
-        "the length of 'dst' must be at least 8 for a u64, but got {}", dst.len()
+        "the length of 'dst' must be at least 8 for a u64, but got {}",
+        dst.len()
     );
     unsafe {
         let bytes = transmute::<u64, [u8; 8]>(value.to_le());
         copy_nonoverlapping(bytes.as_ptr(), dst.as_mut_ptr(), 8);
     }
 }
-
 
 /// Decodes the first 4-bytes of `src` in little-endian and returns the decoded value.
 ///
@@ -89,14 +88,14 @@ pub fn decode_fixed_64(src: &[u8]) -> u64 {
 
 /// Encodes the given u32 to bytes and concatenates the result to `dst`
 pub fn put_fixed_32(dst: &mut Vec<u8>, value: u32) {
-    let mut buf = [0u8;4];
+    let mut buf = [0u8; 4];
     encode_fixed_32(&mut buf[..], value);
     dst.extend_from_slice(&buf);
 }
 
 /// Encodes the given u64 to bytes and concatenates the result to `dst`
 pub fn put_fixed_64(dst: &mut Vec<u8>, value: u64) {
-    let mut buf = [0u8;8];
+    let mut buf = [0u8; 8];
     encode_fixed_64(&mut buf[..], value);
     dst.extend_from_slice(&buf);
 }
@@ -230,7 +229,7 @@ mod tests {
         }
         for power in 0..=63u64 {
             let v = 1 << power;
-            assert_eq!(v-1, decode_fixed_64(s.as_mut_slice()));
+            assert_eq!(v - 1, decode_fixed_64(s.as_mut_slice()));
             s.drain(0..8);
             assert_eq!(v, decode_fixed_64(s.as_mut_slice()));
             s.drain(0..8);

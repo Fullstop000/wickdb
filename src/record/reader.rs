@@ -15,15 +15,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use crate::record::{BLOCK_SIZE, MAX_RECORD_TYPE, RecordType, HEADER_SIZE};
-use std::error::Error;
 use crate::record::reader::ReaderError::{BadRecord, EOF};
-use crate::util::crc32::{value, unmask};
-use crate::util::coding::decode_fixed_32;
+use crate::record::{RecordType, BLOCK_SIZE, HEADER_SIZE, MAX_RECORD_TYPE};
 use crate::storage::FilePtr;
+use crate::util::coding::decode_fixed_32;
+use crate::util::crc32::{unmask, value};
+use std::cell::RefCell;
+use std::error::Error;
 use std::io::SeekFrom;
 use std::rc::Rc;
-use std::cell::RefCell;
 
 enum ReaderError {
     // * We have an internal reading file error
@@ -52,7 +52,6 @@ struct Record {
     t: RecordType,
     data: Vec<u8>,
 }
-
 
 /// Notified when log reader encounters corruption.
 pub trait Reporter {
@@ -87,12 +86,17 @@ pub struct Reader {
 }
 
 impl Reader {
-    pub fn new(file: FilePtr, reporter: Option<Rc<RefCell<dyn Reporter>>>, checksum: bool, initial_offset: u64) -> Self {
+    pub fn new(
+        file: FilePtr,
+        reporter: Option<Rc<RefCell<dyn Reporter>>>,
+        checksum: bool,
+        initial_offset: u64,
+    ) -> Self {
         Reader {
             file,
             reporter,
             checksum,
-            buf: vec![0;BLOCK_SIZE],
+            buf: vec![0; BLOCK_SIZE],
             buf_length: 0,
             eof: false,
             last_record_offset: 0,
@@ -123,27 +127,35 @@ impl Reader {
                             RecordType::Last => {
                                 self.resyncing = false;
                                 continue;
-                            },
+                            }
                             _ => self.resyncing = false,
                         }
                     }
                     let fragment_size = record.data.len() as u64;
                     // the start offset of the current read record
-                    let physical_record_offset = self.end_of_buffer_offset - self.buf_length as u64 - HEADER_SIZE as u64 - fragment_size;
+                    let physical_record_offset = self.end_of_buffer_offset
+                        - self.buf_length as u64
+                        - HEADER_SIZE as u64
+                        - fragment_size;
                     match record.t {
                         RecordType::Full => {
                             if in_fragmented_record {
-                                self.report_drop(result.len() as u64, "partial record without end(1) for reading a new Full record");
+                                self.report_drop(
+                                    result.len() as u64,
+                                    "partial record without end(1) for reading a new Full record",
+                                );
                             }
                             // update record offset
                             prospective_record_offset = physical_record_offset;
                             self.last_record_offset = prospective_record_offset;
                             return Some(record.data);
-
-                        },
+                        }
                         RecordType::First => {
                             if in_fragmented_record {
-                                self.report_drop(result.len() as u64, "partial record without end(2) for reading a new First record");
+                                self.report_drop(
+                                    result.len() as u64,
+                                    "partial record without end(2) for reading a new First record",
+                                );
                             }
                             prospective_record_offset = physical_record_offset;
 
@@ -151,32 +163,45 @@ impl Reader {
                             result.clear();
                             result.extend(record.data);
                             in_fragmented_record = true;
-
-                        },
+                        }
                         RecordType::Middle => {
                             if !in_fragmented_record {
-                                self.report_drop(fragment_size, format!("missing start of fragmented record({:?})", RecordType::Middle).as_str());
-                                // continue reading until find a new first or full record
+                                self.report_drop(
+                                    fragment_size,
+                                    format!(
+                                        "missing start of fragmented record({:?})",
+                                        RecordType::Middle
+                                    )
+                                    .as_str(),
+                                );
+                            // continue reading until find a new first or full record
                             } else {
-                                result.extend( record.data);
+                                result.extend(record.data);
                             }
-
-                        },
+                        }
                         RecordType::Last => {
                             if !in_fragmented_record {
-                                self.report_drop(fragment_size, format!("missing start of fragmented record({:?})", RecordType::Last).as_str());
-                                // continue reading until find a new first or full record
+                                self.report_drop(
+                                    fragment_size,
+                                    format!(
+                                        "missing start of fragmented record({:?})",
+                                        RecordType::Last
+                                    )
+                                    .as_str(),
+                                );
+                            // continue reading until find a new first or full record
                             } else {
                                 result.extend(record.data);
                                 // notice that we update the last_record_offset after we get the Last part but not the First
                                 self.last_record_offset = prospective_record_offset;
                                 return Some(result);
                             }
-                        },
-                        RecordType::Zero => {/* zero type record is considered as irrelevant and should never be read out*/}
-
+                        }
+                        RecordType::Zero => {
+                            /* zero type record is considered as irrelevant and should never be read out*/
+                        }
                     }
-                },
+                }
                 Err(e) => {
                     match e {
                         ReaderError::EOF => {
@@ -188,16 +213,17 @@ impl Reader {
                                 result.clear();
                             }
                             return None;
-                        },
+                        }
                         ReaderError::BadRecord => {
                             if in_fragmented_record {
                                 self.report_drop(
-                                    result.len() as u64, "bad record read in middle of record"
+                                    result.len() as u64,
+                                    "bad record read in middle of record",
                                 );
                                 in_fragmented_record = false;
                                 result.clear();
                             }
-                        },
+                        }
                     }
                 }
             }
@@ -224,7 +250,7 @@ impl Reader {
                             if read < BLOCK_SIZE as usize {
                                 self.eof = true;
                             }
-                        },
+                        }
                         Err(e) => {
                             self.report_drop(BLOCK_SIZE as u64, e.description());
                             self.eof = true;
@@ -243,7 +269,8 @@ impl Reader {
             // parse the header
             let header = &self.buf[0..HEADER_SIZE];
             let record_type = *header.last().unwrap();
-            let data_length = ((header[4] as usize & 0xff) | ((header[5] as usize & 0xff) << 8)) as usize;
+            let data_length =
+                ((header[4] as usize & 0xff) | ((header[5] as usize & 0xff) << 8)) as usize;
             let record_length = HEADER_SIZE + data_length;
             // a record must be included in one block
             if record_length > self.buf_length {
@@ -283,7 +310,9 @@ impl Reader {
             self.buf_length -= data.len();
 
             // skip physical record that started before initial_offset
-            if self.end_of_buffer_offset  < self.initial_offset + self.buf_length as u64 + record_length as u64{
+            if self.end_of_buffer_offset
+                < self.initial_offset + self.buf_length as u64 + record_length as u64
+            {
                 return Err(BadRecord);
             }
 
@@ -302,7 +331,9 @@ impl Reader {
         if let Some(reporter) = &self.reporter {
             // make sure the bytes not overflows 'the initial_offset'
             // and a special case is that we got a read error when we first read a block
-            if self.end_of_buffer_offset == 0 || self.end_of_buffer_offset - bytes >= self.initial_offset {
+            if self.end_of_buffer_offset == 0
+                || self.end_of_buffer_offset - bytes >= self.initial_offset
+            {
                 reporter.clone().borrow_mut().corruption(bytes, reason);
             }
         }
@@ -326,7 +357,10 @@ impl Reader {
         }
         self.end_of_buffer_offset = block_start_location;
         if block_start_location > 0 {
-            let res = self.file.borrow_mut().f_seek(SeekFrom::Start(block_start_location));
+            let res = self
+                .file
+                .borrow_mut()
+                .f_seek(SeekFrom::Start(block_start_location));
             if res.is_err() {
                 self.report_drop(block_start_location, res.unwrap_err().description());
                 return false;
