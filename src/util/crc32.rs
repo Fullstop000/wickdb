@@ -98,8 +98,8 @@ mod tests {
     pub fn test_mask_unmask() {
         let crc = value("foo".as_bytes());
         assert_ne!(mask(crc), crc);
-        assert_ne!(super::mask(super::mask(crc)), crc);
-        assert_eq!(unmask(super::mask(crc)), crc);
-        assert_eq!(unmask(unmask(super::mask(super::mask(crc)))), crc);
+        assert_ne!(mask(mask(crc)), crc);
+        assert_eq!(unmask(mask(crc)), crc);
+        assert_eq!(unmask(unmask(mask(mask(crc)))), crc);
     }
 }

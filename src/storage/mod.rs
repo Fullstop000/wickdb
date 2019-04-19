@@ -21,8 +21,8 @@ use std::io::{SeekFrom};
 use std::io;
 use std::path::{Path, PathBuf};
 use crate::util::status::{Result, WickErr, Status};
-use std::mem;
-use std::error::Error;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// Storage is a namespace for files.
 ///
@@ -119,4 +119,6 @@ pub trait File {
         }
     }
 }
+
+pub type FilePtr = Rc<RefCell<dyn File>>;
 

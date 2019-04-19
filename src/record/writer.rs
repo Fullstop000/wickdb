@@ -15,18 +15,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::io::{SeekFrom};
 use crate::util::slice::Slice;
 use crate::record::{RecordType, BLOCK_SIZE, HEADER_SIZE};
 use crate::util::crc32;
-use std::mem;
 use crate::util::coding::encode_fixed_32;
-use crate::storage::File;
+use crate::storage::FilePtr;
 use crate::util::status::Result;
 
 /// Writer writes records to an underlying log `File`.
 pub struct Writer {
-    dest: Box<dyn File>,
+    dest: FilePtr,
     //Current offset in block
     block_offset: usize,
     // crc32c values for all supported record types.  These are
@@ -36,17 +34,16 @@ pub struct Writer {
 }
 
 impl Writer {
-    pub fn new(mut dest: Box<dyn File>) -> Result<Self> {
-        let offset = dest.f_seek(SeekFrom::Current(0))?;
+    pub fn new(dest: FilePtr) -> Result<Self> {
         let n = RecordType::Last as usize;
         let mut cache = [0; RecordType::Last as usize + 1];
-        for h in 0..n +1 {
-            let v: [u8; 1] = unsafe { mem::transmute(RecordType::from(h) as u8) };
+        for h in 1..=n {
+            let v: [u8; 1] = [RecordType::from(h) as u8];
             cache[h as usize] = crc32::value(&v);
         }
         let w = Writer {
             dest,
-            block_offset: offset as usize % BLOCK_SIZE,
+            block_offset: 0,
             crc_cache: cache,
         };
         Ok(w)
@@ -56,8 +53,8 @@ impl Writer {
     pub fn add_record(&mut self, s: &Slice) -> Result<()> {
         let data = s.to_slice();
         let mut left = s.size();
-        let mut begin = true; // indicate the record should be a
-        while left > 0 {
+        let mut begin = true; // indicate iff the record is a First or Middle record
+        while {
             assert!(
                 BLOCK_SIZE >= self.block_offset,
                 "[record writer] the 'block_offset' {} overflows the max BLOCK_SIZE {}",
@@ -70,7 +67,7 @@ impl Writer {
             if leftover < HEADER_SIZE {
                 if leftover != 0 {
                     // fill the rest of the block with zero
-                    self.dest.f_write(&[0;6][..leftover])?;
+                    self.dest.borrow_mut().f_write(&[0;6][..leftover])?;
                 }
                 self.block_offset = 0; // use a new block
             };
@@ -98,10 +95,13 @@ impl Writer {
                     RecordType::Middle
                 }
             };
-            self.write(t, &data[..to_write])?;
+
+            let start = s.size() - left;
+            self.write(t, &data[start..start + to_write])?;
             left -= to_write;
             begin = false;
-        };
+            left > 0
+        }{ /* empty here */ };
         Ok(())
 
     }
@@ -131,9 +131,10 @@ impl Writer {
         encode_fixed_32(&mut buf, crc);
 
         // write the header and the data
-        self.dest.f_write(&buf)?;
-        self.dest.f_write(data)?;
-        self.dest.f_flush()?;
+        let f = self.dest.clone();
+        f.borrow_mut().f_write(&buf)?;
+        f.borrow_mut().f_write(data)?;
+        f.borrow_mut().f_flush()?;
         // update block_offset
         self.block_offset += HEADER_SIZE + size;
         Ok(())

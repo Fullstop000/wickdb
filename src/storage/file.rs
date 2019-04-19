@@ -22,8 +22,8 @@ use fs2::FileExt;
 use std::path::{Path, PathBuf};
 use crate::util::status::{Result, WickErr, Status};
 
-pub struct FileStorage {
-}
+pub struct FileStorage;
+
 
 impl Storage for FileStorage {
 

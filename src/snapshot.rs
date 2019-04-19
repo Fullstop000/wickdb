@@ -16,7 +16,7 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
 /// Abstract handle to particular state of a DB.
-/// A Snapshot is an immutable object and can therefore be safely
+/// A `Snapshot` is an immutable object and can therefore be safely
 /// accessed from multiple threads without any external synchronization.
 pub struct Snapshot {
 
