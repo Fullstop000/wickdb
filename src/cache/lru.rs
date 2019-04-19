@@ -167,7 +167,7 @@ impl<T: Default + Debug> LRUHandle<T> {
 /// when they detect an element in the cache acquiring or losing its only
 /// external reference:
 ///
-/// ```shell
+/// ```text
 ///
 ///                                    used by clients
 ///                 look_up()       +-------------------+

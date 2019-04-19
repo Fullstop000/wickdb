@@ -91,7 +91,7 @@ impl Debug for ParsedInternalKey {
 ///
 /// The format of `InternalKey`:
 ///
-/// ```shell
+/// ```text
 /// | ----------- n bytes ----------- | --- 7 bytes --- | - 1 byte - |
 ///              user key                  seq number        type
 /// ```

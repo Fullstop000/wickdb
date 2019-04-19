@@ -48,7 +48,7 @@ impl From<usize> for RecordType {
 
 /// The format of a record header :
 ///
-/// ```shell
+/// ```text
 ///
 /// | ----- 4bytes ----- | -- 2bytes -- | - 1byte - |
 ///      CRC checksum         length     record type
