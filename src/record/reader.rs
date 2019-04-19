@@ -104,7 +104,6 @@ impl Reader {
 
     /// Read the next complete record and returns a Vec for it.
     pub fn read_record(&mut self) -> Option<Vec<u8>> {
-        // move to the right block offset
         if self.last_record_offset < self.initial_offset {
             if !self.skip_to_initial_block() {
                 return None;
@@ -245,9 +244,9 @@ impl Reader {
             let header = &self.buf[0..HEADER_SIZE];
             let record_type = *header.last().unwrap();
             let data_length = ((header[4] as usize & 0xff) | ((header[5] as usize & 0xff) << 8)) as usize;
-            let record_end = HEADER_SIZE + data_length;
+            let record_length = HEADER_SIZE + data_length;
             // a record must be included in one block
-            if record_end > self.buf_length {
+            if record_length > self.buf_length {
                 let drop_size = self.buf_length;
                 self.clear_buf();
                 if !self.eof {
@@ -271,7 +270,7 @@ impl Reader {
             if self.checksum {
                 let expected = unmask(decode_fixed_32(header));
                 // HEADER_SIZE - 1 to included the record type
-                let actual = value(&self.buf[HEADER_SIZE - 1..record_end]);
+                let actual = value(&self.buf[HEADER_SIZE - 1..record_length]);
                 if expected != actual {
                     let drop_size = self.buf_length;
                     self.clear_buf();
@@ -280,8 +279,14 @@ impl Reader {
                 }
             }
 
-            let mut data = self.buf.drain(0..record_end).collect::<Vec<u8>>();
+            let mut data = self.buf.drain(0..record_length).collect::<Vec<u8>>();
             self.buf_length -= data.len();
+
+            // skip physical record that started before initial_offset
+            if self.end_of_buffer_offset  < self.initial_offset + self.buf_length as u64 + record_length as u64{
+                return Err(BadRecord);
+            }
+
             // drop the head part
             data.drain(0..HEADER_SIZE);
             return Ok(Record {

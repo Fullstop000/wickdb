@@ -339,8 +339,8 @@ mod tests {
             assert!(expected_record_index < INITIAL_OFFSET_LAST_RECORD_OFFSETS.len());
             while expected_record_index < INITIAL_OFFSET_LAST_RECORD_OFFSETS.len() {
                 let record = reader.read_record().expect("read_record() should work");
-                assert_eq!(reader.last_record_offset(), INITIAL_OFFSET_LAST_RECORD_OFFSETS[expected_record_index] as u64, "last record offseet should match");
                 assert_eq!(record.len(), INITIAL_OFFSET_RECORD_SIZES[expected_record_index], "record length should match");
+                assert_eq!(reader.last_record_offset(), INITIAL_OFFSET_LAST_RECORD_OFFSETS[expected_record_index] as u64, "last record offset should match");
                 assert_eq!('a' as u8 + expected_record_index as u8, record[0], "record content should match");
                 expected_record_index += 1;
             }
@@ -680,7 +680,7 @@ mod tests {
         test_check_read_fourth_first_block_trailer: (BLOCK_SIZE as u64 -4, 3),
         test_check_read_fourth_middle_block: (BLOCK_SIZE as u64 + 1, 3),
         test_check_read_fourth_last_block: (2 * BLOCK_SIZE as u64 + 1, 3),
-        test_check_read_fourth_start: (2 * (BLOCK_SIZE as u64 + 1000) + (2 * BLOCK_SIZE as u64 - 1000) + 3 * BLOCK_SIZE as u64, 3),
+        test_check_read_fourth_start: (2 * (HEADER_SIZE as u64 + 1000) + (2 * BLOCK_SIZE as u64 - 1000) + 3 * HEADER_SIZE as u64, 3),
         test_check_read_initial_offset_into_block_padding: (3 * BLOCK_SIZE as u64 - 3, 5),
     );
 
