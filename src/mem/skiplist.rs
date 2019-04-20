@@ -26,7 +26,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::intrinsics::copy_nonoverlapping;
 use crate::iterator::Iterator;
-use crate::util::status::WickErr;
+use crate::util::status::Result;
 
 const BRANCHING: u32 = 4;
 pub const MAX_HEIGHT: usize = 12;
@@ -87,9 +87,6 @@ pub struct Skiplist {
     pub max_height: AtomicUsize,
     // comparator is used to compare the key of node
     pub comparator: Rc<dyn Comparator>,
-    // references of this Skiplist
-    // This not only represents in-memory refs but also 'refs' in read request
-    refs: AtomicUsize,
     // head node
     pub head: *mut Node,
     // arena contains all the nodes data
@@ -106,7 +103,6 @@ impl Skiplist {
             max_height: AtomicUsize::new(1),
             arena,
             head,
-            refs: AtomicUsize::new(1), // as created
         }
     }
 
@@ -305,7 +301,7 @@ impl<'a> Iterator for SkiplistIterator<'a> {
         unimplemented!()
     }
 
-    fn status(&mut self) -> Result<(), WickErr> {
+    fn status(&mut self) -> Result<()> {
         Ok(())
     }
 }

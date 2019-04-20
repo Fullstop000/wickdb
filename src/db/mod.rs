@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod filename;
-mod format;
+pub mod filename;
+pub mod format;
 
 use crate::batch::WriteBatch;
 use crate::options::{ReadOptions, WriteOptions};

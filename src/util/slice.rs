@@ -52,7 +52,11 @@ impl Slice {
 
     #[inline]
     pub fn to_slice(&self) -> &[u8] {
-        unsafe { slice::from_raw_parts(self.data, self.size) }
+        if !self.data.is_null() {
+            unsafe { slice::from_raw_parts(self.data, self.size) }
+        } else {
+            panic!("empty Slice should not used as a &[u8] ")
+        }
     }
 
     #[inline]

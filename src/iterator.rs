@@ -16,7 +16,7 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
 use crate::util::slice::Slice;
-use crate::util::status::WickErr;
+use crate::util::status::{Result, WickErr};
 
 pub trait Iterator {
     /// An iterator is either positioned at a key/value pair, or
@@ -59,7 +59,7 @@ pub trait Iterator {
     fn value(&self) -> Slice;
 
     /// If an error has occurred, return it.  Else return an ok status.
-    fn status(&mut self) -> Result<(), WickErr>;
+    fn status(&mut self) -> Result<()>;
 }
 
 /// A plain iterator used as default
@@ -106,7 +106,7 @@ impl Iterator for EmptyIterator {
         Slice::new_empty()
     }
 
-    fn status(&mut self) -> Result<(), WickErr> {
+    fn status(&mut self) -> Result<()> {
         match self.err.take() {
             Some(e) => Err(e),
             None => Ok(()),

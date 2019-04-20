@@ -38,7 +38,7 @@ macro_rules! impl_varint {
                 i + 1
             }
 
-            /// Decodes a `u64` from given bytes and returns that value and the
+            /// Decodes a uint(32 or 64) from given bytes and returns that value and the
             /// number of bytes read ( > 0).
             /// If an error or overflow occurred, returns `None`
             pub fn read(src: &[u8]) -> Option<($uint, usize)> {

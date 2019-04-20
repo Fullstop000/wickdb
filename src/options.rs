@@ -147,7 +147,7 @@ pub struct Options {
     /// If non-null, use the specified filter policy to reduce disk reads.
     /// Many applications will benefit from passing the result of
     /// NewBloomFilterPolicy() here.
-    pub filter_policy: Option<Rc<Box<dyn FilterPolicy>>>,
+    pub filter_policy: Option<Rc<dyn FilterPolicy>>,
 }
 
 impl Default for Options {

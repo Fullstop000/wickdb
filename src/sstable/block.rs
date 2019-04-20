@@ -19,7 +19,7 @@ use crate::iterator::Iterator;
 use crate::util::coding::{decode_fixed_32, put_fixed_32};
 use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
-use crate::util::status::{Status, WickErr};
+use crate::util::status::{Status, WickErr, Result};
 use crate::util::varint::VarintU32;
 use std::cmp::{min, Ordering};
 use std::rc::Rc;
@@ -53,7 +53,7 @@ impl Block {
     ///
     /// If the given `data` is invalid, return an error with `Status::Corruption`
     ///
-    pub fn new(data: Vec<u8>) -> Result<Self, WickErr> {
+    pub fn new(data: Vec<u8>) -> Result<Self> {
         let size = data.len();
         if size >= 4 {
             let max_restarts_allowed = (size - 4) / 4;
@@ -310,7 +310,7 @@ impl Iterator for BlockIterator {
         Slice::from(val)
     }
 
-    fn status(&mut self) -> Result<(), WickErr> {
+    fn status(&mut self) -> Result<()> {
         if let Some(err) = &self.err {
             return Err(self.err.take().unwrap());
         }
