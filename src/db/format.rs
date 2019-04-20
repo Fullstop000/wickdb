@@ -15,11 +15,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use crate::util::coding::{decode_fixed_64, encode_fixed_64};
+use crate::util::coding::{decode_fixed_64, put_fixed_64};
 use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Error, Formatter};
+use crate::util::varint::VarintU32;
 
 /// The max key sequence number. The value is 2^56 - 1 because the seq number
 /// only takes 56 bits when is serialized to `InternalKey`
@@ -27,21 +28,19 @@ pub const MAX_KEY_SEQUENCE: u64 = (1u64 << 56) - 1;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ValueType {
-    /// A normal value
-    Value,
     /// A value indicates that the key is deleted
-    Deletion,
+    Deletion = 0,
+    /// A normal value
+    Value = 1,
 }
 
-impl ValueType {
-    #[inline]
-    fn as_u64(self) -> u64 {
-        match self {
-            ValueType::Value => 1,
-            ValueType::Deletion => 0,
-        }
-    }
-}
+/// `FOR_SEEK` defines the `ValueType` that should be passed when
+/// constructing a `ParsedInternalKey` for seeking to a particular
+/// sequence number (since we sort sequence numbers in decreasing order
+/// and the value type is embedded as the low 8 bits in the sequence
+/// number in internal keys, we need to use the highest-numbered
+/// ValueType, not the lowest).
+const VALUE_TYPE_FOR_SEEK: ValueType = ValueType::Value;
 
 impl From<u64> for ValueType {
     fn from(v: u64) -> Self {
@@ -106,8 +105,7 @@ pub struct InternalKey {
 impl InternalKey {
     pub fn new(key: &Slice, seq: u64, t: ValueType) -> Self {
         let mut v = Vec::from(key.to_slice());
-        let mut p = pack_seq_and_type(seq, t);
-        v.append(&mut p);
+        put_fixed_64(&mut v, pack_seq_and_type(seq, t));
         InternalKey { data: v }
     }
 
@@ -125,6 +123,56 @@ impl InternalKey {
     }
 }
 
+/// The format of a `LookupKey`:
+///
+/// ```text
+///
+///   +---------------------------------+
+///   | varint32 of internal key length |
+///   +---------------------------------+ --------------- user key start
+///   | user key bytes                  |
+///   +---------------------------------+   internal key
+///   | sequence (7)        |  seek (1) |
+///   +---------------------------------+ ---------------
+///
+/// ```
+pub struct LookupKey {
+    data: Vec<u8>,
+    ukey_start: usize,
+}
+
+impl LookupKey {
+    pub fn new(user_key: &[u8], seq_number: u64) -> Self {
+        let mut data = vec![];
+        let ukey_start = VarintU32::put_varint(&mut data, (user_key.len() + 8) as u32);
+        data.extend_from_slice(user_key);
+        put_fixed_64(&mut data, pack_seq_and_type(seq_number, VALUE_TYPE_FOR_SEEK ));
+        Self {
+            data,
+            ukey_start,
+        }
+    }
+
+    /// Returns a key suitable for lookup in a MemTable.
+    /// NOTICE: the LookupKey self should live at least as long as the returning Slice
+    pub fn mem_key(&self)-> Slice {
+        Slice::from(self.data.as_slice())
+    }
+
+    /// Returns an internal key (suitable for passing to an internal iterator)
+    /// NOTICE: the LookupKey self should live at least as long as the returning Slice
+    pub fn internal_key(&self) -> Slice {
+        Slice::from(&self.data.as_slice()[self.ukey_start..])
+    }
+
+    /// Returns the user key
+    /// NOTICE: the LookupKey self should live at least as long as the returning Slice
+    pub fn user_key(&self) -> Slice {
+        let len = self.data.len();
+        Slice::from(&self.data.as_slice()[self.ukey_start..len - 8])
+    }
+}
+
 /// `InternalKeyComparator` is used for comparing the `InternalKey`
 /// the compare result is ordered by:
 ///    increasing user key (according to user-supplied comparator)
@@ -132,7 +180,7 @@ impl InternalKey {
 ///    decreasing type (though sequence# should be enough to disambiguate)
 pub struct InternalKeyComparator {
     /// The comparator defined in `Options`
-    user_comparator: Box<dyn Comparator>,
+    pub user_comparator: Box<dyn Comparator>,
 }
 
 impl InternalKeyComparator {
@@ -173,12 +221,10 @@ impl Comparator for InternalKeyComparator {
     }
 
     fn separator(&self, a: &[u8], b: &[u8]) -> Vec<u8> {
-        // TODO
         unimplemented!()
     }
 
     fn successor(&self, s: &[u8]) -> Vec<u8> {
-        // TODO
         unimplemented!()
     }
 }
@@ -209,16 +255,14 @@ fn extract_seq_number(key: &[u8]) -> u64 {
 
 #[inline]
 // compose sequence number and value type into a single u64
-fn pack_seq_and_type(seq: u64, v_type: ValueType) -> Vec<u8> {
-    invarint!(
+fn pack_seq_and_type(seq: u64, v_type: ValueType) -> u64 {
+    assert!(
         seq <= MAX_KEY_SEQUENCE,
         "[key seq] the sequence number should be <= {}, but got {}",
         MAX_KEY_SEQUENCE,
         seq
     );
-    let mut v = vec![0u8; 8];
-    encode_fixed_64(v.as_mut_slice(), seq << 8 | v_type.as_u64());
-    v
+    seq << 8 | v_type as u64
 }
 
 #[cfg(test)]
@@ -237,7 +281,8 @@ mod tests {
             ),
         ];
         for (seq, t, expect) in tests.drain(..) {
-            assert_eq!(pack_seq_and_type(seq, t), expect);
+            let u = decode_fixed_64(expect.as_slice());
+            assert_eq!(pack_seq_and_type(seq, t), u);
         }
     }
 

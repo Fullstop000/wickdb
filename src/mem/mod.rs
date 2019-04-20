@@ -17,3 +17,245 @@
 
 mod arena;
 mod skiplist;
+
+use crate::iterator::Iterator;
+use crate::db::format::{ValueType, LookupKey, InternalKeyComparator};
+use crate::util::status::{Result, WickErr};
+use std::rc::Rc;
+use crate::util::comparator::Comparator;
+use crate::mem::skiplist::{Skiplist, SkiplistIterator};
+use crate::util::varint::VarintU32;
+use crate::util::slice::Slice;
+use crate::mem::arena::BlockArena;
+use crate::util::coding::{put_fixed_64, decode_fixed_64};
+use std::slice;
+use std::cmp::Ordering;
+use crate::util::status::Status;
+
+pub trait MemoryTable {
+
+    /// Returns an estimate of the number of bytes of data in use by this
+    /// data structure. It is safe to call when MemTable is being modified.
+    fn approximate_memory_usage(&self) -> usize;
+
+    /// Return an iterator that yields the contents of the memtable.
+    ///
+    /// The caller must ensure that the underlying MemTable remains live
+    /// while the returned iterator is live.
+    fn new_iterator<'a>(&'a self) -> Box<dyn Iterator + 'a>;
+
+    /// Add an entry into memtable that maps key to value at the
+    /// specified sequence number and with the specified type.
+    /// Typically value will be empty if the type is `Deletion`.
+    ///
+    /// The 'key' and 'value' will be bundled together into an 'entry':
+    ///
+    /// ```text
+    ///   +=================================+
+    ///   |       format of the entry       |
+    ///   +=================================+
+    ///   | varint32 of internal key length |
+    ///   +---------------------------------+ ---------------
+    ///   | user key bytes                  |
+    ///   +---------------------------------+   internal key
+    ///   | sequence (7)       |   type (1) |
+    ///   +---------------------------------+ ---------------
+    ///   | varint32 of value length        |
+    ///   +---------------------------------+
+    ///   | value bytes                     |
+    ///   +---------------------------------+
+    /// ```
+    ///
+    fn add(&mut self, seq_number: u64, val_type: ValueType, key: &[u8], value: &[u8]);
+
+    /// If memtable contains a value for key, returns it .
+    /// If memtable contains a deletion for key, returns `NotFound` .
+    /// If memtable does not contain the key, return `None`
+    fn get(&self, key: &LookupKey) -> Option<Result<Vec<u8>>>;
+}
+
+// KeyComparator is a wrapper for InternalKeyComparator. It will convert the input mem key
+// to the internal key before comparing.
+struct KeyComparator {
+    cmp: InternalKeyComparator,
+}
+
+impl Comparator for KeyComparator {
+    fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
+        let ia = extract_varint_encoded_slice(Slice::from(a));
+        let ib = extract_varint_encoded_slice(Slice::from(b));
+        self.cmp.compare(ia.to_slice(), ib.to_slice())
+    }
+
+    fn name(&self) -> &str {
+        self.cmp.name()
+    }
+
+    fn separator(&self, a: &[u8], b: &[u8]) -> Vec<u8> {
+        let ia = extract_varint_encoded_slice(Slice::from(a));
+        let ib = extract_varint_encoded_slice(Slice::from(b));
+        self.cmp.separator(ia.to_slice(), ib.to_slice())
+    }
+
+    fn successor(&self, key: &[u8]) -> Vec<u8> {
+        let ia = extract_varint_encoded_slice(Slice::from(key));
+        self.cmp.successor(ia.to_slice())
+    }
+}
+
+pub struct MemTable {
+    cmp: Rc<KeyComparator>,
+    table: Skiplist
+}
+
+impl MemTable {
+    pub fn new(cmp: InternalKeyComparator) -> Self {
+        let arena = BlockArena::new();
+        let kcmp = Rc::new(KeyComparator {
+            cmp,
+        });
+        let table = Skiplist::new(kcmp.clone(), Box::new(arena));
+        Self {
+            cmp: kcmp,
+            table,
+        }
+    }
+}
+
+impl MemoryTable for MemTable {
+    fn approximate_memory_usage(&self) -> usize {
+        self.table.arena.memory_used()
+    }
+
+    fn new_iterator<'a>(&'a self) -> Box<dyn Iterator + 'a> {
+        let iter = MemTableIterator {
+            iter: SkiplistIterator::new(&self.table),
+            buffer: Vec::new(),
+        };
+        Box::new(iter)
+    }
+
+    fn add(&mut self, seq_number: u64, val_type: ValueType, key: &[u8], value: &[u8]) {
+        let key_size = key.len();
+        let val_size = value.len();
+        let internal_key_size = key_size + 8;
+        let mut buf = vec![];
+        VarintU32::put_varint(&mut buf, internal_key_size as u32);
+        buf.extend_from_slice(key);
+        put_fixed_64(&mut buf, (seq_number << 8) | val_type as u64);
+        VarintU32::put_varint(&mut buf, value.len() as u32);
+        buf.extend_from_slice(value);
+        // TODO: remove redundant copying
+        self.table.insert(Slice::from(buf.as_slice()))
+    }
+
+    fn get(&self, key: &LookupKey) -> Option<Result<Vec<u8>>> {
+        let mk = key.mem_key();
+        // internal key
+        let mut iter = self.new_iterator();
+        iter.seek(&mk);
+        if iter.valid() {
+            let internal_key = iter.key();
+            // only check the user key here
+            match self.cmp.cmp.user_comparator.compare(Slice::new(internal_key.as_ptr(), internal_key.size() - 8).to_slice(), key.user_key().to_slice()) {
+                Ordering::Equal => {
+                    let tag = decode_fixed_64(&internal_key.to_slice()[internal_key.size()-8..]);
+                    match ValueType::from(tag & 0xff as u64) {
+                        ValueType::Value => return Some(Ok(Vec::from(iter.value().to_slice()))),
+                        ValueType::Deletion => return Some(Err(WickErr::new(Status::NotFound, None))),
+                    }
+                },
+                _ => return None,
+            }
+        }
+        None
+    }
+}
+
+pub struct MemTableIterator<'a> {
+    iter: SkiplistIterator<'a>,
+    // for passing to encode_key
+    buffer: Vec<u8>,
+}
+
+impl<'a> MemTableIterator<'a> {
+    pub fn new(table: &'a Skiplist) -> Self {
+        let iter = SkiplistIterator::new(table);
+        Self {
+            iter,
+            buffer: Vec::new(),
+        }
+    }
+}
+
+impl<'a> Iterator for MemTableIterator<'a> {
+    fn valid(&self) -> bool {
+        self.iter.valid()
+    }
+
+    fn seek_to_first(&mut self) {
+        self.iter.seek_to_first()
+    }
+
+    fn seek_to_last(&mut self) {
+        self.iter.seek_to_last()
+    }
+
+    fn seek(&mut self, target: &Slice) {
+        // convert to mem key first
+        encode_key(&mut self.buffer, target);
+        self.iter.seek(&Slice::from(self.buffer.as_slice()))
+    }
+
+    fn next(&mut self) {
+        self.iter.next()
+    }
+
+    fn prev(&mut self) {
+        self.iter.prev()
+    }
+
+    // returns the internal key
+    fn key(&self) -> Slice {
+        extract_varint_encoded_slice(self.iter.key())
+    }
+
+    fn value(&self) -> Slice {
+        let entry = self.iter.key();
+        let internal_key = self.key();
+        if internal_key.size() != 0 {
+            unsafe {
+                let val_ptr = internal_key.as_ptr().add(internal_key.size());
+                match VarintU32::read(slice::from_raw_parts(val_ptr, 5)) {
+                    Some((len, n)) => {
+                        let val_start = val_ptr.add(n);
+                        return Slice::new(val_start, len as usize);
+                    },
+                    None => return Slice::new_empty(),
+                }
+            }
+        }
+        Slice::new_empty()
+    }
+
+    fn status(&mut self) -> Result<()> {
+        Ok(())
+    }
+}
+
+// Encode a suitable internal key target for "target" into a given buffer.
+fn encode_key(buf: &mut Vec<u8>, target: &Slice) {
+    buf.clear();
+    VarintU32::put_varint(buf, target.size() as u32);
+    buf.extend_from_slice(target.to_slice());
+}
+
+// Decodes the length (varint u32) from the first of the give slice and
+// returns a new slice points to the data according to the extracted length
+fn extract_varint_encoded_slice(origin: Slice) -> Slice {
+    match VarintU32::read(origin.to_slice()) {
+        Some((len, n)) => Slice::from(&origin.to_slice()[n..len as usize + n]),
+        None => Slice::new_empty(),
+    }
+}
+

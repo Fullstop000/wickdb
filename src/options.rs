@@ -53,7 +53,7 @@ pub struct Options {
     /// REQUIRES: The client must ensure that the comparator supplied
     /// here has the same name and orders keys *exactly* the same as the
     /// comparator provided to previous open calls on the same DB.
-    pub comparator: Rc<Box<dyn Comparator>>,
+    pub comparator: Rc<dyn Comparator>,
 
     /// If true, the database will be created if it is missing.
     pub create_if_missing: bool,
@@ -153,7 +153,7 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Options {
-            comparator: Rc::new(Box::new(BytewiseComparator::new())),
+            comparator: Rc::new(BytewiseComparator::new()),
             create_if_missing: false,
             error_if_exists: false,
             paranoid_checks: false,

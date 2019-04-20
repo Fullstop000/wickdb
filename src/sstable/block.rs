@@ -73,7 +73,7 @@ impl Block {
     }
 
     /// Create a BlockIterator for current block.
-    pub fn iter(&self, cmp: Rc<Box<dyn Comparator>>) -> Box<dyn Iterator> {
+    pub fn iter(&self, cmp: Rc<dyn Comparator>) -> Box<dyn Iterator> {
         let num_restarts = Self::restarts_len(self.data.as_slice());
         Box::new(BlockIterator::new(
             cmp,
@@ -104,7 +104,7 @@ unsafe impl Sync for Block {}
 
 /// Iterator for every entry in the block
 pub struct BlockIterator {
-    cmp: Rc<Box<dyn Comparator>>,
+    cmp: Rc<dyn Comparator>,
 
     err: Option<WickErr>,
     // underlying block data
@@ -132,7 +132,7 @@ pub struct BlockIterator {
 
 impl BlockIterator {
     pub fn new(
-        cmp: Rc<Box<Comparator>>,
+        cmp: Rc<Comparator>,
         data: Rc<Vec<u8>>,
         restarts: u32,
         restarts_len: u32,
@@ -330,7 +330,7 @@ impl Iterator for BlockIterator {
 /// immediately following the corresponding key.
 pub struct BlockBuilder {
     block_restart_interval: usize,
-    cmp: Rc<Box<dyn Comparator>>,
+    cmp: Rc<dyn Comparator>,
     // destination buffer
     buffer: Vec<u8>,
     // restart points
@@ -342,7 +342,7 @@ pub struct BlockBuilder {
 }
 
 impl BlockBuilder {
-    pub fn new(block_restart_interval: usize, cmp: Rc<Box<dyn Comparator>>) -> Self {
+    pub fn new(block_restart_interval: usize, cmp: Rc<dyn Comparator>) -> Self {
         assert!(
             block_restart_interval >= 1,
             "[block builder] invalid 'block_restart_interval' {} ",

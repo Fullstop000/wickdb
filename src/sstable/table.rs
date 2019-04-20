@@ -406,7 +406,7 @@ impl Iterator for Table {
 /// caller to close the file after calling `Finish()`.
 pub struct TableBuilder {
     options: Rc<Options>,
-    cmp: Rc<Box<dyn Comparator>>,
+    cmp: Rc<dyn Comparator>,
     // underlying sst file
     file: Box<dyn File>,
     // the written data length
