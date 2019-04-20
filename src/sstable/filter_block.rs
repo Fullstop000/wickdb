@@ -28,7 +28,7 @@ const FILTER_META_LENGTH: usize = 5; // 4bytes filter offsets length + 1bytes ba
 /// particular Table.  It generates a single string which is stored as
 /// a special block in the Table.
 pub struct FilterBlockBuilder {
-    policy: Rc<Box<dyn FilterPolicy>>,
+    policy: Rc<dyn FilterPolicy>,
     // key contents
     // reused by every block
     keys: Vec<Vec<u8>>,
@@ -40,7 +40,7 @@ pub struct FilterBlockBuilder {
 }
 
 impl FilterBlockBuilder {
-    pub fn new(policy: Rc<Box<dyn FilterPolicy>>) -> Self {
+    pub fn new(policy: Rc<dyn FilterPolicy>) -> Self {
         Self {
             policy,
             keys: vec![],
@@ -109,7 +109,7 @@ impl FilterBlockBuilder {
 }
 
 pub struct FilterBlockReader {
-    policy: Rc<Box<dyn FilterPolicy>>,
+    policy: Rc<dyn FilterPolicy>,
     // all filter block data without filter meta
     // | ----- filter data ----- | ----- filter offsets ----|
     //                                   num * 4 bytes
@@ -120,7 +120,7 @@ pub struct FilterBlockReader {
 }
 
 impl FilterBlockReader {
-    pub fn new(policy: Rc<Box<dyn FilterPolicy>>, mut filter_block: Vec<u8>) -> Self {
+    pub fn new(policy: Rc<dyn FilterPolicy>, mut filter_block: Vec<u8>) -> Self {
         let mut r = FilterBlockReader {
             policy,
             data: vec![],
@@ -204,10 +204,10 @@ mod tests {
     }
 
     fn new_test_builder() -> FilterBlockBuilder {
-        FilterBlockBuilder::new(Rc::new(Box::new(TestHashFilter {})))
+        FilterBlockBuilder::new(Rc::new(TestHashFilter {}))
     }
     fn new_test_reader(block: Vec<u8>) -> FilterBlockReader {
-        FilterBlockReader::new(Rc::new(Box::new(TestHashFilter {})), block)
+        FilterBlockReader::new(Rc::new(TestHashFilter {}), block)
     }
 
     #[test]
