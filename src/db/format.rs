@@ -32,6 +32,9 @@ pub enum ValueType {
     Deletion = 0,
     /// A normal value
     Value = 1,
+
+    /// Unknown type
+    Unknown,
 }
 
 /// `FOR_SEEK` defines the `ValueType` that should be passed when
@@ -47,7 +50,7 @@ impl From<u64> for ValueType {
         match v {
             1 => ValueType::Value,
             0 => ValueType::Deletion,
-            _ => panic!("invalid value for ValueType, expect 0 or 1 but got {}", v),
+            _ => ValueType::Unknown,
         }
     }
 }
@@ -56,14 +59,32 @@ impl From<u64> for ValueType {
 /// A `ParsedInternalKey` can be encoded into a `InternalKey` by `encode()`.
 pub struct ParsedInternalKey {
     /// The user's normal used key
-    user_key: Slice,
+    pub user_key: Slice,
     /// The sequence number of the Key
-    seq: u64,
+    pub seq: u64,
     /// The value type
-    value_type: ValueType,
+    pub value_type: ValueType,
 }
 
 impl ParsedInternalKey {
+    pub fn decode_from(internal_key: Slice) -> Option<Self> {
+        let size = internal_key.size();
+        if size < 8 {
+            return None
+        }
+        let num = decode_fixed_64(&internal_key.to_slice()[size-8..]);
+        let t = ValueType::from(num & 0xff);
+        if t == ValueType::Unknown {
+            return None
+        }
+        let seq = num >> 8;
+        Some(Self {
+            user_key: Slice::from(&internal_key.to_slice()[..size - 8]),
+            seq,
+            value_type: t,
+        })
+    }
+
     pub fn new(key: Slice, seq: u64, v_type: ValueType) -> Self {
         ParsedInternalKey {
             user_key: key,
@@ -74,6 +95,7 @@ impl ParsedInternalKey {
 
     /// Returns a `InternalKey` encoded from the `ParsedInternalKey` using
     /// the format described in the below comment of `InternalKey`
+    #[inline]
     pub fn encode(&self) -> InternalKey {
         InternalKey::new(&self.user_key, self.seq, self.value_type)
     }

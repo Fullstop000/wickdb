@@ -693,7 +693,7 @@ fn compress_block(
             }
             Ok((buffer, CompressionType::SnappyCompression))
         }
-        CompressionType::NoCompression => {
+        CompressionType::NoCompression | CompressionType::Unknown => {
             Ok((Vec::from(raw_block), CompressionType::NoCompression))
         }
     }
@@ -771,6 +771,7 @@ pub fn read_block(file: &dyn File, handle: &BlockHandle, verify_checksum: bool) 
                 }
                 decompressed
             }
+            CompressionType::Unknown => return Err(WickErr::new(Status::Corruption, Some("bad block compression type")))
         }
     };
     Ok(data)

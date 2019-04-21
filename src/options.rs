@@ -20,7 +20,7 @@ use crate::filter::FilterPolicy;
 use crate::util::comparator::{BytewiseComparator, Comparator};
 
 use crate::cache::lru::SharedLRUCache;
-use crate::options::CompressionType::{NoCompression, SnappyCompression};
+use crate::options::CompressionType::{NoCompression, SnappyCompression, Unknown};
 use crate::snapshot::Snapshot;
 use crate::sstable::block::Block;
 use std::cell::RefCell;
@@ -31,6 +31,7 @@ use std::sync::Arc;
 pub enum CompressionType {
     NoCompression = 0,
     SnappyCompression = 1,
+    Unknown
 }
 
 impl From<u8> for CompressionType {
@@ -38,7 +39,7 @@ impl From<u8> for CompressionType {
         match i {
             0 => NoCompression,
             1 => SnappyCompression,
-            _ => panic!("invalid CompressionType value {}", i),
+            _ => Unknown,
         }
     }
 }

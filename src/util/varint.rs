@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::util::slice::Slice;
+
 const MAX_VARINT_LEN_U32: usize = 5;
 pub const MAX_VARINT_LEN_U64: usize = 10;
 
@@ -114,6 +116,24 @@ macro_rules! impl_varint {
 
 impl_varint!(VarintU32, u32);
 impl_varint!(VarintU64, u64);
+
+/// Decodes a Slice from the slice using length-prefixed encoding, and advance the input slice
+///
+/// NOTICE: the input Slice should be valid
+pub fn decode_u32_prefixed_slice(s: &mut Slice) -> Slice {
+    let origin = s.to_slice();
+    match VarintU32::read(origin) {
+        Some((len, n)) => {
+            if len as usize + n > s.size() {
+                return Slice::new_empty();
+            }
+            let res = Slice::from(&origin[n..len as usize + n]);
+            s.remove_prefix(len as usize + n);
+            res
+        },
+        None => Slice::new_empty(),
+    }
+}
 
 #[cfg(test)]
 mod tests {

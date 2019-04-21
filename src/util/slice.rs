@@ -65,6 +65,22 @@ impl Slice {
     }
 
     #[inline]
+    pub fn remove_prefix(&mut self, n: usize) {
+        if n >= self.size {
+            self.data = ptr::null();
+            self.size = 0;
+        } else {
+            unsafe { self.data = self.data.add(n); }
+            self.size -= n;
+        }
+    }
+
+    #[inline]
+    pub fn empty(&self) -> bool {
+        self.data.is_null() || self.size == 0
+    }
+
+    #[inline]
     pub fn as_ptr(&self) -> *const u8 {
         self.data
     }

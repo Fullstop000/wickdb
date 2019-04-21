@@ -163,6 +163,7 @@ impl MemoryTable for MemTable {
                     match ValueType::from(tag & 0xff as u64) {
                         ValueType::Value => return Some(Ok(Vec::from(iter.value().to_slice()))),
                         ValueType::Deletion => return Some(Err(WickErr::new(Status::NotFound, None))),
+                        ValueType::Unknown => return None,
                     }
                 },
                 _ => return None,
