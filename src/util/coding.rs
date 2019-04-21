@@ -24,7 +24,7 @@ use std::ptr::copy_nonoverlapping;
 ///
 /// Panics if `dst.len()` is less than 4.
 pub fn encode_fixed_32(dst: &mut [u8], value: u32) {
-    invarint!(
+    assert!(
         dst.len() >= 4,
         "the length of 'dst' must be at least 4 for a u32, but got {}",
         dst.len()
@@ -41,7 +41,7 @@ pub fn encode_fixed_32(dst: &mut [u8], value: u32) {
 ///
 /// Panics if `dst.len()` is less than 8.
 pub fn encode_fixed_64(dst: &mut [u8], value: u64) {
-    invarint!(
+    assert!(
         dst.len() >= 8,
         "the length of 'dst' must be at least 8 for a u64, but got {}",
         dst.len()
