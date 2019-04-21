@@ -481,11 +481,11 @@ mod tests {
         deleted_keys: Rc<RefCell<Vec<u32>>>,
         deleted_values: Rc<RefCell<Vec<u32>>>,
     ) -> Box<FnMut(&[u8], &u32)> {
-        box move |k, v| {
+        Box::new(move |k, v| {
             let key = decode_fixed_32(k);
             deleted_keys.borrow_mut().push(key);
             deleted_values.borrow_mut().push(*v);
-        }
+        })
     }
 
     fn encoded_u32(i: u32) -> Vec<u8> {

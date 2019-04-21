@@ -19,7 +19,7 @@ addons:
 
 matrix:
   allow_failures:
-    - rust: stable
+    - rust: nightly
   fast_finish: true
 
 before_script:

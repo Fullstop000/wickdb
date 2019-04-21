@@ -21,10 +21,6 @@
 // See https://github.com/rust-lang/rust-clippy/issues/1608
 #![allow(clippy::redundant_closure)]
 
-// TODO: remove these two to compact with stable rust
-#![feature(integer_atomics)]
-#![feature(box_syntax)]
-
 extern crate libc;
 #[macro_use]
 extern crate lazy_static;

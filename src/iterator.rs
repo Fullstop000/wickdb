@@ -74,12 +74,12 @@ pub struct EmptyIterator {
 impl EmptyIterator {
     #[inline]
     pub fn new() -> Box<dyn Iterator> {
-        box Self { err: None }
+        Box::new( Self { err: None })
     }
 
     #[inline]
     pub fn new_with_err(e: WickErr) -> Box<dyn Iterator> {
-        box Self { err: Some(e) }
+        Box::new( Self { err: Some(e) })
     }
 }
 

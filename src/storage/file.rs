@@ -27,14 +27,14 @@ pub struct FileStorage;
 impl Storage for FileStorage {
     fn create(name: &str) -> Result<Box<dyn File>> {
         match SysFile::create(name) {
-            Ok(f) => Ok(box f),
+            Ok(f) => Ok(Box::new(f)),
             Err(e) => Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e))),
         }
     }
 
     fn open(name: &str) -> Result<Box<dyn File>> {
         match SysFile::open(name) {
-            Ok(f) => Ok(box f),
+            Ok(f) => Ok(Box::new(f)),
             Err(e) => Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e))),
         }
     }
