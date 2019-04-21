@@ -13,16 +13,113 @@
 
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file. See the AUTHORS file for names of contributors.
+// found in the LICENSE file.
+
+use std::collections::vec_deque::VecDeque;
+use std::rc::Rc;
 
 /// Abstract handle to particular state of a DB.
 /// A `Snapshot` is an immutable object and can therefore be safely
 /// accessed from multiple threads without any external synchronization.
 pub struct Snapshot {
-    /// The sequence number pointing to the view of db
-    pub sequence_number: usize,
+    // The sequence number pointing to the view of db
+    sequence_number: u64,
+}
 
-    /// The next/prev link for the  doubly-linked list of snapshots.
-    pub next: *mut Snapshot,
-    pub prev: *mut Snapshot,
+impl Snapshot {
+    #[inline]
+    pub fn sequence(&self) -> u64 {
+        self.sequence_number
+    }
+}
+
+/// Different from the C++ implementation,  a VecDequeue is handled for the SnapshotList because
+/// a safe double-linked circular list implementation in Rust is tough and not worth it.
+/// Although Rust provides a standard double linked list, use a array based containers are faster.
+/// See https://doc.rust-lang.org/std/collections/struct.LinkedList.html
+// TODO: implement delete snapshot to avoid oom
+pub struct SnapshotList {
+    // Since the Snapshot is immutable, the Rc is suitable here
+    snapshots: VecDeque<Rc<Snapshot>>,
+}
+
+impl SnapshotList {
+    pub fn new() -> Self {
+        Self {
+            snapshots: VecDeque::new(),
+        }
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.snapshots.is_empty()
+    }
+
+    #[inline]
+    pub fn oldest(&self) -> Rc<Snapshot> {
+        assert!(!self.is_empty());
+        self.snapshots.front().unwrap().clone()
+    }
+
+    #[inline]
+    pub fn newest(&self) -> Rc<Snapshot> {
+        assert!(!self.is_empty());
+        self.snapshots.back().unwrap().clone()
+    }
+
+    /// Creates a `Snapshot` and appends it to the end of the list
+    pub fn snapshot(&mut self, seq: u64) -> Rc<Snapshot> {
+        let last_seq = self.last_seq();
+        assert!(seq >= last_seq, "[snapshot] the sequence number shouldn't be monotonically decreasing : [new: {}], [last: {}]", seq, last_seq);
+        let s = Rc::new(Snapshot{
+            sequence_number: seq,
+        });
+        self.snapshots.push_back(s.clone());
+        s
+    }
+
+    #[inline]
+    pub(super) fn last_seq(&self) -> u64 {
+        match self.snapshots.back() {
+            Some(s) => s.sequence_number,
+            None => 0,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::snapshot::SnapshotList;
+
+    #[test]
+    pub fn test_new_is_empty() {
+        let s = SnapshotList::new();
+        assert!(s.is_empty());
+        assert_eq!(0, s.last_seq());
+    }
+
+    #[test]
+    #[should_panic]
+    pub fn test_panic_oldest_when_empty() {
+        let s = SnapshotList::new();
+        s.oldest();
+    }
+
+    #[test]
+    #[should_panic]
+    pub fn test_panic_newest_when_empty() {
+        let s = SnapshotList::new();
+        s.newest();
+    }
+
+    #[test]
+    pub fn test_append_new_snapshot() {
+        let mut s = SnapshotList::new();
+        for i in [1, 1, 2, 3].iter() {
+            let s = s.snapshot(*i);
+            assert_eq!(s.sequence(), *i);
+        }
+        assert_eq!(1, s.oldest().sequence());
+        assert_eq!(3, s.newest().sequence());
+    }
 }
