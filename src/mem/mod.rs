@@ -137,7 +137,6 @@ impl MemoryTable for MemTable {
 
     fn add(&mut self, seq_number: u64, val_type: ValueType, key: &[u8], value: &[u8]) {
         let key_size = key.len();
-        let val_size = value.len();
         let internal_key_size = key_size + 8;
         let mut buf = vec![];
         VarintU32::put_varint(&mut buf, internal_key_size as u32);
@@ -222,7 +221,6 @@ impl<'a> Iterator for MemTableIterator<'a> {
     }
 
     fn value(&self) -> Slice {
-        let entry = self.iter.key();
         let internal_key = self.key();
         if internal_key.size() != 0 {
             unsafe {

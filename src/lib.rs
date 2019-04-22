@@ -11,9 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// TODO: remove these two when the implementation is stable
+// TODO: remove below when the implementation is stable
 #![allow(dead_code)]
-#![allow(unused_variables)]
 
 #![allow(clippy::unreadable_literal)]
 #![allow(clippy::new_ret_no_self)]

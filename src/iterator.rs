@@ -92,7 +92,7 @@ impl Iterator for EmptyIterator {
 
     fn seek_to_last(&mut self) {}
 
-    fn seek(&mut self, target: &Slice) {}
+    fn seek(&mut self, _target: &Slice) {}
 
     fn next(&mut self) {}
 
