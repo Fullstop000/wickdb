@@ -75,13 +75,30 @@ macro_rules! impl_varint {
                 i + 1
             }
 
-            /// Decodes a `u64` from given `src` and drains the read bytes.
-            /// Returns decoded u64 and drained bytes
-            /// Returns `(0,0)` if an error occurs
-            pub fn drain_read(src: &mut Vec<u8>) -> ($uint, usize) {
-                let (res, n) = Self::common_read(src.as_mut_slice());
-                src.drain(..n.abs() as usize);
-                (res, n.abs() as usize)
+            /// Encodes the slice `src` into the `dst` as varint length prefixed
+            pub fn put_varint_prefixed_slice(dst: &mut Vec<u8>, src: &[u8]) {
+                if !src.is_empty() {
+                    Self::put_varint(dst, src.len() as $uint);
+                    dst.extend_from_slice(src);
+                }
+            }
+
+            /// Decodes a Slice from the slice using length-prefixed encoding, and advance the input slice
+            ///
+            /// NOTICE: the input Slice should be valid
+            pub fn get_varint_prefixed_slice(src: &mut Slice) -> Option<Slice> {
+                let origin = src.to_slice();
+                match Self::read(origin) {
+                    Some((len, n)) => {
+                        if len as usize + n > src.size() {
+                            return None
+                        }
+                        let res = Slice::from(&origin[n..len as usize + n]);
+                        src.remove_prefix(len as usize + n);
+                        Some(res)
+                    },
+                    None => None,
+                }
             }
 
             /// Decodes a u64 from given bytes and returns that value and the
@@ -110,30 +127,27 @@ macro_rules! impl_varint {
                 }
                 (0, 0)
             }
+
+            /// Decodes a uint from the give slice , and advance the given slice
+            pub fn drain_read(src: &mut Slice) -> Option<$uint> {
+                let origin = src.to_slice();
+                match <$type>::read(origin) {
+                    Some((v, n)) => {
+                        if v as usize + n > src.size() {
+                            return None;
+                        }
+                        src.remove_prefix(n);
+                        Some(v)
+                    },
+                    None => None,
+                }
+            }
         }
     };
 }
 
 impl_varint!(VarintU32, u32);
 impl_varint!(VarintU64, u64);
-
-/// Decodes a Slice from the slice using length-prefixed encoding, and advance the input slice
-///
-/// NOTICE: the input Slice should be valid
-pub fn decode_u32_prefixed_slice(s: &mut Slice) -> Slice {
-    let origin = s.to_slice();
-    match VarintU32::read(origin) {
-        Some((len, n)) => {
-            if len as usize + n > s.size() {
-                return Slice::new_empty();
-            }
-            let res = Slice::from(&origin[n..len as usize + n]);
-            s.remove_prefix(len as usize + n);
-            res
-        },
-        None => Slice::new_empty(),
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -220,6 +234,34 @@ mod tests {
             if let Some((res, n)) = VarintU64::read(&buf.as_slice()[start..]) {
                 assert_eq!(numbers[i], res);
                 start += n
+            }
+        }
+    }
+
+    #[test]
+    fn test_put_and_get_prefixed_slice() {
+        let mut encoded = vec![];
+        let tests: Vec<Vec<u8>> = vec![
+            vec![1],
+            vec![1,2,3,4,5],
+            vec![0;100],
+        ];
+        for input in tests.clone().drain(..) {
+            VarintU64::put_varint_prefixed_slice(&mut encoded, input.as_slice());
+        }
+        let mut s = Slice::from(encoded.as_slice());
+        let mut decoded = vec![];
+        while s.size() > 0 {
+            match VarintU64::get_varint_prefixed_slice(&mut s) {
+                Some(res) => decoded.push(Vec::from(res.to_slice())),
+                None => break,
+            }
+        }
+        assert_eq!(tests.len(), decoded.len());
+        for (get, want) in decoded.into_iter().zip(tests.into_iter()) {
+            assert_eq!(get.len(), want.len());
+            for (getv, wantv) in get.iter().zip(want.iter()) {
+                assert_eq!(*getv, *wantv)
             }
         }
     }

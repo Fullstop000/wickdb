@@ -22,7 +22,7 @@ use std::cell::RefCell;
 use crate::util::slice::Slice;
 use crate::util::status::{Result, WickErr, Status};
 use crate::util::coding::{encode_fixed_64, decode_fixed_64};
-use crate::util::varint::{decode_u32_prefixed_slice, VarintU32};
+use crate::util::varint::VarintU32;
 
 const HEADER_SIZE: usize = 12;
 
@@ -135,10 +135,8 @@ impl WriteBatch {
             s.remove_prefix(1);
             match ValueType::from(tag as u64) {
                 ValueType::Value => {
-                    let key = decode_u32_prefixed_slice(&mut s);
-                    if !key.empty() {
-                        let value = decode_u32_prefixed_slice(&mut s);
-                        if !value.empty() {
+                    if let Some(key) = VarintU32::get_varint_prefixed_slice(&mut s) {
+                        if let Some(value) = VarintU32::get_varint_prefixed_slice(&mut s) {
                             handler.put(key.to_slice(), value.to_slice());
                             continue;
                         }
@@ -146,8 +144,7 @@ impl WriteBatch {
                     return Err(WickErr::new(Status::Corruption, Some("[batch] bad WriteBatch put")))
                 }
                 ValueType::Deletion => {
-                    let key = decode_u32_prefixed_slice(&mut s);
-                    if !key.empty() {
+                    if let Some(key) = VarintU32::get_varint_prefixed_slice(&mut s) {
                         handler.delete(key.to_slice());
                         continue;
                     }
