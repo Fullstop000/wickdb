@@ -40,6 +40,7 @@ pub mod options;
 mod record;
 mod snapshot;
 mod sstable;
+mod version;
 pub mod storage;
 
 pub use util::status;

@@ -131,16 +131,49 @@ impl InternalKey {
         InternalKey { data: v }
     }
 
+    pub fn decoded_from(src: &[u8]) -> Self {
+        // TODO: avoid copy here
+        Self {
+            data: Vec::from(src)
+        }
+    }
+
+    #[inline]
+    pub fn data(&self) -> &[u8] {
+        self.data.as_slice()
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
     /// Returns a `ParsedInternalKey`
-    pub fn decode(&self) -> ParsedInternalKey {
+    pub fn parsed(&self) -> Option<ParsedInternalKey> {
         let size = self.data.len();
         let user_key = Slice::from(&(self.data.as_slice())[0..size - 8]);
         let num = decode_fixed_64(&(self.data.as_slice())[size - 8..]);
         let t = ValueType::from(num & 0xff as u64);
-        ParsedInternalKey {
-            user_key,
-            seq: num >> 8,
-            value_type: t,
+        match t {
+            ValueType::Unknown => None,
+            _ => Some(
+                ParsedInternalKey {
+                    user_key,
+                    seq: num >> 8,
+                    value_type: t,
+                }
+            )
+        }
+    }
+}
+
+impl Debug for InternalKey {
+    fn fmt(&self, f: &mut Formatter) -> ::std::fmt::Result {
+        if let Some(parsed) = self.parsed() {
+            write!(f, "{:?}", parsed)
+        } else {
+            let s = unsafe { ::std::str::from_utf8_unchecked(self.data.as_slice())};
+            write!(f, "(bad){}", s)
         }
     }
 }
@@ -316,7 +349,7 @@ mod tests {
 
     fn assert_encoded_decoded(key: &str, seq: u64, vt: ValueType) {
         let encoded = InternalKey::new(&Slice::from(key), seq, vt);
-        let decoded = encoded.decode();
+        let decoded = encoded.parsed().expect("");
         assert_eq!(key, decoded.user_key.as_str());
         assert_eq!(seq, decoded.seq);
         assert_eq!(vt, decoded.value_type);

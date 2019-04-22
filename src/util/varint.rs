@@ -133,9 +133,6 @@ macro_rules! impl_varint {
                 let origin = src.to_slice();
                 match <$type>::read(origin) {
                     Some((v, n)) => {
-                        if v as usize + n > src.size() {
-                            return None;
-                        }
                         src.remove_prefix(n);
                         Some(v)
                     },
