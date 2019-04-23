@@ -15,7 +15,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-mod file;
+pub mod file;
 
 use crate::util::status::{Result, Status, WickErr};
 use std::cell::RefCell;
@@ -30,27 +30,27 @@ use std::rc::Rc;
 /// depending on the underlying operating system.
 pub trait Storage {
     /// Create a file with given name
-    fn create(name: &str) -> Result<Box<dyn File>>;
+    fn create(&mut self, name: &str) -> Result<Box<dyn File>>;
 
     /// Open a file with given name
-    fn open(name: &str) -> Result<Box<dyn File>>;
+    fn open(&mut self, name: &str) -> Result<Box<dyn File>>;
 
     /// Delete the named file
-    fn remove(name: &str) -> Result<()>;
+    fn remove(&mut self, name: &str) -> Result<()>;
 
     /// Returns true iff the named file exists.
-    fn exists(name: &str) -> bool;
+    fn exists(&self, name: &str) -> bool;
 
     /// Rename a file or directory to a new name, replacing the original file if
     /// `new` already exists.
-    fn rename(old: &str, new: &str) -> Result<()>;
+    fn rename(&mut self, old: &str, new: &str) -> Result<()>;
 
     /// Recursively create a directory and all of its parent components if they
     /// are missing.
-    fn mkdir_all(dir: &str) -> Result<()>;
+    fn mkdir_all(&mut self, dir: &str) -> Result<()>;
 
     /// Returns a list of file names in given
-    fn list(dir: &Path) -> Result<Vec<PathBuf>>;
+    fn list(&self, dir: &Path) -> Result<Vec<PathBuf>>;
 }
 
 /// A file abstraction for IO operations

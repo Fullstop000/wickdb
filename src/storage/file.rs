@@ -25,39 +25,39 @@ use std::path::{Path, PathBuf};
 pub struct FileStorage;
 
 impl Storage for FileStorage {
-    fn create(name: &str) -> Result<Box<dyn File>> {
+    fn create(&mut self, name: &str) -> Result<Box<dyn File>> {
         match SysFile::create(name) {
             Ok(f) => Ok(Box::new(f)),
             Err(e) => Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e))),
         }
     }
 
-    fn open(name: &str) -> Result<Box<dyn File>> {
+    fn open(&mut self, name: &str) -> Result<Box<dyn File>> {
         match SysFile::open(name) {
             Ok(f) => Ok(Box::new(f)),
             Err(e) => Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e))),
         }
     }
 
-    fn remove(name: &str) -> Result<()> {
+    fn remove(&mut self, name: &str) -> Result<()> {
         let r = remove_file(name);
         w_io_result!(r)
     }
 
-    fn exists(name: &str) -> bool {
+    fn exists(&self, name: &str) -> bool {
         Path::new(name).exists()
     }
 
-    fn rename(old: &str, new: &str) -> Result<()> {
+    fn rename(&mut self, old: &str, new: &str) -> Result<()> {
         w_io_result!(rename(old, new))
     }
 
-    fn mkdir_all(dir: &str) -> Result<()> {
+    fn mkdir_all(&mut self, dir: &str) -> Result<()> {
         let r = create_dir_all(dir);
         w_io_result!(r)
     }
 
-    fn list(dir: &Path) -> Result<Vec<PathBuf>> {
+    fn list(&self, dir: &Path) -> Result<Vec<PathBuf>> {
         if dir.is_dir() {
             let mut v = vec![];
             match read_dir(dir) {

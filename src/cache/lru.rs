@@ -18,7 +18,6 @@
 use crate::cache::{Cache, Handle as CacheHandle, HandleRef};
 use hashbrown::hash_map::HashMap;
 use std::cell::RefCell;
-use std::fmt::Debug;
 use std::ptr;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -32,17 +31,17 @@ const NUM_SHARD: usize = 1 << NUM_SHARD_BITS;
 // TODO: add benchmark for lru
 
 /// A LRUCache that can be accessed safely in multiple threads
-pub struct SharedLRUCache<T: 'static + Default + Debug> {
+pub struct SharedLRUCache<T: 'static> {
     shards: Vec<LRUCache<T>>,
     last_id: AtomicU64,
 }
 
-impl<T: 'static + Default + Debug> SharedLRUCache<T> {
+impl<T: 'static > SharedLRUCache<T> {
     pub fn new(cap: usize) -> Self {
         let per_shard = (cap + NUM_SHARD - 1) / NUM_SHARD;
         let mut shards = vec![];
         for _ in 0..NUM_SHARD {
-            shards.push(LRUCache::new(cap));
+            shards.push(LRUCache::new(per_shard));
         }
         Self {
             shards,
@@ -55,7 +54,7 @@ impl<T: 'static + Default + Debug> SharedLRUCache<T> {
     }
 }
 
-impl<T: 'static + Default + Debug> Cache<T> for SharedLRUCache<T> {
+impl<T: 'static> Cache<T> for SharedLRUCache<T> {
     fn insert(
         &mut self,
         key: Vec<u8>,
@@ -102,8 +101,8 @@ impl<T: 'static + Default + Debug> Cache<T> for SharedLRUCache<T> {
 }
 
 /// Exact node in the `LRUCache`
-pub struct LRUHandle<T: Default + Debug> {
-    value: T,
+pub struct LRUHandle<T> {
+    value: Option<T>,
     deleter: Option<Box<FnMut(&[u8], &T)>>,
     prev: *mut LRUHandle<T>,
     next: *mut LRUHandle<T>,
@@ -112,34 +111,25 @@ pub struct LRUHandle<T: Default + Debug> {
     key: Box<[u8]>,
 }
 
-impl<T: Default + Debug> Default for LRUHandle<T> {
-    fn default() -> Self {
-        LRUHandle {
-            value: T::default(),
-            deleter: None,
-            prev: ptr::null_mut(),
-            next: ptr::null_mut(),
-            charge: 0,
-            hash: 0,
-            key: Vec::new().into_boxed_slice(),
-        }
-    }
-}
-
-impl<T: Default + Debug> Drop for LRUHandle<T> {
+impl<T> Drop for LRUHandle<T> {
     fn drop(&mut self) {
         if let Some(ref mut deleter) = self.deleter {
-            (deleter)(&self.key, &self.value);
+            if let Some(v) = &self.value {
+                (deleter)(&self.key, v);
+            }
         }
     }
 }
 
-impl<T: Default + Debug> CacheHandle<T> for LRUHandle<T> {
-    fn get_value(&self) -> &T {
-        &self.value
+impl<T> CacheHandle<T> for LRUHandle<T> {
+    fn get_value(&self) -> Option<&T> {
+        match &self.value {
+            Some(v) => Some(v),
+            None => None
+        }
     }
 }
-impl<T: Default + Debug> LRUHandle<T> {
+impl<T> LRUHandle<T> {
     /// Create new LRUHandle
     pub fn new(
         key: Box<[u8]>,
@@ -150,16 +140,27 @@ impl<T: Default + Debug> LRUHandle<T> {
         let hash = hash(key.as_ref(), 0);
         LRUHandle {
             key,
-            value,
+            value: Some(value),
             deleter,
             charge,
             hash,
-            ..Self::default()
+            next: ptr::null_mut(),
+            prev: ptr::null_mut(),
+        }
+    }
+
+    pub fn new_empty() -> LRUHandle<T> {
+        Self {
+            value: None,
+            deleter: None,
+            prev: ptr::null_mut(),
+            next: ptr::null_mut(),
+            charge: 0,
+            hash: 0,
+            key: Vec::new().into_boxed_slice(),
         }
     }
 }
-
-// TODO: use a easier way to implement
 
 /// LRU cache implementation
 ///
@@ -198,15 +199,13 @@ impl<T: Default + Debug> LRUHandle<T> {
 ///
 /// ```
 ///
-pub struct LRUCache<T: Default + Debug> {
+pub struct LRUCache<T> {
     /// The capacity of LRU
     capacity: usize,
     mutex: Mutex<MutexFields<T>>,
 }
 
 struct MutexFields<T>
-where
-    T: Default + Debug,
 {
     /// The size of space which have been allocated
     usage: usize,
@@ -222,7 +221,7 @@ where
     table: HashMap<Vec<u8>, Rc<RefCell<LRUHandle<T>>>>,
 }
 
-impl<T: 'static + Default + Debug> LRUCache<T> {
+impl<T: 'static> LRUCache<T> {
     pub fn new(cap: usize) -> Self {
         let mutex = MutexFields {
             usage: 0,
@@ -294,7 +293,7 @@ impl<T: 'static + Default + Debug> LRUCache<T> {
 
     // Create a dummy node whose 'next' and 'prev' are both itself
     fn create_dummy_node() -> *mut LRUHandle<T> {
-        let node = Box::into_raw(Box::new(LRUHandle::default()));
+        let node = Box::into_raw(Box::new(LRUHandle::new_empty()));
         unsafe {
             (*node).next = node;
             (*node).prev = node
@@ -303,7 +302,7 @@ impl<T: 'static + Default + Debug> LRUCache<T> {
     }
 }
 
-impl<T: 'static + Default + Debug> Cache<T> for LRUCache<T> {
+impl<T: 'static> Cache<T> for LRUCache<T> {
     fn insert(
         &mut self,
         key: Vec<u8>,
@@ -400,7 +399,7 @@ mod tests {
     use super::*;
     use crate::util::coding::{decode_fixed_32, put_fixed_32};
 
-    const CACHE_SIZE: usize = 4;
+    const CACHE_SIZE: usize = 100;
 
     struct CacheTest {
         pub cache: Box<dyn Cache<u32>>,
@@ -421,7 +420,7 @@ mod tests {
             put_fixed_32(&mut k, key);
             match self.cache.look_up(k.as_slice()) {
                 Some(h) => {
-                    let v = *h.borrow().get_value();
+                    let v = *h.borrow().get_value().unwrap();
                     self.cache.release(h);
                     Some(v)
                 }
@@ -471,9 +470,9 @@ mod tests {
         }
 
         pub fn assert_inside_handle(&self, key: u32, want: u32) -> HandleRef<u32> {
-            let encoded = encoded_u32(100);
+            let encoded = encoded_u32(key);
             let h = self.cache.look_up(encoded.as_slice()).unwrap();
-            assert_eq!(want, *(h.borrow().get_value()));
+            assert_eq!(want, *h.borrow().get_value().unwrap());
             h
         }
     }

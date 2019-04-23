@@ -204,7 +204,7 @@
 /// NOTE: All fixed-length integer are little-endian.
 pub mod block;
 mod filter_block;
-mod table;
+pub mod table;
 
 use crate::util::coding::{decode_fixed_64, put_fixed_64};
 use crate::util::status::{Status, WickErr};

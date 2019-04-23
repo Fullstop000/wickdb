@@ -146,7 +146,7 @@ impl Table {
             put_fixed_64(&mut cache_key_buffer, data_block_handle.offset);
             if let Some(cache_handle) = cache.borrow().look_up(&cache_key_buffer.as_slice()) {
                 // TODO: use Rc to avoid value copy ?
-                cache_handle.borrow().get_value().clone()
+                cache_handle.borrow().get_value().unwrap().clone()
             } else {
                 let data = read_block(
                     self.file.as_ref(),
