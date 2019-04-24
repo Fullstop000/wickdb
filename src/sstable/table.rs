@@ -42,15 +42,6 @@ pub struct Table {
     // None iff we fail to read meta block
     meta_block_handle: Option<BlockHandle>,
     index_block: Block,
-
-    // iterating fields
-    read_options: ReadOptions,
-    index_iter: Box<dyn Iterator>,
-    // None: a error happens in the index iterator
-    // EmptyIterator with a WickErr: a error happens in previous data iterator
-    data_block_iter: Option<Box<dyn Iterator>>,
-    current_data_block_handle: Vec<u8>,
-    err: Option<WickErr>,
 }
 
 // Common methods
@@ -90,12 +81,6 @@ impl Table {
             filter_reader: None,
             meta_block_handle: None,
             index_block,
-
-            read_options: ReadOptions::default(),
-            index_iter: EmptyIterator::new(),
-            data_block_iter: None,
-            current_data_block_handle: vec![],
-            err: None,
         };
         // Read meta block
         if footer.meta_index_handle.size > 0 && options.filter_policy.is_some() {
@@ -138,7 +123,7 @@ impl Table {
     pub fn block_reader(
         &self,
         data_block_handle: BlockHandle,
-        options: &ReadOptions,
+        options: Rc<ReadOptions>,
     ) -> Result<Box<dyn Iterator>> {
         let block = if let Some(cache) = &self.options.block_cache {
             let mut cache_key_buffer = vec![0; 16];
@@ -146,7 +131,9 @@ impl Table {
             put_fixed_64(&mut cache_key_buffer, data_block_handle.offset);
             if let Some(cache_handle) = cache.borrow().look_up(&cache_key_buffer.as_slice()) {
                 // TODO: use Rc to avoid value copy ?
-                cache_handle.borrow().get_value().unwrap().clone()
+                let b = cache_handle.borrow().get_value().unwrap().clone();
+                cache.borrow_mut().release(cache_handle);
+                b
             } else {
                 let data = read_block(
                     self.file.as_ref(),
@@ -155,13 +142,14 @@ impl Table {
                 )?;
                 let charge = data.len();
                 let new_block = Block::new(data)?;
+                let b = Rc::new(new_block);
                 if options.fill_cache {
                     // TODO: avoid clone
                     cache
                         .borrow_mut()
-                        .insert(cache_key_buffer, new_block.clone(), charge, None);
+                        .insert(cache_key_buffer, b.clone(), charge, None);
                 }
-                new_block
+                b
             }
         } else {
             let data = read_block(
@@ -169,16 +157,10 @@ impl Table {
                 &data_block_handle,
                 options.verify_checksums,
             )?;
-            Block::new(data)?
+            let b = Block::new(data)?;
+            Rc::new(b)
         };
         Ok(block.iter(self.options.comparator.clone()))
-    }
-
-    /// Creates index iterator and assigns given ReadOptions
-    pub fn init_iter(&mut self, options: ReadOptions) {
-        let cmp = self.options.comparator.clone();
-        self.index_iter = self.index_block.iter(cmp.clone());
-        self.read_options = options;
     }
 
     /// Given a key, return an approximate byte offset in the file where
@@ -202,10 +184,10 @@ impl Table {
         0
     }
 
-    // Gets the first entry with the key equal or greater than target, then calls the 'callback'
-    fn internal_get(
+    /// Gets the first entry with the key equal or greater than target, then calls the 'callback'
+    pub fn internal_get(
         &self,
-        options: ReadOptions,
+        options: Rc<ReadOptions>,
         key: &[u8],
         mut callback: Box<FnMut(&[u8], &[u8])>,
     ) -> Result<()> {
@@ -229,7 +211,7 @@ impl Table {
             }
             if maybe_contained {
                 let (data_block_handle, _) = BlockHandle::decode_from(handle_val.to_slice())?;
-                let mut block_iter = self.block_reader(data_block_handle, &options)?;
+                let mut block_iter = self.block_reader(data_block_handle, options)?;
                 block_iter.seek(&Slice::from(key));
                 if block_iter.valid() {
                     callback(block_iter.key().to_slice(), block_iter.value().to_slice());
@@ -241,9 +223,75 @@ impl Table {
     }
 }
 
-// Iterator private methods
-// TODO: use a trait to describe behaviors below
-impl Table {
+fn block_reader(
+    file: &dyn File,
+    cache_id: u64,
+    options: Rc<Options>,
+    data_block_handle: BlockHandle,
+    read_options: Rc<ReadOptions>,
+) -> Result<Box<dyn Iterator>> {
+    let block = if let Some(cache) = &options.block_cache {
+        let mut cache_key_buffer = vec![0; 16];
+        put_fixed_64(&mut cache_key_buffer, cache_id);
+        put_fixed_64(&mut cache_key_buffer, data_block_handle.offset);
+        if let Some(cache_handle) = cache.borrow().look_up(&cache_key_buffer.as_slice()) {
+            let b = cache_handle.borrow().get_value().unwrap().clone();
+            cache.borrow_mut().release(cache_handle);
+            b
+        } else {
+            let data = read_block(
+                file,
+                &data_block_handle,
+                read_options.verify_checksums,
+            )?;
+            let charge = data.len();
+            let new_block = Block::new(data)?;
+            let b = Rc::new(new_block);
+            if read_options.fill_cache {
+                cache
+                    .borrow_mut()
+                    .insert(cache_key_buffer, b.clone(), charge, None);
+            }
+            b
+        }
+    } else {
+        let data = read_block(
+            file,
+            &data_block_handle,
+            read_options.verify_checksums,
+        )?;
+        let b = Block::new(data)?;
+        Rc::new(b)
+    };
+    Ok(block.iter(options.comparator.clone()))
+}
+
+pub struct TableIterator {
+    table: Rc<Table>,
+    read_options: Rc<ReadOptions>,
+    index_iter: Box<dyn Iterator>,
+
+    // None: a error happens in the index iterator
+    // EmptyIterator: a error happens in previous data iterator
+    data_block_iter: Option<Box<dyn Iterator>>,
+    current_data_block_handle: Vec<u8>,
+    err: Option<WickErr>,
+}
+
+impl TableIterator {
+    pub fn new(table: Rc<Table>, read_options: Rc<ReadOptions>) -> Self {
+        let cmp = table.options.comparator.clone();
+        let index_iter = table.index_block.iter(cmp);
+        Self {
+            table,
+            read_options,
+            index_iter,
+            data_block_iter: None,
+            current_data_block_handle: vec![],
+            err: None,
+        }
+    }
+
     #[inline]
     fn maybe_save_err(old: &mut Option<WickErr>, new: Result<()>) {
         if old.is_none() && new.is_err() {
@@ -261,7 +309,7 @@ impl Table {
                     != Ordering::Greater
             {
                 match BlockHandle::decode_from(v.to_slice()) {
-                    Ok((handle, _)) => match self.block_reader(handle, &self.read_options) {
+                    Ok((handle, _)) => match self.table.block_reader(handle, self.read_options.clone()) {
                         Ok(bi) => self.set_data_iter(Some(bi)),
                         Err(e) => self.set_data_iter(Some(EmptyIterator::new_with_err(e))),
                     },
@@ -324,7 +372,7 @@ impl Table {
         assert!(self.valid(), "[table iterator] invalid data iterator")
     }
 }
-impl Iterator for Table {
+impl Iterator for TableIterator {
     fn valid(&self) -> bool {
         if let Some(data_iter) = &self.data_block_iter {
             return data_iter.valid();
