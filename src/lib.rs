@@ -39,6 +39,7 @@ pub mod options;
 mod record;
 mod snapshot;
 mod sstable;
+mod table_cache;
 mod version;
 pub mod storage;
 

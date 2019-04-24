@@ -26,6 +26,8 @@ use crate::sstable::block::Block;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
+use crate::storage::Storage;
+use crate::storage::file::FileStorage;
 
 #[derive(Clone, Copy, Debug)]
 pub enum CompressionType {
@@ -69,8 +71,8 @@ pub struct Options {
     /// become unreadable or for the entire DB to become unopenable.
     pub paranoid_checks: bool,
 
-    // TODO: implement env or use a more convenient way
-
+    /// Use the specified object to interact with the environment,
+    pub env: Rc<RefCell<dyn Storage>>,
     // -------------------
     // Parameters that affect compaction:
     /// The max number of levels except L)
@@ -114,7 +116,7 @@ pub struct Options {
     // a block is the unit of reading from disk).
     /// If non-null, use the specified cache for blocks.
     /// If null, we will automatically create and use an 8MB internal cache.
-    pub block_cache: Option<Arc<RefCell<dyn Cache<Block>>>>,
+    pub block_cache: Option<Arc<RefCell<dyn Cache<Rc<Block>>>>>,
 
     /// Approximate size of user data packed per block.  Note that the
     /// block size specified here corresponds to uncompressed data.  The
@@ -158,6 +160,7 @@ impl Default for Options {
             create_if_missing: false,
             error_if_exists: false,
             paranoid_checks: false,
+            env: Rc::new(RefCell::new(FileStorage{})),
             max_levels: 7,
             l0_compaction_threshold: 4,
             l0_slowdown_writes_threshold: 8,

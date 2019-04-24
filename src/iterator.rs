@@ -62,6 +62,71 @@ pub trait Iterator {
     fn status(&mut self) -> Result<()>;
 }
 
+/// An special iterator calls all the CleanupTask
+pub struct IterWithCleanup {
+    inner_iter: Box<dyn Iterator>,
+    tasks: Vec<Box<FnMut()>>,
+}
+
+impl IterWithCleanup {
+    pub fn new(iter: Box<dyn Iterator>) -> Self {
+        Self {
+            inner_iter: iter,
+            tasks: vec![],
+        }
+    }
+
+    pub fn register_task(&mut self, task: Box<FnMut()>) {
+        self.tasks.push(task)
+    }
+}
+
+impl Drop for IterWithCleanup{
+    fn drop(&mut self) {
+        for mut t in self.tasks.drain(..) {
+            t()
+        }
+    }
+}
+
+impl Iterator for IterWithCleanup {
+    fn valid(&self) -> bool {
+        self.inner_iter.valid()
+    }
+
+    fn seek_to_first(&mut self) {
+        self.inner_iter.seek_to_first()
+    }
+
+    fn seek_to_last(&mut self) {
+        self.inner_iter.seek_to_last()
+    }
+
+    fn seek(&mut self, target: &Slice) {
+        self.inner_iter.seek(target)
+    }
+
+    fn next(&mut self) {
+        self.inner_iter.next()
+    }
+
+    fn prev(&mut self) {
+        self.inner_iter.prev()
+    }
+
+    fn key(&self) -> Slice {
+        self.inner_iter.key()
+    }
+
+    fn value(&self) -> Slice {
+        self.inner_iter.value()
+    }
+
+    fn status(&mut self) -> Result<()> {
+        self.inner_iter.status()
+    }
+}
+
 /// A plain iterator used as default
 ///
 /// # Notice
@@ -110,6 +175,36 @@ impl Iterator for EmptyIterator {
         match self.err.take() {
             Some(e) => Err(e),
             None => Ok(()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::mem;
+    use crate::iterator::{IterWithCleanup, EmptyIterator};
+
+    struct TestCleanup {
+        results: Vec<usize>,
+    }
+
+    #[test]
+    fn test_iter_with_cleanup() {
+        let test_cleaned_up = Rc::new(RefCell::new(TestCleanup {
+            results: vec![],
+        }));
+
+        let mut iter = IterWithCleanup::new(EmptyIterator::new());
+        for i in 0..100 {
+            let cloned = test_cleaned_up.clone();
+            iter.register_task(Box::new(move || cloned.borrow_mut().results.push(i)));
+        }
+        mem::drop(iter);
+        assert_eq!(100, test_cleaned_up.borrow().results.len());
+        for i in 0..100 {
+            assert_eq!(i, test_cleaned_up.borrow().results[i]);
         }
     }
 }
