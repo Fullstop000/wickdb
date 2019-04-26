@@ -20,3 +20,4 @@ pub mod status;
 pub mod hash;
 pub mod slice;
 pub mod varint;
+pub mod collection;
