@@ -17,7 +17,7 @@
 
 /// The log file contents are a sequence of 32KB blocks. The only exception is that the tail of the file may contain a partial block.
 mod reader;
-mod writer;
+pub mod writer;
 
 /// The max size of a log block
 // TODO: move this to the options
@@ -73,6 +73,7 @@ mod tests {
     use std::cmp::min;
     use std::io::SeekFrom;
     use std::rc::Rc;
+    use std::net::Shutdown::Read;
 
     // Construct a string of the specified length made out of the supplied
     // partial string.
@@ -97,15 +98,15 @@ mod tests {
     }
 
     struct StringFile {
-        contents: Vec<u8>,
+        contents: Rc<RefCell<Vec<u8>>>,
         force_err: bool,
         returned_partial: bool,
     }
 
     impl StringFile {
-        pub fn new() -> Self {
+        pub fn new(data: Rc<RefCell<Vec<u8>>>) -> Self {
             Self {
-                contents: vec![],
+                contents: data,
                 force_err: false,
                 returned_partial: false,
             }
@@ -114,7 +115,7 @@ mod tests {
 
     impl File for StringFile {
         fn f_write(&mut self, buf: &[u8]) -> Result<usize> {
-            self.contents.extend_from_slice(buf);
+            self.contents.borrow_mut().extend_from_slice(buf);
             Ok(buf.len())
         }
 
@@ -129,13 +130,13 @@ mod tests {
         fn f_seek(&mut self, pos: SeekFrom) -> Result<u64> {
             match pos {
                 SeekFrom::Start(p) => {
-                    if p > (self.contents.len() - 1) as u64 {
+                    if p > (self.contents.borrow().len() - 1) as u64 {
                         return Err(WickErr::new(
                             Status::NotFound,
                             Some("in-memory file seeking pasts the end"),
                         ));
                     }
-                    self.contents.drain(0..p as usize);
+                    self.contents.borrow_mut().drain(0..p as usize);
                     Ok(p)
                 }
                 _ => panic!("only support seeking from starting point"),
@@ -149,14 +150,14 @@ mod tests {
                 self.returned_partial = true;
                 return Err(WickErr::new(Status::Corruption, Some("read error")));
             }
-            if self.contents.len() < buf.len() {
+            if self.contents.borrow().len() < buf.len() {
                 self.returned_partial = true;
             }
-            let length = min(self.contents.len(), buf.len());
+            let length = min(self.contents.borrow().len(), buf.len());
             for i in 0..length {
-                buf[i] = self.contents[i]
+                buf[i] = self.contents.borrow()[i]
             }
-            self.contents.drain(0..length);
+            self.contents.borrow_mut().drain(0..length);
             Ok(length)
         }
 
@@ -194,8 +195,10 @@ mod tests {
         }
     }
 
+    // `read_source`, `writer` and `reader` all share the `source`
     struct RecordTest {
-        file: Rc<RefCell<StringFile>>,
+        source: Rc<RefCell<Vec<u8>>>,
+        read_source: Rc<RefCell<StringFile>>,
         reporter: Rc<RefCell<ReportCollector>>,
         reading: bool,
         reader: Reader,
@@ -222,25 +225,28 @@ mod tests {
     const EOF: &'static str = "EOF";
 
     impl RecordTest {
-        pub fn new(file: StringFile, reporter: ReportCollector) -> Self {
-            let f = Rc::new(RefCell::new(file));
+        pub fn new(reporter: ReportCollector) -> Self {
+            let data = Rc::new(RefCell::new(vec![]));
+            let f = StringFile::new(data.clone());
             let r = Rc::new(RefCell::new(reporter));
-            let writer = match Writer::new(f.clone()) {
+            let writer = match Writer::new(Box::new(StringFile::new(data.clone()))) {
                 Ok(w) => w,
                 Err(e) => panic!("{:?}", e),
             };
+            let read_source =Rc::new(RefCell::new(StringFile::new(data.clone())));
             Self {
-                file: f.clone(),
+                source: data.clone(),
+                read_source: read_source.clone(),
                 reporter: r.clone(),
                 reading: false,
-                reader: Reader::new(f.clone(), Some(r), true, 0),
+                reader: Reader::new(read_source, Some(r), true, 0),
                 writer,
             }
         }
 
         // Replace the current writer with a new one created from the current StringFile
         pub fn reopen_for_append(&mut self) {
-            let writer = match Writer::new(self.file.clone()) {
+            let writer = match Writer::new(Box::new(StringFile::new(self.source.clone()))) {
                 Ok(w) => w,
                 Err(e) => panic!("{:?}", e),
             };
@@ -255,7 +261,7 @@ mod tests {
         }
 
         pub fn written_bytes(&self) -> usize {
-            self.file.borrow().contents.len()
+            self.source.borrow().len()
         }
 
         pub fn read(&mut self) -> String {
@@ -269,24 +275,23 @@ mod tests {
         }
 
         pub fn increment_byte(&mut self, offset: usize, delta: u8) {
-            self.file.borrow_mut().contents[offset] += delta
+            self.source.borrow_mut()[offset] += delta
         }
 
         pub fn set_byte(&mut self, offset: usize, byte: u8) {
-            self.file.borrow_mut().contents[offset] = byte
+            self.source.borrow_mut()[offset] = byte
         }
 
         pub fn shrink_size(&mut self, bytes: usize) {
-            let written_bytes = self.file.borrow().contents.len();
-            self.file
+            let written_bytes = self.source.borrow().len();
+            self.source
                 .borrow_mut()
-                .contents
                 .truncate(written_bytes - bytes)
         }
 
         pub fn fix_checksum(&mut self, header_offset: usize, len: usize) {
-            let mut f = self.file.borrow_mut();
-            let contents = f.contents.as_mut_slice();
+            let mut borrowed = self.source.borrow_mut();
+            let contents = borrowed.as_mut_slice();
             // 6 = actual crc (4) + data length (2)
             let mut crc = value(&contents[header_offset + 6..header_offset + 6 + len + 1]);
             crc = mask(crc);
@@ -294,7 +299,7 @@ mod tests {
         }
 
         pub fn force_error(&mut self) {
-            self.file.borrow_mut().force_err = true
+            self.read_source.borrow_mut().force_err = true
         }
 
         pub fn dropped_bytes(&self) -> u64 {
@@ -323,7 +328,7 @@ mod tests {
 
         pub fn start_reading_at(&mut self, initial_offset: u64) {
             self.reader = Reader::new(
-                self.file.clone(),
+                self.read_source.clone(),
                 Some(self.reporter.clone()),
                 true,
                 initial_offset,
@@ -336,7 +341,7 @@ mod tests {
             self.reading = true;
             let size = self.written_bytes() as u64;
             let mut reader = Reader::new(
-                self.file.clone(),
+                self.read_source.clone(),
                 Some(self.reporter.clone()),
                 true,
                 size + offset_past_end,
@@ -353,7 +358,7 @@ mod tests {
             self.write_initial_offset_log();
             self.reading = true;
             let mut reader = Reader::new(
-                self.file.clone(),
+                self.read_source.clone(),
                 Some(self.reporter.clone()),
                 true,
                 initial_offset,
@@ -382,7 +387,7 @@ mod tests {
     }
 
     fn new_record_test() -> RecordTest {
-        RecordTest::new(StringFile::new(), ReportCollector::new())
+        RecordTest::new(ReportCollector::new())
     }
     #[test]
     fn test_read_eof() {

@@ -16,7 +16,7 @@
 // found in the LICENSE file.
 
 use crate::record::{RecordType, BLOCK_SIZE, HEADER_SIZE};
-use crate::storage::FilePtr;
+use crate::storage::File;
 use crate::util::coding::encode_fixed_32;
 use crate::util::crc32;
 use crate::util::slice::Slice;
@@ -24,7 +24,7 @@ use crate::util::status::Result;
 
 /// Writer writes records to an underlying log `File`.
 pub struct Writer {
-    dest: FilePtr,
+    dest: Box<dyn File>,
     //Current offset in block
     block_offset: usize,
     // crc32c values for all supported record types.  These are
@@ -34,7 +34,7 @@ pub struct Writer {
 }
 
 impl Writer {
-    pub fn new(dest: FilePtr) -> Result<Self> {
+    pub fn new(dest: Box<dyn File>) -> Result<Self> {
         let n = RecordType::Last as usize;
         let mut cache = [0; RecordType::Last as usize + 1];
         for h in 1..=n {
@@ -68,7 +68,7 @@ impl Writer {
             if leftover < HEADER_SIZE {
                 if leftover != 0 {
                     // fill the rest of the block with zero
-                    self.dest.borrow_mut().f_write(&[0; 6][..leftover])?;
+                    self.dest.f_write(&[0; 6][..leftover])?;
                 }
                 self.block_offset = 0; // use a new block
             };
@@ -129,10 +129,9 @@ impl Writer {
         encode_fixed_32(&mut buf, crc);
 
         // write the header and the data
-        let f = self.dest.clone();
-        f.borrow_mut().f_write(&buf)?;
-        f.borrow_mut().f_write(data)?;
-        f.borrow_mut().f_flush()?;
+        self.dest.f_write(&buf)?;
+        self.dest.f_write(data)?;
+        self.dest.f_flush()?;
         // update block_offset
         self.block_offset += HEADER_SIZE + size;
         Ok(())
