@@ -21,6 +21,8 @@ use crate::util::slice::Slice;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Error, Formatter};
 use crate::util::varint::VarintU32;
+use crate::filter::FilterPolicy;
+use std::rc::Rc;
 
 /// The max key sequence number. The value is 2^56 - 1 because the seq number
 /// only takes 56 bits when is serialized to `InternalKey`
@@ -120,6 +122,7 @@ impl Debug for ParsedInternalKey {
 ///              user key                  seq number        type
 /// ```
 ///
+#[derive(PartialEq, Eq)]
 pub struct InternalKey {
     data: Vec<u8>,
 }
@@ -136,6 +139,11 @@ impl InternalKey {
         Self {
             data: Vec::from(src)
         }
+    }
+
+    #[inline]
+    pub fn into_data(self) -> Vec<u8> {
+        self.data
     }
 
     #[inline]
@@ -281,6 +289,32 @@ impl Comparator for InternalKeyComparator {
 
     fn successor(&self, s: &[u8]) -> Vec<u8> {
         unimplemented!()
+    }
+}
+
+/// A wrapper for the internal key filter policy
+pub struct InternalFilterPolicy {
+    user_policy: Rc<dyn FilterPolicy>,
+}
+
+impl FilterPolicy for InternalFilterPolicy {
+    fn name(&self) -> &str {
+        self.user_policy.name()
+    }
+
+    fn may_contain(&self, filter: &[u8], key: &Slice) -> bool {
+        let user_key = extract_user_key(key.to_slice());
+        self.user_policy.may_contain(filter, &user_key)
+    }
+
+    fn create_filter(&self, keys: &[Vec<u8>]) -> Vec<u8> {
+        let mut user_keys = vec![];
+        for key in keys.iter() {
+            let user_key = extract_user_key(key.as_slice());
+            // TODO: avoid copying here
+            user_keys.push(Vec::from(user_key.to_slice()))
+        }
+        self.user_policy.create_filter(user_keys.as_slice())
     }
 }
 
