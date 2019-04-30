@@ -80,8 +80,6 @@ impl FilterBlockBuilder {
             // clean up the remaining keys
             self.generate_filter();
         };
-        let size = self.data.len();
-        let b = [0u8; 4];
         // append per-filter offsets
         for i in 0..self.filter_offsets.len() {
             put_fixed_32(&mut self.data, self.filter_offsets[i]);

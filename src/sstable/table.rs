@@ -30,6 +30,7 @@ use crate::util::status::{Result, Status, WickErr};
 use std::cmp::Ordering;
 use std::mem;
 use std::rc::Rc;
+use crate::db::format::ParsedInternalKey;
 
 /// A `Table` is a sorted map from strings to strings.  Tables are
 /// immutable and persistent.  A Table may be safely accessed from
@@ -189,14 +190,13 @@ impl Table {
         &self,
         options: Rc<ReadOptions>,
         key: &[u8],
-        mut callback: Box<FnMut(&[u8], &[u8])>,
-    ) -> Result<()> {
+    ) -> Result<Option<ParsedInternalKey>> {
         let mut index_iter = self.index_block.iter(self.options.comparator.clone());
         // seek to the first 'last key' bigger than 'key'
         index_iter.seek(&Slice::from(key));
         if index_iter.valid() {
             // It's called 'maybe_contained' not only because the filter policy may report the falsy result,
-            // but also even if we've find a block with the last key bigger than the target
+            // but also even if we've found a block with the last key bigger than the target
             // the key may not be contained if the block is the first block of the sstable.
             let mut maybe_contained = true;
 
@@ -214,12 +214,20 @@ impl Table {
                 let mut block_iter = self.block_reader(data_block_handle, options)?;
                 block_iter.seek(&Slice::from(key));
                 if block_iter.valid() {
-                    callback(block_iter.key().to_slice(), block_iter.value().to_slice());
+                    match ParsedInternalKey::decode_from(block_iter.value()) {
+                        None => return Err(WickErr::new(Status::Corruption, None)),
+                        Some(parsed_key) => {
+                            if self.options.comparator.compare(parsed_key.user_key.to_slice(), key) == Ordering::Equal {
+                                return Ok(Some(parsed_key))
+                            }
+                        },
+                    }
                 }
-                block_iter.status()?
+                block_iter.status()?;
             }
         }
-        index_iter.status()
+        index_iter.status()?;
+        Ok(None)
     }
 }
 

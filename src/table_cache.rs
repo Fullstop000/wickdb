@@ -27,6 +27,7 @@ use crate::util::varint::VarintU64;
 use crate::db::filename::{generate_filename, FileType};
 use crate::util::slice::Slice;
 use crate::iterator::{Iterator, EmptyIterator, IterWithCleanup};
+use crate::db::format::ParsedInternalKey;
 
 /// A `TableCache` is the cache for the sst files and the sstable in them
 pub struct TableCache {
@@ -49,7 +50,7 @@ impl TableCache {
     }
 
     // Try to find the sst file from cache. If not found, try to find the file from storage and insert it into the cache
-    fn find_table(&mut self, file_number: u64, file_size: u64) -> Result<HandleRef<Rc<Table>>> {
+    fn find_table(&self, file_number: u64, file_size: u64) -> Result<HandleRef<Rc<Table>>> {
         let mut key = vec![];
         VarintU64::put_varint(&mut key, file_number);
         match self.cache.borrow().look_up(key.as_slice()) {
@@ -70,13 +71,13 @@ impl TableCache {
         self.cache.borrow_mut().erase(key.as_slice());
     }
 
-    /// If a seek to internal key 'key' in specified file finds an entry call the callback
-    pub fn get(&mut self, options: Rc<ReadOptions>, key: &Slice, file_number: u64, file_size: u64, callback: Box<FnMut(&[u8], &[u8])>) -> Result<()> {
+    /// Returns the result of a seek to internal key `key` in specified file
+    pub fn get(&self, options: Rc<ReadOptions>, key: &Slice, file_number: u64, file_size: u64) -> Result<Option<ParsedInternalKey>> {
         let handle = self.find_table(file_number, file_size)?;
         // every value should be valid so unwrap is safe here
-        handle.borrow().get_value().unwrap().internal_get(options, key.to_slice(), callback)?;
+        let parsed_key = handle.borrow().get_value().unwrap().internal_get(options, key.to_slice())?;
         self.cache.borrow_mut().release(handle);
-        Ok(())
+        Ok(parsed_key)
     }
 
     /// Return an iterator for the specified file number (the corresponding
