@@ -283,11 +283,11 @@ impl Comparator for InternalKeyComparator {
         "leveldb.InternalKeyComparator"
     }
 
-    fn separator(&self, a: &[u8], b: &[u8]) -> Vec<u8> {
+    fn separator(&self, _a: &[u8], _b: &[u8]) -> Vec<u8> {
         unimplemented!()
     }
 
-    fn successor(&self, s: &[u8]) -> Vec<u8> {
+    fn successor(&self, _s: &[u8]) -> Vec<u8> {
         unimplemented!()
     }
 }

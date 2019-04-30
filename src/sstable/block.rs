@@ -255,7 +255,7 @@ impl Iterator for BlockIterator {
             let src = &self.data[region_offset as usize..];
             let (shared, n0) = VarintU32::common_read(src);
             let (not_shared, n1) = VarintU32::common_read(&src[n0 as usize..]);
-            let (value_len, n2) = VarintU32::common_read(&src[(n1 + n0) as usize..]);
+            let (_, n2) = VarintU32::common_read(&src[(n1 + n0) as usize..]);
             if shared != 0 {
                 self.corruption_err();
                 return;
@@ -311,7 +311,7 @@ impl Iterator for BlockIterator {
     }
 
     fn status(&mut self) -> Result<()> {
-        if let Some(err) = &self.err {
+        if let Some(_err) = &self.err {
             return Err(self.err.take().unwrap());
         }
         Ok(())

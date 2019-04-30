@@ -66,7 +66,7 @@ impl FilterPolicy for BloomFilter {
         };
         let mut h = Self::bloom_hash(key.to_slice());
         let delta = (h >> 17) | (h << 15); // rotate right 17 bits
-        for i in 0..k {
+        for _ in 0..k {
             let bit_pos = h % (bits as u32);
             if (filter[(bit_pos / 8) as usize] & (1 << (bit_pos % 8))) == 0 {
                 return false;
@@ -94,7 +94,7 @@ impl FilterPolicy for BloomFilter {
         for key in keys {
             let mut h = Self::bloom_hash(key.as_slice());
             let delta = (h >> 17) | (h << 15); // rotate right 17 bits
-            for i in 0..self.k {
+            for _ in 0..self.k {
                 let bit_pos = h % (bits as u32);
                 dst[(bit_pos / 8) as usize] |= 1 << (bit_pos % 8);
                 h = h.wrapping_add(delta);

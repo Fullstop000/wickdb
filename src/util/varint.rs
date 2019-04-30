@@ -221,7 +221,7 @@ mod tests {
         let mut buf = vec![];
         let mut numbers = vec![];
         let n = 100;
-        for i in 0..n {
+        for _ in 0..n {
             let r = rand::random::<u64>();
             VarintU64::put_varint(&mut buf, r);
             numbers.push(r);

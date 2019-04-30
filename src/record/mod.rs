@@ -73,7 +73,7 @@ mod tests {
     use std::cmp::min;
     use std::io::SeekFrom;
     use std::rc::Rc;
-    use std::net::Shutdown::Read;
+    
 
     // Construct a string of the specified length made out of the supplied
     // partial string.
@@ -169,7 +169,7 @@ mod tests {
             unimplemented!()
         }
 
-        fn f_read_at(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
+        fn f_read_at(&self, _buf: &mut [u8], _offset: u64) -> Result<usize> {
             unimplemented!()
         }
     }
@@ -227,7 +227,7 @@ mod tests {
     impl RecordTest {
         pub fn new(reporter: ReportCollector) -> Self {
             let data = Rc::new(RefCell::new(vec![]));
-            let f = StringFile::new(data.clone());
+            let _f = StringFile::new(data.clone());
             let r = Rc::new(RefCell::new(reporter));
             let writer = match Writer::new(Box::new(StringFile::new(data.clone()))) {
                 Ok(w) => w,

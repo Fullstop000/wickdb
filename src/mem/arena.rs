@@ -209,10 +209,10 @@ mod tests {
                     r.gen_range(1, i)
                 }
             };
-            let (ptr, aligned) = if i % 2 == 0 {
-                (a.allocate_aligned(size), true)
+            let ptr = if i % 2 == 0 {
+                a.allocate_aligned(size)
             } else {
-                (a.allocate(size), false)
+                a.allocate(size)
             };
             unsafe {
                 for j in 0..size {
@@ -221,10 +221,10 @@ mod tests {
                 }
             }
             allocated_size += size;
-            allocated.push((ptr, size, aligned));
+            allocated.push((ptr, size));
             assert!(a.memory_used() >= allocated_size, "the memory used {} should be greater or equal to expecting allocated {}", a.memory_used(), allocated_size);
         }
-        for (j, (ptr, size, aligned)) in allocated.iter().enumerate() {
+        for (ptr, size) in allocated.iter() {
             unsafe {
                 for i in 0..*size {
                     let p = ptr.add(i);
