@@ -22,8 +22,11 @@
 
 extern crate libc;
 #[macro_use]
+extern crate log;
+#[macro_use]
 extern crate lazy_static;
 extern crate crc;
+extern crate crossbeam_channel;
 extern crate rand;
 extern crate snap;
 
