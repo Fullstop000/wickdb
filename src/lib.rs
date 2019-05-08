@@ -34,6 +34,7 @@ extern crate snap;
 mod util;
 pub mod batch;
 pub mod cache;
+mod compaction;
 pub mod db;
 pub mod filter;
 mod iterator;
