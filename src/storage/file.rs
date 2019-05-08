@@ -25,21 +25,21 @@ use std::path::{Path, PathBuf};
 pub struct FileStorage;
 
 impl Storage for FileStorage {
-    fn create(&mut self, name: &str) -> Result<Box<dyn File>> {
+    fn create(&self, name: &str) -> Result<Box<dyn File>> {
         match SysFile::create(name) {
             Ok(f) => Ok(Box::new(f)),
             Err(e) => Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e))),
         }
     }
 
-    fn open(&mut self, name: &str) -> Result<Box<dyn File>> {
+    fn open(&self, name: &str) -> Result<Box<dyn File>> {
         match SysFile::open(name) {
             Ok(f) => Ok(Box::new(f)),
             Err(e) => Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e))),
         }
     }
 
-    fn remove(&mut self, name: &str) -> Result<()> {
+    fn remove(&self, name: &str) -> Result<()> {
         let r = remove_file(name);
         w_io_result!(r)
     }
@@ -48,11 +48,11 @@ impl Storage for FileStorage {
         Path::new(name).exists()
     }
 
-    fn rename(&mut self, old: &str, new: &str) -> Result<()> {
+    fn rename(&self, old: &str, new: &str) -> Result<()> {
         w_io_result!(rename(old, new))
     }
 
-    fn mkdir_all(&mut self, dir: &str) -> Result<()> {
+    fn mkdir_all(&self, dir: &str) -> Result<()> {
         let r = create_dir_all(dir);
         w_io_result!(r)
     }

@@ -24,37 +24,38 @@ use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-/// Storage is a namespace for files.
+/// `Storage` is a namespace for files.
 ///
 /// The names are filepath names: they may be / separated or \ separated,
 /// depending on the underlying operating system.
-pub trait Storage {
+///
+/// `Storage` should be thread safe
+pub trait Storage: Send + Sync {
     /// Create a file with given name
-    fn create(&mut self, name: &str) -> Result<Box<dyn File>>;
+    fn create(&self, name: &str) -> Result<Box<dyn File>>;
 
     /// Open a file with given name
-    fn open(&mut self, name: &str) -> Result<Box<dyn File>>;
+    fn open(&self, name: &str) -> Result<Box<dyn File>>;
 
     /// Delete the named file
-    fn remove(&mut self, name: &str) -> Result<()>;
+    fn remove(&self, name: &str) -> Result<()>;
 
     /// Returns true iff the named file exists.
     fn exists(&self, name: &str) -> bool;
 
     /// Rename a file or directory to a new name, replacing the original file if
     /// `new` already exists.
-    fn rename(&mut self, old: &str, new: &str) -> Result<()>;
+    fn rename(&self, old: &str, new: &str) -> Result<()>;
 
     /// Recursively create a directory and all of its parent components if they
     /// are missing.
-    fn mkdir_all(&mut self, dir: &str) -> Result<()>;
+    fn mkdir_all(&self, dir: &str) -> Result<()>;
 
     /// Returns a list of file names in given
     fn list(&self, dir: &Path) -> Result<Vec<PathBuf>>;
 }
 
 /// A file abstraction for IO operations
-/// NOTE: SFile stands for StorageFile
 pub trait File {
     fn f_write(&mut self, buf: &[u8]) -> Result<usize>;
     fn f_flush(&mut self) -> Result<()>;
