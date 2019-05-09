@@ -44,5 +44,6 @@ pub trait FilterPolicy {
     fn may_contain(&self, filter: &[u8], key: &Slice) -> bool;
 
     /// Creates a filter based on given keys
+    // TODO: use another type instead of &[Vec<u8>]
     fn create_filter(&self, keys: &[Vec<u8>]) -> Vec<u8>;
 }

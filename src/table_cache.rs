@@ -19,19 +19,20 @@ use crate::storage::Storage;
 use std::rc::Rc;
 use crate::options::{Options, ReadOptions};
 use crate::cache::{Cache, HandleRef};
-use crate::sstable::table::{Table, TableIterator};
+use crate::sstable::table::{Table, new_table_iterator};
 use std::cell::RefCell;
 use crate::cache::lru::SharedLRUCache;
 use crate::util::status::Result;
 use crate::util::varint::VarintU64;
 use crate::db::filename::{generate_filename, FileType};
 use crate::util::slice::Slice;
-use crate::iterator::{Iterator, EmptyIterator, IterWithCleanup};
+use crate::iterator::{Iterator, EmptyIterator, IterWithCleanup, ConcatenateIterator};
 use crate::db::format::ParsedInternalKey;
+use std::sync::Arc;
 
 /// A `TableCache` is the cache for the sst files and the sstable in them
 pub struct TableCache {
-    env: Rc<RefCell<dyn Storage>>,
+    env: Arc<dyn Storage>,
     db_name: String,
     options: Rc<Options>,
     // the key of cache is the file number
@@ -57,7 +58,7 @@ impl TableCache {
             Some(handle) => Ok(handle),
             None => {
                 let filename = generate_filename(self.db_name.as_str(), FileType::Table, file_number);
-                let table_file= self.env.borrow_mut().open(filename.as_str())?;
+                let table_file= self.env.open(filename.as_str())?;
                 let table = Table::open(table_file, file_size, self.options.clone())?;
                 return Ok(self.cache.borrow_mut().insert(key,  Rc::new(table), 1, None));
             }
@@ -82,11 +83,11 @@ impl TableCache {
 
     /// Return an iterator for the specified file number (the corresponding
     /// file length must be exactly "file_size" bytes).
-    pub fn iter(&mut self, options: Rc<ReadOptions>, file_number: u64, file_size: u64) -> Box<dyn Iterator> {
+    pub fn iter(&self, options: Rc<ReadOptions>, file_number: u64, file_size: u64) -> Box<dyn Iterator> {
         match self.find_table(file_number, file_size) {
             Ok(h) => {
                 let table = h.borrow().get_value().unwrap();
-                let mut iter = IterWithCleanup::new(Box::new(TableIterator::new(table, options)));
+                let mut iter = IterWithCleanup::new(new_table_iterator(table, options));
                 let cache = self.cache.clone();
                 iter.register_task(Box::new(move || cache.borrow_mut().release(h.clone())));
                 Box::new(iter)

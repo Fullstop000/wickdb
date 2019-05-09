@@ -13,7 +13,7 @@
 
 use crate::util::slice::Slice;
 
-const MAX_VARINT_LEN_U32: usize = 5;
+pub const MAX_VARINT_LEN_U32: usize = 5;
 pub const MAX_VARINT_LEN_U64: usize = 10;
 
 pub struct VarintU32 {}

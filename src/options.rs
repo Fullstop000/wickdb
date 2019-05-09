@@ -72,7 +72,7 @@ pub struct Options {
     pub paranoid_checks: bool,
 
     /// Use the specified object to interact with the environment,
-    pub env: Rc<RefCell<dyn Storage>>,
+    pub env: Arc<dyn Storage>,
     // -------------------
     // Parameters that affect compaction:
     /// The max number of levels except L)
@@ -92,7 +92,7 @@ pub struct Options {
     /// The maximum number of bytes for L1. The maximum number of bytes for other
     /// levels is computed dynamically based on this value. When the maximum
     /// number of bytes for a level is exceeded, compaction is requested.
-    pub l1_max_bytes: usize,
+    pub l1_max_bytes: u64,
 
     // -------------------
     // Parameters that affect performance:
@@ -137,7 +137,7 @@ pub struct Options {
     /// compactions and hence longer latency/performance hiccups.
     /// Another reason to increase this parameter might be when you are
     /// initially populating a large database.
-    pub max_file_size: usize,
+    pub max_file_size: u64,
 
     /// Compress blocks using the specified compression algorithm.  This
     /// parameter can be changed dynamically. Default is SnappyCompression.
@@ -153,6 +153,35 @@ pub struct Options {
     pub filter_policy: Option<Rc<dyn FilterPolicy>>,
 }
 
+impl Options {
+    /// Maximum number of bytes in all compacted files.  We avoid expanding
+    /// the lower level file set of a compaction if it would make the
+    /// total compaction cover more than this many bytes.
+    pub fn expanded_compaction_byte_size_limit(&self) -> u64 {
+        25 * self.max_file_size
+    }
+
+    /// Maximum bytes of overlaps in grandparent (i.e., level+2) before we
+    /// stop building a single file in a level->level+1 compaction.
+    pub fn max_grandparent_overlap_bytes(&self) -> u64 {
+        10 * self.max_file_size as u64
+    }
+
+    /// Maximum bytes of total files in a given level
+    pub fn max_bytes_for_level(&self, mut level: usize) -> u64 {
+        // Note: the result for level zero is not really used since we set
+        // the level-0 compaction threshold based on number of files.
+
+        // Result for both level-0 and level-1
+        let mut result = self.l1_max_bytes;
+        while level > 1 {
+            result *= 10 ;
+            level -= 1;
+        }
+        result
+    }
+}
+
 impl Default for Options {
     fn default() -> Self {
         Options {
@@ -160,7 +189,7 @@ impl Default for Options {
             create_if_missing: false,
             error_if_exists: false,
             paranoid_checks: false,
-            env: Rc::new(RefCell::new(FileStorage{})),
+            env: Arc::new(FileStorage{}),
             max_levels: 7,
             l0_compaction_threshold: 4,
             l0_slowdown_writes_threshold: 8,

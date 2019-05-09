@@ -34,19 +34,18 @@ pub struct Writer {
 }
 
 impl Writer {
-    pub fn new(dest: Box<dyn File>) -> Result<Self> {
+    pub fn new(dest: Box<dyn File>) -> Self {
         let n = RecordType::Last as usize;
         let mut cache = [0; RecordType::Last as usize + 1];
         for h in 1..=n {
             let v: [u8; 1] = [RecordType::from(h) as u8];
             cache[h as usize] = crc32::value(&v);
         }
-        let w = Writer {
+        Self {
             dest,
             block_offset: 0,
             crc_cache: cache,
-        };
-        Ok(w)
+        }
     }
 
     /// Appends a slice into the underlying log file
@@ -101,6 +100,12 @@ impl Writer {
             left > 0
         } { /* empty here */ }
         Ok(())
+    }
+
+    /// Sync the underlying file
+    #[inline]
+    pub fn sync(&mut self) -> Result<()> {
+        self.dest.f_flush()
     }
 
     // create formatted bytes and write into the file

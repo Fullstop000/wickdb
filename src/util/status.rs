@@ -28,6 +28,8 @@ pub enum Status {
     InvalidArgument,
     CompressionError,
     IOError,
+
+    Unexpected,
 }
 
 impl Status {
@@ -39,6 +41,7 @@ impl Status {
             Status::InvalidArgument => "InvalidArgumentError",
             Status::CompressionError => "CompressionError",
             Status::IOError => "IOError",
+            Status::Unexpected => "UnexpectedError",
         }
     }
 }

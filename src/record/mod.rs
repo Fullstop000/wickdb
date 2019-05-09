@@ -229,10 +229,7 @@ mod tests {
             let data = Rc::new(RefCell::new(vec![]));
             let _f = StringFile::new(data.clone());
             let r = Rc::new(RefCell::new(reporter));
-            let writer = match Writer::new(Box::new(StringFile::new(data.clone()))) {
-                Ok(w) => w,
-                Err(e) => panic!("{:?}", e),
-            };
+            let writer = Writer::new(Box::new(StringFile::new(data.clone())));
             let read_source =Rc::new(RefCell::new(StringFile::new(data.clone())));
             Self {
                 source: data.clone(),
@@ -246,10 +243,7 @@ mod tests {
 
         // Replace the current writer with a new one created from the current StringFile
         pub fn reopen_for_append(&mut self) {
-            let writer = match Writer::new(Box::new(StringFile::new(self.source.clone()))) {
-                Ok(w) => w,
-                Err(e) => panic!("{:?}", e),
-            };
+            let writer = Writer::new(Box::new(StringFile::new(self.source.clone())));
             self.writer = writer;
         }
 

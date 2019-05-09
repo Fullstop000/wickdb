@@ -15,7 +15,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-use crate::iterator::{EmptyIterator, Iterator};
+use crate::iterator::{EmptyIterator, Iterator, DerivedIterFactory, ConcatenateIterator};
 use crate::options::{CompressionType, Options, ReadOptions};
 use crate::sstable::block::{Block, BlockBuilder};
 use crate::sstable::filter_block::{FilterBlockBuilder, FilterBlockReader};
@@ -231,6 +231,16 @@ impl Table {
     }
 }
 
+pub struct TableIterFactory {
+    table: Rc<Table>,
+}
+impl DerivedIterFactory for TableIterFactory {
+    fn produce(&self, options: Rc<ReadOptions>, value: &Slice) -> Result<Box<Iterator>> {
+        BlockHandle::decode_from(value.to_slice())
+            .and_then(|(handle,_)| self.table.block_reader(handle, options))
+    }
+}
+
 fn block_reader(
     file: &dyn File,
     cache_id: u64,
@@ -274,187 +284,12 @@ fn block_reader(
     Ok(block.iter(options.comparator.clone()))
 }
 
-pub struct TableIterator {
-    table: Rc<Table>,
-    read_options: Rc<ReadOptions>,
-    index_iter: Box<dyn Iterator>,
-
-    // None: a error happens in the index iterator
-    // EmptyIterator: a error happens in previous data iterator
-    data_block_iter: Option<Box<dyn Iterator>>,
-    current_data_block_handle: Vec<u8>,
-    err: Option<WickErr>,
-}
-
-impl TableIterator {
-    pub fn new(table: Rc<Table>, read_options: Rc<ReadOptions>) -> Self {
-        let cmp = table.options.comparator.clone();
-        let index_iter = table.index_block.iter(cmp);
-        Self {
-            table,
-            read_options,
-            index_iter,
-            data_block_iter: None,
-            current_data_block_handle: vec![],
-            err: None,
-        }
-    }
-
-    #[inline]
-    fn maybe_save_err(old: &mut Option<WickErr>, new: Result<()>) {
-        if old.is_none() && new.is_err() {
-            mem::replace::<Option<WickErr>>(old, Some(new.unwrap_err()));
-        }
-    }
-    // Try to read data block according to the current value of index iterator.
-    fn init_data_block(&mut self) {
-        if !self.index_iter.valid() {
-            self.data_block_iter = None;
-        } else {
-            let v = self.index_iter.value();
-            if self.data_block_iter.is_none()
-                || compare(self.current_data_block_handle.as_slice(), v.to_slice())
-                    != Ordering::Greater
-            {
-                match BlockHandle::decode_from(v.to_slice()) {
-                    Ok((handle, _)) => match self.table.block_reader(handle, self.read_options.clone()) {
-                        Ok(bi) => self.set_data_iter(Some(bi)),
-                        Err(e) => self.set_data_iter(Some(EmptyIterator::new_with_err(e))),
-                    },
-                    Err(e) => self.set_data_iter(Some(EmptyIterator::new_with_err(e))),
-                }
-            }
-        }
-    }
-
-    fn set_data_iter(&mut self, iter: Option<Box<dyn Iterator>>) {
-        if let Some(di) = &mut self.data_block_iter {
-            Self::maybe_save_err(&mut self.err, di.status());
-        }
-        self.data_block_iter = iter
-    }
-
-    // Used to skip invalid data blocks util finding a valid data block by `next()`
-    // If found, set data block to the first
-    fn skip_forward(&mut self) {
-        while let Some(di) = &self.data_block_iter {
-            if !di.valid() {
-                break;
-            }
-            // Move to next data block
-            if !self.index_iter.valid() {
-                self.set_data_iter(None)
-            } else {
-                self.index_iter.next();
-                self.init_data_block();
-                if let Some(i) = &mut self.data_block_iter {
-                    // init to the first
-                    i.seek_to_first();
-                }
-            }
-        }
-    }
-
-    // Used to skip invalid data blocks util finding a valid data block by `prev()`
-    // If found, set data block to the last
-    fn skip_backward(&mut self) {
-        while let Some(di) = &self.data_block_iter {
-            if !di.valid() {
-                break;
-            }
-            // Move to next data block
-            if !self.index_iter.valid() {
-                self.set_data_iter(None)
-            } else {
-                self.index_iter.prev();
-                self.init_data_block();
-                if let Some(i) = &mut self.data_block_iter {
-                    // init to the first
-                    i.seek_to_last();
-                }
-            }
-        }
-    }
-    #[inline]
-    fn valid_or_panic(&self) {
-        assert!(self.valid(), "[table iterator] invalid data iterator")
-    }
-}
-impl Iterator for TableIterator {
-    fn valid(&self) -> bool {
-        if let Some(data_iter) = &self.data_block_iter {
-            return data_iter.valid();
-        } else {
-            // we have a err in the index iterator
-            return false;
-        }
-    }
-
-    fn seek_to_first(&mut self) {
-        self.index_iter.seek_to_first();
-        self.init_data_block();
-        if let Some(di) = &mut self.data_block_iter {
-            di.seek_to_first();
-        }
-        // to the first valid
-        self.skip_forward();
-    }
-
-    fn seek_to_last(&mut self) {
-        self.index_iter.seek_to_last();
-        self.init_data_block();
-        if let Some(di) = &mut self.data_block_iter {
-            di.seek_to_last();
-        }
-        // to the last valid
-        self.skip_backward();
-    }
-
-    fn seek(&mut self, target: &Slice) {
-        self.index_iter.seek(target);
-        if let Some(di) = &mut self.data_block_iter {
-            di.seek(target);
-        }
-        // to the first valid
-        self.skip_forward();
-    }
-
-    fn next(&mut self) {
-        self.valid_or_panic();
-        self.data_block_iter.as_mut().map_or((), |di| di.next());
-        self.skip_forward();
-    }
-
-    fn prev(&mut self) {
-        self.valid_or_panic();
-        self.data_block_iter.as_mut().map_or((), |di| di.prev());
-        self.skip_backward();
-    }
-
-    fn key(&self) -> Slice {
-        self.valid_or_panic();
-        self.data_block_iter
-            .as_ref()
-            .map_or(Slice::new_empty(), |di| di.key())
-    }
-
-    fn value(&self) -> Slice {
-        self.valid_or_panic();
-        self.data_block_iter
-            .as_ref()
-            .map_or(Slice::new_empty(), |di| di.value())
-    }
-
-    fn status(&mut self) -> Result<()> {
-        self.index_iter.status()?;
-        if let Some(di) = &mut self.data_block_iter {
-            di.status()?
-        };
-        if let Some(e) = self.err.take() {
-            Err(e)?
-        }
-        Ok(())
-    }
+/// Create a new `ConcatenateIterator` as table iterator
+pub fn new_table_iterator(table: Rc<Table>, options: Rc<ReadOptions>) -> Box<dyn Iterator> {
+    let cmp = table.options.comparator.clone();
+    let index_iter = table.index_block.iter(cmp);
+    let factory = Box::new(TableIterFactory { table });
+    Box::new(ConcatenateIterator::new(options, index_iter, factory))
 }
 
 /// Temporarily stores the contents of the table it is

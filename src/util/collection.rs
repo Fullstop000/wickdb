@@ -1,6 +1,7 @@
 use std::rc::{Weak, Rc};
 use std::cell::RefCell;
 
+pub type NodePtr<T> = Rc<RefCell<Node<T>>>;
 #[derive(Debug)]
 pub struct Node<T> {
     pub data: T,

@@ -23,6 +23,7 @@ use std::io;
 use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// `Storage` is a namespace for files.
 ///
@@ -122,3 +123,16 @@ pub trait File {
 }
 
 pub type FilePtr = Rc<RefCell<dyn File>>;
+
+/// Write given `data` into underlying `env` file and flush file iff `should_sync` is true
+pub fn do_write_string_to_file(env: Arc<dyn Storage>, data: String, file_name: &str, should_sync: bool ) -> Result<()> {
+    let mut file = env.create(file_name)?;
+    file.f_write(data.as_bytes())?;
+    if should_sync {
+        file.f_flush()?;
+    }
+    if file.f_close().is_err() {
+        env.remove(file_name)?;
+    }
+    Ok(())
+}
