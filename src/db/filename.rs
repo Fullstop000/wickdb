@@ -18,6 +18,9 @@
 use std::path::{Path, MAIN_SEPARATOR};
 
 use std::ffi::OsStr;
+use crate::storage::Storage;
+use std::sync::Arc;
+use crate::status::Result;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum FileType {
@@ -31,6 +34,8 @@ pub enum FileType {
     Manifest,
     /// `CURRENT` file saves the current used manifest filename.
     Current,
+    /// `*.dbtmp` file
+    Temp,
     /// `LOG` file records runtime logs. If there is a `LOG` file exists when the db starts,
     /// the old `LOG` file will be renamed to `LOG.old` and a new `LOG` file will be created.
     InfoLog,
@@ -46,6 +51,7 @@ pub fn generate_filename(dirname: &str, filetype: FileType, seq: u64) -> String 
         FileType::Table => format!("{}{}{:06}.sst", dirname, MAIN_SEPARATOR, seq),
         FileType::Manifest => format!("{}{}MANIFEST-{:06}", dirname, MAIN_SEPARATOR, seq),
         FileType::Current => format!("{}{}CURRENT", dirname, MAIN_SEPARATOR),
+        FileType::Temp => format!("{}{}{:06}.dbtmp", dirname, MAIN_SEPARATOR, seq),
         FileType::InfoLog => format!("{}{}LOG", dirname, MAIN_SEPARATOR),
         FileType::OldInfoLog => format!("{}{}LOG.old", dirname, MAIN_SEPARATOR),
     }
@@ -88,6 +94,9 @@ pub fn parse_filename(filename: &str) -> Option<(FileType, u64)> {
                     Some("sst") => {
                         return Some((FileType::Table, seq));
                     }
+                    Some("dbtmp") => {
+                        return Some((FileType::Temp, seq));
+                    }
                     _ => {
                         return None;
                     }
@@ -112,6 +121,7 @@ mod tests {
             (FileType::Table, 123, "test/000123.sst"),
             (FileType::Manifest, 9, "test/MANIFEST-000009"),
             (FileType::Current, 1, "test/CURRENT"),
+            (FileType::Temp, 100, "test/000100.dbtmp"),
             (FileType::InfoLog, 1, "test/LOG"),
             (FileType::OldInfoLog, 1, "test/LOG.old"),
         ];
@@ -128,6 +138,7 @@ mod tests {
             ("a/b/c/LOCK", Some((FileType::Lock, 0))),
             ("a/b/c/010666.sst", Some((FileType::Table, 10666))),
             ("a/b/c/MANIFEST-000009", Some((FileType::Manifest, 9))),
+            ("a/b/c/000123.dbtmp", Some((FileType::Temp, 123))),
             ("a/b/c/CURRENT", Some((FileType::Current, 0))),
             ("a/b/c/LOG", Some((FileType::InfoLog, 0))),
             ("a/b/c/LOG.old", Some((FileType::OldInfoLog, 0))),

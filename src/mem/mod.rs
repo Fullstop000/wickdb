@@ -24,13 +24,14 @@ use crate::util::status::{Result, WickErr};
 use std::rc::Rc;
 use crate::util::comparator::Comparator;
 use crate::mem::skiplist::{Skiplist, SkiplistIterator};
-use crate::util::varint::VarintU32;
+use crate::util::varint::{VarintU32, MAX_VARINT_LEN_U32};
 use crate::util::slice::Slice;
 use crate::mem::arena::BlockArena;
 use crate::util::coding::{put_fixed_64, decode_fixed_64};
 use std::slice;
 use std::cmp::Ordering;
 use crate::util::status::Status;
+use std::sync::Arc;
 
 pub trait MemoryTable {
 
@@ -68,16 +69,16 @@ pub trait MemoryTable {
     ///
     fn add(&mut self, seq_number: u64, val_type: ValueType, key: &[u8], value: &[u8]);
 
-    /// If memtable contains a value for key, returns it .
-    /// If memtable contains a deletion for key, returns `NotFound` .
+    /// If memtable contains a value for key, returns it in `Some(Ok())`.
+    /// If memtable contains a deletion for key, returns `Some(Err(Status::NotFound))` .
     /// If memtable does not contain the key, return `None`
-    fn get(&self, key: &LookupKey) -> Option<Result<Vec<u8>>>;
+    fn get(&self, key: &LookupKey) -> Option<Result<Slice>>;
 }
 
 // KeyComparator is a wrapper for InternalKeyComparator. It will convert the input mem key
 // to the internal key before comparing.
 struct KeyComparator {
-    cmp: InternalKeyComparator,
+    cmp: Arc<InternalKeyComparator>,
 }
 
 impl Comparator for KeyComparator {
@@ -103,15 +104,16 @@ impl Comparator for KeyComparator {
     }
 }
 
+/// In-memory write buffer
 pub struct MemTable {
-    cmp: Rc<KeyComparator>,
+    cmp: Arc<KeyComparator>,
     table: Skiplist
 }
 
 impl MemTable {
-    pub fn new(cmp: InternalKeyComparator) -> Self {
+    pub fn new(cmp: Arc<InternalKeyComparator>) -> Self {
         let arena = BlockArena::new();
-        let kcmp = Rc::new(KeyComparator {
+        let kcmp = Arc::new(KeyComparator {
             cmp,
         });
         let table = Skiplist::new(kcmp.clone(), Box::new(arena));
@@ -148,7 +150,7 @@ impl MemoryTable for MemTable {
         self.table.insert(Slice::from(buf.as_slice()))
     }
 
-    fn get(&self, key: &LookupKey) -> Option<Result<Vec<u8>>> {
+    fn get(&self, key: &LookupKey) -> Option<Result<Slice>> {
         let mk = key.mem_key();
         // internal key
         let mut iter = self.new_iterator();
@@ -160,9 +162,9 @@ impl MemoryTable for MemTable {
                 Ordering::Equal => {
                     let tag = decode_fixed_64(&internal_key.to_slice()[internal_key.size()-8..]);
                     match ValueType::from(tag & 0xff as u64) {
-                        ValueType::Value => return Some(Ok(Vec::from(iter.value().to_slice()))),
+                        ValueType::Value => return Some(Ok(iter.value())),
                         ValueType::Deletion => return Some(Err(WickErr::new(Status::NotFound, None))),
-                        ValueType::Unknown => return None,
+                        ValueType::Unknown => {/* fallback to None*/},
                     }
                 },
                 _ => return None,
@@ -220,12 +222,13 @@ impl<'a> Iterator for MemTableIterator<'a> {
         extract_varint_encoded_slice(self.iter.key())
     }
 
+    // returns the Slice represents the value
     fn value(&self) -> Slice {
         let internal_key = self.key();
         if internal_key.size() != 0 {
             unsafe {
                 let val_ptr = internal_key.as_ptr().add(internal_key.size());
-                match VarintU32::read(slice::from_raw_parts(val_ptr, 5)) {
+                match VarintU32::read(slice::from_raw_parts(val_ptr, MAX_VARINT_LEN_U32)) {
                     Some((len, n)) => {
                         let val_start = val_ptr.add(n);
                         return Slice::new(val_start, len as usize);

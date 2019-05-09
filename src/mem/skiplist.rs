@@ -22,11 +22,11 @@ use rand::random;
 use std::cmp::Ordering as CmpOrdering;
 use std::{mem, slice};
 use std::ptr;
-use std::rc::Rc;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::intrinsics::copy_nonoverlapping;
 use crate::iterator::Iterator;
 use crate::util::status::Result;
+use std::sync::Arc;
 
 const BRANCHING: u32 = 4;
 pub const MAX_HEIGHT: usize = 12;
@@ -86,7 +86,7 @@ pub struct Skiplist {
     // Should be handled atomically
     pub max_height: AtomicUsize,
     // comparator is used to compare the key of node
-    pub comparator: Rc<dyn Comparator>,
+    pub comparator: Arc<dyn Comparator>,
     // head node
     pub head: *mut Node,
     // arena contains all the nodes data
@@ -95,7 +95,7 @@ pub struct Skiplist {
 
 impl Skiplist {
     /// Create a new Skiplist with the given arena capacity
-    pub fn new(cmp: Rc<dyn Comparator>, mut arena: Box<dyn Arena>) -> Self {
+    pub fn new(cmp: Arc<dyn Comparator>, mut arena: Box<dyn Arena>) -> Self {
         let head = Node::new(Slice::new_empty(), MAX_HEIGHT, arena.as_mut());
         Skiplist {
             comparator: cmp,
@@ -345,7 +345,7 @@ mod tests {
 
     fn new_test_skl() -> Skiplist {
         Skiplist::new(
-            Rc::new(BytewiseComparator::new()),
+            Arc::new(BytewiseComparator::new()),
             Box::new(BlockArena::new()),
         )
     }

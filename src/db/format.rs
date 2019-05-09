@@ -122,7 +122,7 @@ impl Debug for ParsedInternalKey {
 ///              user key                  seq number        type
 /// ```
 ///
-#[derive(PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct InternalKey {
     data: Vec<u8>,
 }
@@ -134,6 +134,7 @@ impl InternalKey {
         InternalKey { data: v }
     }
 
+    #[inline]
     pub fn decoded_from(src: &[u8]) -> Self {
         // TODO: avoid copy here
         Self {
@@ -142,9 +143,7 @@ impl InternalKey {
     }
 
     #[inline]
-    pub fn into_data(self) -> Vec<u8> {
-        self.data
-    }
+    pub fn is_empty(&self) -> bool { self.data.is_empty() }
 
     #[inline]
     pub fn data(&self) -> &[u8] {
@@ -154,6 +153,12 @@ impl InternalKey {
     #[inline]
     pub fn len(&self) -> usize {
         self.data.len()
+    }
+
+    #[inline]
+    pub fn user_key(&self) -> &[u8] {
+        let length = self.data.len();
+        &self.data.as_slice()[length - 8..]
     }
 
     /// Returns a `ParsedInternalKey`
