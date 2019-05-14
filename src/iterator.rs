@@ -21,7 +21,13 @@ use crate::options::ReadOptions;
 use std::mem;
 use std::rc::Rc;
 use std::cmp::Ordering;
+use crate::util::comparator::Comparator;
+use std::sync::Arc;
+use std::collections::hash_map::Iter;
+use std::cell::RefCell;
 
+/// A common trait for iterating all the key/value entries.
+// TODO: use Relative Type or Generics instead of explicitly using Slice as the type of key and value
 pub trait Iterator {
     /// An iterator is either positioned at a key/value pair, or
     /// not valid.  This method returns true iff the iterator is valid.
@@ -362,6 +368,171 @@ impl Iterator for ConcatenateIterator {
         };
         if let Some(e) = self.err.take() {
             Err(e)?
+        }
+        Ok(())
+    }
+}
+
+#[derive(Eq, PartialEq)]
+pub enum IterDirection {
+    Forward,
+    Reverse,
+}
+/// Return an iterator that provided the union of the data in
+/// `children[0..n-1]` with the correct order.
+/// This iterator performs just like a `merge sort` to its children.
+/// The result does no duplicate suppression.  I.e., if a particular
+/// key is present in K child iterators, it will be yielded K times.
+pub struct MergingIterator {
+    cmp: Arc<dyn Comparator>,
+    direction: IterDirection,
+    children: Vec<Rc<RefCell<Box<dyn Iterator>>>>,
+    current_index: usize, // index in 'children' of current iterator
+    current: Option<Rc<RefCell<Box<dyn Iterator>>>>,
+}
+
+impl MergingIterator {
+    pub fn new(cmp: Arc<dyn Comparator>, children: Vec<Rc<RefCell<Box<dyn Iterator>>>>) -> Self {
+        let len = children.len();
+        Self {
+            cmp,
+            direction: IterDirection::Forward,
+            children,
+            current_index: len,
+            current: None,
+        }
+    }
+
+    pub fn valid_or_panic(&self) {
+        assert!(self.current.is_some())
+    }
+
+    // Find the iterator with the smallest 'key' and set it as current
+    pub fn find_smallest(&mut self) {
+        let mut smallest = None;
+        let mut index = self.current_index;
+        for (i, child) in self.children.iter().enumerate() {
+            if child.borrow().valid() {
+                if smallest.is_none() {
+                    smallest = Some(child.clone());
+                    index = i
+                } else {
+                    if self.cmp.compare(child.borrow().key().to_slice(), smallest.as_ref().unwrap().borrow().key().to_slice()) == Ordering::Less {
+                        smallest = Some(child.clone());
+                        index = i
+                    }
+                }
+            }
+        }
+        self.current_index = index;
+        self.current = smallest
+    }
+
+    // Find the iterator with the largest 'key' and set it as current
+    pub fn find_largest(&mut self) {
+        let mut largest = None;
+        let mut index = self.current_index;
+        for (i, child) in self.children.iter().enumerate() {
+            if child.borrow().valid() {
+                if largest.is_none() {
+                    largest = Some(child.clone());
+                    index = i
+                } else {
+                    if self.cmp.compare(child.borrow().key().to_slice(), largest.as_ref().unwrap().borrow().key().to_slice()) == Ordering::Greater {
+                        largest = Some(child.clone());
+                        index = i
+                    }
+                }
+            }
+        }
+        self.current_index = index;
+        self.current = largest
+    }
+}
+
+impl Iterator for MergingIterator {
+    fn valid(&self) -> bool {
+        self.current.is_some()
+    }
+
+    fn seek_to_first(&mut self) {
+        for child in self.children.iter() {
+            child.borrow_mut().seek_to_first()
+        }
+        self.find_smallest();
+        self.direction = IterDirection::Forward;
+    }
+
+    fn seek_to_last(&mut self) {
+        for child in self.children.iter() {
+            child.borrow_mut().seek_to_last()
+        }
+        self.find_largest();
+        self.direction = IterDirection::Reverse;
+    }
+
+    fn seek(&mut self, target: &Slice) {
+        for child in self.children.iter() {
+            child.borrow_mut().seek(target)
+        }
+        self.find_smallest();
+        self.direction = IterDirection::Forward;
+    }
+
+    fn next(&mut self) {
+        self.valid_or_panic();
+        if self.direction != IterDirection::Forward {
+            let key = self.key();
+            for (i, child) in self.children.iter().enumerate() {
+                if i != self.current_index {
+                    child.borrow_mut().seek(&key);
+                    if child.borrow().valid() && self.cmp.compare(key.to_slice(), child.borrow().key().to_slice()) == Ordering::Equal {
+                        child.borrow_mut().next();
+                    }
+                }
+            }
+            self.direction = IterDirection::Forward;
+        }
+        self.current.as_mut().unwrap().borrow_mut().next();
+        self.find_smallest();
+    }
+
+    fn prev(&mut self) {
+        self.valid_or_panic();
+        if self.direction != IterDirection::Reverse {
+            let key = self.key();
+            for (i, child) in self.children.iter().enumerate() {
+                if i != self.current_index {
+                    child.borrow_mut().seek(&key);
+                    if child.borrow().valid() {
+                        child.borrow_mut().prev();
+                    } else {
+                        child.borrow_mut().seek_to_last();
+                    }
+                }
+            }
+            self.direction = IterDirection::Reverse;
+        }
+        self.current.as_mut().unwrap().borrow_mut().prev();
+        self.find_largest();
+    }
+
+    fn key(&self) -> Slice {
+        self.valid_or_panic();
+        self.current.as_ref().unwrap().borrow().key()
+    }
+
+    fn value(&self) -> Slice {
+        self.valid_or_panic();
+        self.current.as_ref().unwrap().borrow().value()
+    }
+
+    fn status(&mut self) -> Result<()> {
+        for child in self.children.iter() {
+            let status =  child.borrow_mut().status();
+            if status.is_err() {
+                return status;
+            }
         }
         Ok(())
     }
