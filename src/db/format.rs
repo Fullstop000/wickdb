@@ -45,7 +45,7 @@ pub enum ValueType {
 /// and the value type is embedded as the low 8 bits in the sequence
 /// number in internal keys, we need to use the highest-numbered
 /// ValueType, not the lowest).
-const VALUE_TYPE_FOR_SEEK: ValueType = ValueType::Value;
+pub const VALUE_TYPE_FOR_SEEK: ValueType = ValueType::Value;
 
 impl From<u64> for ValueType {
     fn from(v: u64) -> Self {
@@ -187,6 +187,14 @@ impl Debug for InternalKey {
         } else {
             let s = unsafe { ::std::str::from_utf8_unchecked(self.data.as_slice())};
             write!(f, "(bad){}", s)
+        }
+    }
+}
+
+impl Default for InternalKey {
+    fn default() -> Self {
+        InternalKey {
+            data: vec![],
         }
     }
 }

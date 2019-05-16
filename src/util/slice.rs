@@ -46,10 +46,12 @@ impl Slice {
         Self { data, size }
     }
 
+    // TODO: use Slice::default() instead
     pub fn new_empty() -> Slice {
         Self::new(ptr::null(), 0)
     }
 
+    // TODO: rename to `as_slice`
     #[inline]
     pub fn to_slice(&self) -> &[u8] {
         if !self.data.is_null() {
@@ -75,6 +77,7 @@ impl Slice {
         }
     }
 
+    // TODO: rename to `is_empty`
     #[inline]
     pub fn empty(&self) -> bool {
         self.data.is_null() || self.size == 0

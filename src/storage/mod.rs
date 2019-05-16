@@ -53,7 +53,7 @@ pub trait Storage: Send + Sync {
     fn mkdir_all(&self, dir: &str) -> Result<()>;
 
     /// Returns a list of file names in given
-    fn list(&self, dir: &Path) -> Result<Vec<PathBuf>>;
+    fn list(&self, dir: &str) -> Result<Vec<PathBuf>>;
 }
 
 /// A file abstraction for IO operations

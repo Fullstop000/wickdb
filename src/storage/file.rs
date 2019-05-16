@@ -57,10 +57,11 @@ impl Storage for FileStorage {
         w_io_result!(r)
     }
 
-    fn list(&self, dir: &Path) -> Result<Vec<PathBuf>> {
-        if dir.is_dir() {
+    fn list(&self, dir: &str) -> Result<Vec<PathBuf>> {
+        let path = Path::new(dir);
+        if path.is_dir() {
             let mut v = vec![];
-            match read_dir(dir) {
+            match read_dir(path) {
                 Ok(rd) => {
                     for entry in rd {
                         match entry {

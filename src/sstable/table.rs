@@ -31,6 +31,7 @@ use std::cmp::Ordering;
 use std::mem;
 use std::rc::Rc;
 use crate::db::format::ParsedInternalKey;
+use std::sync::Arc;
 
 /// A `Table` is a sorted map from strings to strings.  Tables are
 /// immutable and persistent.  A Table may be safely accessed from
@@ -296,7 +297,7 @@ pub fn new_table_iterator(table: Rc<Table>, options: Rc<ReadOptions>) -> Box<dyn
 /// building in .sst file but does not close the file. It is up to the
 /// caller to close the file after calling `Finish()`.
 pub struct TableBuilder {
-    options: Rc<Options>,
+    options: Arc<Options>,
     cmp: Rc<dyn Comparator>,
     // underlying sst file
     file: Box<dyn File>,
@@ -324,7 +325,7 @@ pub struct TableBuilder {
 }
 
 impl TableBuilder {
-    pub fn new(file: Box<dyn File>, options: Rc<Options>) -> Self {
+    pub fn new(file: Box<dyn File>, options: Arc<Options>) -> Self {
         let opt = options.clone();
         let db_builder =
             BlockBuilder::new(options.block_restart_interval, options.comparator.clone());
@@ -426,14 +427,16 @@ impl TableBuilder {
         Ok(())
     }
 
-    /// Finishes building the table. Stops using the file passed to the
+    /// Finishes building the table and close the relative file.
+    /// if `sync` is true, the `f_flush` will be called.
+    /// Stops using the file passed to the
     /// constructor after this function returns.
     ///
     /// # Panics
     ///
     /// * The table builder is closed
     ///
-    pub fn finish(&mut self) -> Result<()> {
+    pub fn finish(&mut self, sync: bool) -> Result<()> {
         self.flush()?;
         self.assert_not_closed();
         self.closed = true;
@@ -489,6 +492,10 @@ impl TableBuilder {
         let footer = Footer::new(meta_block_handle, index_block_handle).encoded();
         self.file.f_write(footer.as_slice())?;
         self.offset += footer.len() as u64;
+        if sync {
+            self.file.f_flush()?;
+        }
+        self.file.f_close()?;
         Ok(())
     }
 

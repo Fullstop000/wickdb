@@ -59,9 +59,9 @@ pub fn generate_filename(dirname: &str, filetype: FileType, seq: u64) -> String 
 
 /// Returns a tuple that contains `FileType` and the sequence number of the file.
 /// The `filename` should be a valid path.
-pub fn parse_filename(filename: &str) -> Option<(FileType, u64)> {
+pub fn parse_filename<P: AsRef<Path>>(filename: P) -> Option<(FileType, u64)> {
     let invalid = "invalid";
-    let path = Path::new(filename);
+    let path = Path::new(filename.as_ref());
     let file_stem = path.file_stem().unwrap_or_else(|| OsStr::new(invalid));
     match file_stem.to_str() {
         Some("CURRENT") => Some((FileType::Current, 0)),
