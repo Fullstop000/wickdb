@@ -23,6 +23,8 @@ use crate::util::status::{Result, WickErr, Status};
 use crate::util::slice::Slice;
 use std::fmt::{Debug, Formatter};
 use std::mem;
+use std::sync::atomic::AtomicUsize;
+use std::rc::Rc;
 
 // Tags for the VersionEdit disk format.
 // Tag 8 is no longer used.
@@ -55,38 +57,59 @@ impl From<u32> for Tag {
     }
 }
 
+/// Represent a sst table in a level should be never
+/// altered once created.
 pub struct FileMetaData {
     // Seeks allowed until compaction
-    allowed_seeks: usize,
+    //
+    // Detail:
+    // A seek in a level n file might miss because the key range overlaps with files in level
+    // n + 1 so we just go ahead to seek the level n + 1. But the IO cost in the prev seek is a
+    // waste. If lots of seek missing to a level n file happens, it indicates that we have a sst
+    // with heavily overlapping with the sst in next level n + 1, which just tell use that the file
+    // should be compacted
+    pub allowed_seeks: AtomicUsize,
     // File size in bytes
-    file_size: u64,
+    pub file_size: u64,
     // the file number
-    number: u64,
+    pub number: u64,
     // Smallest internal key served by table
-    smallest: InternalKey,
+    pub smallest: Rc<InternalKey>,
     // Largest internal key served by table
-    largest: InternalKey,
+    pub largest: Rc<InternalKey>,
 }
 
+impl Default for FileMetaData {
+    fn default() -> Self {
+        FileMetaData {
+            allowed_seeks: AtomicUsize::new(0),
+            file_size: 0,
+            number: 0,
+            smallest: Rc::new(InternalKey::default()),
+            largest: Rc::new(InternalKey::default()),
+        }
+    }
+}
 
+/// A summary for version updating
+/// Version(old) + VersionEdit = Version(new)
 pub struct VersionEdit {
     max_levels: u8,
-
     // comparator name
     comparator_name: Option<String>,
     // file number of .log
-    log_number: Option<u64>,
-    prev_log_number: Option<u64>,
+    pub log_number: Option<u64>,
+    pub prev_log_number: Option<u64>,
     next_file_number: Option<u64>,
     // the last used sequence number
     last_sequence: Option<u64>,
 
     // (level, InternalKey)
-    compaction_pointers: Vec<(usize, InternalKey)>,
+    pub compaction_pointers: Vec<(usize, Rc<InternalKey>)>,
     // (level, file_number)
-    deleted_files: HashSet<(usize, u64)>,
+    pub deleted_files: HashSet<(usize, u64)>,
     // (level, FileMetaData)
-    new_files: Vec<(usize, FileMetaData)>,
+    pub new_files: Vec<(usize, Rc<FileMetaData>)>,
 }
 
 impl VersionEdit {
@@ -104,6 +127,8 @@ impl VersionEdit {
         }
     }
 
+    /// Reset the VersionEdit to initial state except the `compaction_pointer` for
+    #[inline]
     pub fn clear(&mut self) {
         self.comparator_name = None;
         self.log_number = None;
@@ -112,50 +137,57 @@ impl VersionEdit {
         self.last_sequence = None;
         self.deleted_files.clear();
         self.new_files.clear();
-        // compaction pointers not cleared here
+        // compaction pointers are not cleared here
     }
 
     /// Add the specified file at the specified number
-    pub fn add_file(&mut self, level: usize, file_number: u64, file_size: u64, smallest: InternalKey, largest: InternalKey) {
-        self.new_files.push((level, FileMetaData {
-            allowed_seeks: 0,
+    pub fn add_file(&mut self, level: usize, file_number: u64, file_size: u64, smallest: Rc<InternalKey>, largest: Rc<InternalKey>) {
+        self.new_files.push((level, Rc::new(FileMetaData {
+            allowed_seeks: AtomicUsize::new(0),
             file_size,
             number: file_number,
             smallest,
             largest
-        }))
+        })))
     }
 
     /// Delete the specified file from the specified level
+    #[inline]
     pub fn delete_file(&mut self, level: usize, file_number: u64) {
         self.deleted_files.insert((level, file_number));
     }
 
+    #[inline]
     pub fn add_compaction_pointer(&mut self, level: usize, key: InternalKey) {
-        self.compaction_pointers.push((level, key))
+        self.compaction_pointers.push((level, Rc::new(key)))
     }
 
-
+    #[inline]
     pub fn set_comparator_name(&mut self, name: String) {
         mem::replace::<Option<String>>(&mut self.comparator_name, Some(name));
     }
 
+    #[inline]
     pub fn set_log_number(&mut self, log_num: u64) {
         mem::replace::<Option<u64>>(&mut self.log_number, Some(log_num));
     }
 
+    #[inline]
     pub fn set_prev_log_number(&mut self, num: u64) {
         mem::replace::<Option<u64>>(&mut self.prev_log_number, Some(num));
     }
 
+    #[inline]
     pub fn set_next_file(&mut self, file_num: u64) {
         mem::replace::<Option<u64>>(&mut self.next_file_number, Some(file_num));
     }
 
+    #[inline]
     pub fn set_last_sequence(&mut self, seq: u64) {
         mem::replace::<Option<u64>>(&mut self.last_sequence, Some(seq));
     }
 
+    /// Convert into bytes and push into given `dst`
     pub fn encode_to(&self, dst: &mut Vec<u8>) {
         if let Some(cmp_name) = &self.comparator_name {
             VarintU32::put_varint(dst, Comparator as u32);
@@ -249,7 +281,7 @@ impl VersionEdit {
                         // decode compact pointer
                         if let Some(level) = get_level(self.max_levels, &mut s) {
                             if let Some(key) = get_internal_key(&mut s) {
-                                self.compaction_pointers.push((level as usize, key));
+                                self.compaction_pointers.push((level as usize, Rc::new(key)));
                                 continue;
                             }
                         }
@@ -272,13 +304,13 @@ impl VersionEdit {
                                 if let Some(file_size) = VarintU64::drain_read(&mut s) {
                                     if let Some(smallest) = get_internal_key(&mut s) {
                                         if let Some(largest) = get_internal_key(&mut s) {
-                                            self.new_files.push((level as usize, FileMetaData {
-                                                allowed_seeks: 0,
+                                            self.new_files.push((level as usize, Rc::new(FileMetaData {
+                                                allowed_seeks: AtomicUsize::new(0),
                                                 file_size,
                                                 number,
-                                                smallest,
-                                                largest
-                                            }));
+                                                smallest: Rc::new(smallest),
+                                                largest: Rc::new(largest)
+                                            })));
                                             continue;
                                         }
                                     }
@@ -378,6 +410,7 @@ mod tests {
     use crate::version::version_edit::VersionEdit;
     use crate::db::format::{InternalKey, ValueType};
     use crate::util::slice::Slice;
+    use std::rc::Rc;
 
     fn assert_encode_decode(edit: &VersionEdit) {
         let mut encoded = vec![];
@@ -396,8 +429,8 @@ mod tests {
         for i in 0..4 {
             assert_encode_decode(&edit);
             edit.add_file(3, k_big + 300 + i, k_big + 400 + i,
-                InternalKey::new(&Slice::from("foo"), k_big + 500 + i, ValueType::Value),
-                InternalKey::new(&Slice::from("zoo"), k_big + 700 + i, ValueType::Deletion));
+                Rc::new(InternalKey::new(&Slice::from("foo"), k_big + 500 + i, ValueType::Value)),
+                Rc::new(InternalKey::new(&Slice::from("zoo"), k_big + 700 + i, ValueType::Deletion)));
             edit.delete_file(4, k_big + 700 + i);
             edit.add_compaction_pointer(i as usize, InternalKey::new(&Slice::from("x"), k_big + 900 + i, ValueType::Value));
         }
