@@ -85,7 +85,7 @@ impl Comparator for KeyComparator {
     fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
         let ia = extract_varint_encoded_slice(Slice::from(a));
         let ib = extract_varint_encoded_slice(Slice::from(b));
-        self.cmp.compare(ia.to_slice(), ib.to_slice())
+        self.cmp.compare(ia.as_slice(), ib.as_slice())
     }
 
     fn name(&self) -> &str {
@@ -95,12 +95,12 @@ impl Comparator for KeyComparator {
     fn separator(&self, a: &[u8], b: &[u8]) -> Vec<u8> {
         let ia = extract_varint_encoded_slice(Slice::from(a));
         let ib = extract_varint_encoded_slice(Slice::from(b));
-        self.cmp.separator(ia.to_slice(), ib.to_slice())
+        self.cmp.separator(ia.as_slice(), ib.as_slice())
     }
 
     fn successor(&self, key: &[u8]) -> Vec<u8> {
         let ia = extract_varint_encoded_slice(Slice::from(key));
-        self.cmp.successor(ia.to_slice())
+        self.cmp.successor(ia.as_slice())
     }
 }
 
@@ -158,9 +158,9 @@ impl MemoryTable for MemTable {
         if iter.valid() {
             let internal_key = iter.key();
             // only check the user key here
-            match self.cmp.cmp.user_comparator.compare(Slice::new(internal_key.as_ptr(), internal_key.size() - 8).to_slice(), key.user_key().to_slice()) {
+            match self.cmp.cmp.user_comparator.compare(Slice::new(internal_key.as_ptr(), internal_key.size() - 8).as_slice(), key.user_key().as_slice()) {
                 Ordering::Equal => {
-                    let tag = decode_fixed_64(&internal_key.to_slice()[internal_key.size()-8..]);
+                    let tag = decode_fixed_64(&internal_key.as_slice()[internal_key.size()-8..]);
                     match ValueType::from(tag & 0xff as u64) {
                         ValueType::Value => return Some(Ok(iter.value())),
                         ValueType::Deletion => return Some(Err(WickErr::new(Status::NotFound, None))),
@@ -233,11 +233,11 @@ impl<'a> Iterator for MemTableIterator<'a> {
                         let val_start = val_ptr.add(n);
                         return Slice::new(val_start, len as usize);
                     },
-                    None => return Slice::new_empty(),
+                    None => return Slice::default(),
                 }
             }
         }
-        Slice::new_empty()
+        Slice::default()
     }
 
     fn status(&mut self) -> Result<()> {
@@ -249,15 +249,15 @@ impl<'a> Iterator for MemTableIterator<'a> {
 fn encode_key(buf: &mut Vec<u8>, target: &Slice) {
     buf.clear();
     VarintU32::put_varint(buf, target.size() as u32);
-    buf.extend_from_slice(target.to_slice());
+    buf.extend_from_slice(target.as_slice());
 }
 
 // Decodes the length (varint u32) from the first of the give slice and
 // returns a new slice points to the data according to the extracted length
 fn extract_varint_encoded_slice(origin: Slice) -> Slice {
-    match VarintU32::read(origin.to_slice()) {
-        Some((len, n)) => Slice::from(&origin.to_slice()[n..len as usize + n]),
-        None => Slice::new_empty(),
+    match VarintU32::read(origin.as_slice()) {
+        Some((len, n)) => Slice::from(&origin.as_slice()[n..len as usize + n]),
+        None => Slice::default(),
     }
 }
 

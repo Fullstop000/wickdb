@@ -237,7 +237,7 @@ impl VersionEdit {
         self.clear();
         let mut msg = String::new();
         let mut s = Slice::from(src);
-        while !s.empty() {
+        while !s.is_empty() {
             // decode tag
             if let Some(tag) = VarintU32::drain_read(&mut s) {
                 match Tag::from(tag) {
@@ -388,7 +388,7 @@ impl Debug for VersionEdit {
 
 fn get_internal_key(mut src: &mut Slice) -> Option<InternalKey> {
     if let Some(s) = VarintU32::get_varint_prefixed_slice(&mut src) {
-        return Some(InternalKey::decoded_from(s.to_slice()));
+        return Some(InternalKey::decoded_from(s.as_slice()));
     }
     None
 }

@@ -129,7 +129,7 @@ impl WriteBatch {
         }
         let mut s = Slice::from(&self.contents.as_slice()[HEADER_SIZE..]);
         let mut found = 0;
-        while !s.empty() {
+        while !s.is_empty() {
             found += 1;
             let tag = s[0];
             s.remove_prefix(1);
@@ -137,7 +137,7 @@ impl WriteBatch {
                 ValueType::Value => {
                     if let Some(key) = VarintU32::get_varint_prefixed_slice(&mut s) {
                         if let Some(value) = VarintU32::get_varint_prefixed_slice(&mut s) {
-                            handler.put(key.to_slice(), value.to_slice());
+                            handler.put(key.as_slice(), value.as_slice());
                             continue;
                         }
                     }
@@ -145,7 +145,7 @@ impl WriteBatch {
                 }
                 ValueType::Deletion => {
                     if let Some(key) = VarintU32::get_varint_prefixed_slice(&mut s) {
-                        handler.delete(key.to_slice());
+                        handler.delete(key.as_slice());
                         continue;
                     }
                     return Err(WickErr::new(Status::Corruption, Some("[batch] bad WriteBatch delete")))

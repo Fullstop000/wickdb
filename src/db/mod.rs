@@ -157,7 +157,7 @@ impl DBImpl {
             Some(snapshot) => snapshot.sequence(),
             None => self.versions.get_last_sequence(),
         };
-        let lookup_key = LookupKey::new(key.to_slice(), snapshot);
+        let lookup_key = LookupKey::new(key.as_slice(), snapshot);
         // search the memtable
         if let Some(result) = self.mem.get(&lookup_key) {
             match result {
@@ -428,7 +428,7 @@ impl DBImpl {
 
         // the current user key to be compacted
 
-        let mut current_ukey = Slice::new_empty();
+        let mut current_ukey = Slice::default();
         let mut has_current_ukey = false;
         let mut last_sequence_for_key = u64::max_value();
 
@@ -455,7 +455,7 @@ impl DBImpl {
             let mut drop = false;
             match ParsedInternalKey::decode_from(ikey.clone()) {
                 Some(key) => {
-                    if !has_current_ukey || ucmp.compare(key.user_key.to_slice(), current_ukey.to_slice()) != CmpOrdering::Equal {
+                    if !has_current_ukey || ucmp.compare(key.user_key.as_slice(), current_ukey.as_slice()) != CmpOrdering::Equal {
                         // First occurrence of this user key
                         current_ukey = key.user_key.clone();
                         has_current_ukey = true;
@@ -489,11 +489,11 @@ impl DBImpl {
                         // TODO: InternalKey::decoded_from adds extra cost of copying
                         if c.builder.as_ref().unwrap().num_entries() == 0 {
                             // We have a brand new builder so use current key as smallest
-                            c.outputs[last].smallest = Rc::new(InternalKey::decoded_from(ikey.to_slice()));
+                            c.outputs[last].smallest = Rc::new(InternalKey::decoded_from(ikey.as_slice()));
                         }
                         // Keep updating the largest
-                        c.outputs[last].largest = Rc::new(InternalKey::decoded_from(ikey.to_slice()));
-                        c.builder.as_mut().unwrap().add(ikey.to_slice(), input_iter.value().to_slice()).is_ok();
+                        c.outputs[last].largest = Rc::new(InternalKey::decoded_from(ikey.as_slice()));
+                        c.builder.as_mut().unwrap().add(ikey.as_slice(), input_iter.value().as_slice()).is_ok();
                         let builder = c.builder.as_ref().unwrap();
                         // Rotate a new output file if the current one is big enough
                         if builder.file_size() >= self.options.max_file_size {
@@ -505,7 +505,7 @@ impl DBImpl {
                     }
                 }
                 None => {
-                    current_ukey = Slice::new_empty();
+                    current_ukey = Slice::default();
                     has_current_ukey = false;
                     last_sequence_for_key = u64::max_value();
                 }
@@ -595,12 +595,12 @@ impl DBImpl {
         if iter.valid() {
             let file = self.env.create(file_name.as_str())?;
             let mut builder = TableBuilder::new(file, self.options.clone());
-            let mut prev_key = Slice::new_empty();
+            let mut prev_key = Slice::default();
             let smallest_key = iter.key();
             while iter.valid() {
                 let key = iter.key();
                 let value = iter.value();
-                let s = builder.add(key.to_slice(), value.to_slice());
+                let s = builder.add(key.as_slice(), value.as_slice());
                 if s.is_err() {
                     status = s;
                     break
@@ -608,8 +608,8 @@ impl DBImpl {
                 prev_key = key;
             }
             if status.is_ok() {
-                meta.smallest = Rc::new(InternalKey::decoded_from(smallest_key.to_slice()));
-                meta.largest = Rc::new(InternalKey::decoded_from(prev_key.to_slice()));
+                meta.smallest = Rc::new(InternalKey::decoded_from(smallest_key.as_slice()));
+                meta.largest = Rc::new(InternalKey::decoded_from(prev_key.as_slice()));
                 status = builder.finish(true).and_then(|_| {
                     meta.file_size = builder.file_size();
                     // make sure that the new file is in the cache

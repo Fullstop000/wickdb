@@ -51,7 +51,7 @@ impl FilterBlockBuilder {
 
     /// Adds the given key into the builder
     pub fn add_key(&mut self, key: &Slice) {
-        let key = Vec::from(key.to_slice());
+        let key = Vec::from(key.as_slice());
         self.keys.push(key);
     }
 
@@ -180,7 +180,7 @@ mod tests {
         }
 
         fn may_contain(&self, filter: &[u8], key: &Slice) -> bool {
-            let h = hash(key.to_slice(), 1);
+            let h = hash(key.as_slice(), 1);
             let mut i = 0;
             while i + 4 <= filter.len() {
                 if h == decode_fixed_32(&filter[i..i + 4]) {

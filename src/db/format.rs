@@ -74,14 +74,14 @@ impl ParsedInternalKey {
         if size < 8 {
             return None
         }
-        let num = decode_fixed_64(&internal_key.to_slice()[size-8..]);
+        let num = decode_fixed_64(&internal_key.as_slice()[size-8..]);
         let t = ValueType::from(num & 0xff);
         if t == ValueType::Unknown {
             return None
         }
         let seq = num >> 8;
         Some(Self {
-            user_key: Slice::from(&internal_key.to_slice()[..size - 8]),
+            user_key: Slice::from(&internal_key.as_slice()[..size - 8]),
             seq,
             value_type: t,
         })
@@ -129,7 +129,7 @@ pub struct InternalKey {
 
 impl InternalKey {
     pub fn new(key: &Slice, seq: u64, t: ValueType) -> Self {
-        let mut v = Vec::from(key.to_slice());
+        let mut v = Vec::from(key.as_slice());
         put_fixed_64(&mut v, pack_seq_and_type(seq, t));
         InternalKey { data: v }
     }
@@ -316,7 +316,7 @@ impl FilterPolicy for InternalFilterPolicy {
     }
 
     fn may_contain(&self, filter: &[u8], key: &Slice) -> bool {
-        let user_key = extract_user_key(key.to_slice());
+        let user_key = extract_user_key(key.as_slice());
         self.user_policy.may_contain(filter, &user_key)
     }
 
@@ -325,7 +325,7 @@ impl FilterPolicy for InternalFilterPolicy {
         for key in keys.iter() {
             let user_key = extract_user_key(key.as_slice());
             // TODO: avoid copying here
-            user_keys.push(Vec::from(user_key.to_slice()))
+            user_keys.push(Vec::from(user_key.as_slice()))
         }
         self.user_policy.create_filter(user_keys.as_slice())
     }

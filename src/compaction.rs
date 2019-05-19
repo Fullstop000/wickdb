@@ -215,7 +215,7 @@ impl Compaction {
         // `seen_key` guarantees that we should continue checking for next `ikey`
         // no matter whether the first `ikey` overlaps with grand parents
         while self.grand_parent_index < self.grand_parents.len() &&
-            icmp.compare(ikey.to_slice(), self.grand_parents[self.grand_parent_index].largest.data()) == CmpOrdering::Greater {
+            icmp.compare(ikey.as_slice(), self.grand_parents[self.grand_parent_index].largest.data()) == CmpOrdering::Greater {
             if self.seen_key {
                 self.overlapped_bytes += self.grand_parents[self.grand_parent_index].file_size
             }
@@ -243,8 +243,8 @@ impl Compaction {
                 let files = v.value().get_level_files(level);
                 while self.level_ptrs[level] < files.len() {
                     let f = files[self.level_ptrs[level]].clone();
-                    if ucmp.compare(ukey.to_slice(), f.largest.user_key()) != CmpOrdering::Greater {
-                        if ucmp.compare(ukey.to_slice(), f.smallest.user_key()) != CmpOrdering::Less {
+                    if ucmp.compare(ukey.as_slice(), f.largest.user_key()) != CmpOrdering::Greater {
+                        if ucmp.compare(ukey.as_slice(), f.smallest.user_key()) != CmpOrdering::Less {
                             return true;
                         }
                         break
@@ -292,8 +292,8 @@ impl DerivedIterFactory for FileIterFactory {
         if value.size() != 2 * FILE_META_LENGTH {
             Ok(EmptyIterator::new_with_err( WickErr::new(Status::Corruption, Some("file reader invoked with unexpected value"))))
         } else {
-            let file_number = decode_fixed_64(value.to_slice());
-            let file_size = decode_fixed_64(&value.to_slice()[8..]);
+            let file_number = decode_fixed_64(value.as_slice());
+            let file_size = decode_fixed_64(&value.as_slice()[8..]);
             Ok(self.table_cache.borrow().new_iter(options, file_number, file_size))
         }
     }

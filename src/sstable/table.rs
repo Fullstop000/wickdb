@@ -103,7 +103,7 @@ impl Table {
                     iter.seek(&Slice::from(filter_key.as_bytes()));
                     if iter.valid() && iter.key().as_str() == filter_key.as_str() {
                         if let Ok((filter_handle, _)) =
-                            BlockHandle::decode_from(iter.value().to_slice())
+                            BlockHandle::decode_from(iter.value().as_slice())
                         {
                             if let Ok(filter_block) =
                                 read_block(t.file.as_ref(), &filter_handle, options.paranoid_checks)
@@ -176,7 +176,7 @@ impl Table {
         index_iter.seek(&Slice::from(key));
         if index_iter.valid() {
             let val = index_iter.value();
-            if let Ok((h, _)) = BlockHandle::decode_from(val.to_slice()) {
+            if let Ok((h, _)) = BlockHandle::decode_from(val.as_slice()) {
                 return h.offset;
             }
         }
@@ -204,21 +204,21 @@ impl Table {
             let handle_val = index_iter.value();
             // check the filter block
             if let Some(filter) = &self.filter_reader {
-                if let Ok((handle, _)) = BlockHandle::decode_from(handle_val.to_slice()) {
+                if let Ok((handle, _)) = BlockHandle::decode_from(handle_val.as_slice()) {
                     if !filter.key_may_match(handle.offset, &Slice::from(key)) {
                         maybe_contained = false;
                     }
                 }
             }
             if maybe_contained {
-                let (data_block_handle, _) = BlockHandle::decode_from(handle_val.to_slice())?;
+                let (data_block_handle, _) = BlockHandle::decode_from(handle_val.as_slice())?;
                 let mut block_iter = self.block_reader(data_block_handle, options)?;
                 block_iter.seek(&Slice::from(key));
                 if block_iter.valid() {
                     match ParsedInternalKey::decode_from(block_iter.value()) {
                         None => return Err(WickErr::new(Status::Corruption, None)),
                         Some(parsed_key) => {
-                            if self.options.comparator.compare(parsed_key.user_key.to_slice(), key) == Ordering::Equal {
+                            if self.options.comparator.compare(parsed_key.user_key.as_slice(), key) == Ordering::Equal {
                                 return Ok(Some(parsed_key))
                             }
                         },
@@ -237,7 +237,7 @@ pub struct TableIterFactory {
 }
 impl DerivedIterFactory for TableIterFactory {
     fn produce(&self, options: Rc<ReadOptions>, value: &Slice) -> Result<Box<Iterator>> {
-        BlockHandle::decode_from(value.to_slice())
+        BlockHandle::decode_from(value.as_slice())
             .and_then(|(handle,_)| self.table.block_reader(handle, options))
     }
 }

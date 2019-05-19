@@ -132,7 +132,7 @@ impl Version {
                 // overlap user_key and process them in order from newest to oldest because
                 // the last level-0 file always has the newest entries.
                 for f in files.iter().rev() {
-                    if ucmp.compare(ukey.to_slice(), f.largest.data()) != CmpOrdering::Greater && ucmp.compare(ukey.to_slice(), f.smallest.data()) != CmpOrdering::Less {
+                    if ucmp.compare(ukey.as_slice(), f.largest.data()) != CmpOrdering::Greater && ucmp.compare(ukey.as_slice(), f.smallest.data()) != CmpOrdering::Less {
                         files_to_seek.push(f.clone());
                     }
                     files_to_seek.sort_by(|a, b| b.number.cmp(&a.number))
@@ -144,7 +144,7 @@ impl Version {
                 } else {
                     let target = files[index].clone();
                     // if what we found is just the first file, it could still not includes the target
-                    if ucmp.compare(ukey.to_slice(), target.smallest.data()) != CmpOrdering::Less {
+                    if ucmp.compare(ukey.as_slice(), target.smallest.data()) != CmpOrdering::Less {
                         files_to_seek = vec![target];
                     }
                 }
@@ -202,7 +202,7 @@ impl Version {
         while left < right {
             let mid = left + right / 2;
             let f = &files[mid];
-            if icmp.compare(f.largest.data(), ikey.to_slice()) == CmpOrdering::Less {
+            if icmp.compare(f.largest.data(), ikey.as_slice()) == CmpOrdering::Less {
                 // Key at "mid.largest" is < "target".  Therefore all
                 // files at or before "mid" are uninteresting
                 left = mid + 1;
@@ -277,7 +277,7 @@ impl Version {
         }
         // binary search in level > 0
         let index = {
-            if !smallest_ukey.empty() {
+            if !smallest_ukey.is_empty() {
                 let smallest_ikey = InternalKey::new(smallest_ukey, u64::max_value(), VALUE_TYPE_FOR_SEEK);
                 Self::find_file(self.icmp.clone(), &self.files[level], &Slice::from(smallest_ikey.data()))
             } else {
@@ -293,11 +293,11 @@ impl Version {
     }
 
     fn key_is_after_file(&self, file: Arc<FileMetaData>, ukey: &Slice) -> bool {
-        !ukey.empty() && self.icmp.user_comparator.compare(ukey.to_slice(), file.largest.user_key()) == CmpOrdering::Greater
+        !ukey.is_empty() && self.icmp.user_comparator.compare(ukey.as_slice(), file.largest.user_key()) == CmpOrdering::Greater
     }
 
     fn key_is_before_file(&self, file: Arc<FileMetaData>, ukey: &Slice) -> bool {
-        !ukey.empty() && self.icmp.user_comparator.compare(ukey.to_slice(), file.smallest.user_key()) == CmpOrdering::Less
+        !ukey.is_empty() && self.icmp.user_comparator.compare(ukey.as_slice(), file.smallest.user_key()) == CmpOrdering::Less
     }
 
     // Return all files in `level` that overlap [begin, end]
@@ -312,17 +312,17 @@ impl Version {
         //       Consider separate this into two single functions: one for level 0, one for level > 0
         let mut result = vec![];
         let cmp = &self.icmp.user_comparator;
-        let mut user_begin = begin.map_or(Slice::new_empty(), |ik| Slice::from(ik.user_key()));
-        let mut user_end = end.map_or(Slice::new_empty(), |ik| Slice::from(ik.user_key()));
+        let mut user_begin = begin.map_or(Slice::default(), |ik| Slice::from(ik.user_key()));
+        let mut user_end = end.map_or(Slice::default(), |ik| Slice::from(ik.user_key()));
         'outer: loop {
             for file in self.files[level].iter() {
                 let file_begin = file.smallest.user_key();
                 let file_end = file.largest.user_key();
-                if !user_begin.empty() && cmp.compare(file_end, user_begin.to_slice()) == CmpOrdering::Less {
+                if !user_begin.is_empty() && cmp.compare(file_end, user_begin.as_slice()) == CmpOrdering::Less {
                    // 'file' is completely before the specified range; skip it
                     continue
                 }
-                if !user_end.empty() && cmp.compare(file_begin, user_end.to_slice()) == CmpOrdering::Greater {
+                if !user_end.is_empty() && cmp.compare(file_begin, user_end.as_slice()) == CmpOrdering::Greater {
                     // 'file' is completely after the specified range; skip it
                     continue
                 }
@@ -331,12 +331,12 @@ impl Version {
                     // Level-0 files may overlap each other.  So check if the newly
                     // added file has expanded the range.  If so, restart search to make sure that
                     // we includes all the overlapping level 0 files
-                    if !user_begin.empty() && cmp.compare(file_begin, user_begin.to_slice()) == CmpOrdering::Less {
+                    if !user_begin.is_empty() && cmp.compare(file_begin, user_begin.as_slice()) == CmpOrdering::Less {
                         user_begin = Slice::from(file_begin);
                         result.clear();
                         continue 'outer;
                     }
-                    if !user_end.empty() && cmp.compare(file_end, user_end.to_slice()) == CmpOrdering::Greater {
+                    if !user_end.is_empty() && cmp.compare(file_end, user_end.as_slice()) == CmpOrdering::Greater {
                         user_end = Slice::from(file_end);
                         result.clear();
                         continue 'outer;

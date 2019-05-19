@@ -76,7 +76,7 @@ impl TableCache {
     pub fn get(&self, options: Rc<ReadOptions>, key: &Slice, file_number: u64, file_size: u64) -> Result<Option<ParsedInternalKey>> {
         let handle = self.find_table(file_number, file_size)?;
         // every value should be valid so unwrap is safe here
-        let parsed_key = handle.borrow().get_value().unwrap().internal_get(options, key.to_slice())?;
+        let parsed_key = handle.borrow().get_value().unwrap().internal_get(options, key.as_slice())?;
         self.cache.borrow_mut().release(handle);
         Ok(parsed_key)
     }

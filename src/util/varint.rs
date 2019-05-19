@@ -87,7 +87,7 @@ macro_rules! impl_varint {
             ///
             /// NOTICE: the input Slice should be valid
             pub fn get_varint_prefixed_slice(src: &mut Slice) -> Option<Slice> {
-                let origin = src.to_slice();
+                let origin = src.as_slice();
                 match Self::read(origin) {
                     Some((len, n)) => {
                         if len as usize + n > src.size() {
@@ -130,7 +130,7 @@ macro_rules! impl_varint {
 
             /// Decodes a uint from the give slice , and advance the given slice
             pub fn drain_read(src: &mut Slice) -> Option<$uint> {
-                let origin = src.to_slice();
+                let origin = src.as_slice();
                 match <$type>::read(origin) {
                     Some((v, n)) => {
                         src.remove_prefix(n);
@@ -250,7 +250,7 @@ mod tests {
         let mut decoded = vec![];
         while s.size() > 0 {
             match VarintU64::get_varint_prefixed_slice(&mut s) {
-                Some(res) => decoded.push(Vec::from(res.to_slice())),
+                Some(res) => decoded.push(Vec::from(res.as_slice())),
                 None => break,
             }
         }

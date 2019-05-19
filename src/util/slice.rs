@@ -44,14 +44,8 @@ impl Slice {
         Self { data, size }
     }
 
-    // TODO: use Slice::default() instead
-    pub fn new_empty() -> Slice {
-        Self::new(ptr::null(), 0)
-    }
-
-    // TODO: rename to `as_slice`
     #[inline]
-    pub fn to_slice(&self) -> &[u8] {
+    pub fn as_slice(&self) -> &[u8] {
         if !self.data.is_null() {
             unsafe { slice::from_raw_parts(self.data, self.size) }
         } else {
@@ -75,9 +69,8 @@ impl Slice {
         }
     }
 
-    // TODO: rename to `is_empty`
     #[inline]
-    pub fn empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.data.is_null() || self.size == 0
     }
 
@@ -88,7 +81,7 @@ impl Slice {
 
     #[inline]
     pub fn compare(&self, other: &Slice) -> Ordering {
-        compare(self.to_slice(), other.to_slice())
+        compare(self.as_slice(), other.as_slice())
     }
 
     #[inline]
@@ -99,7 +92,13 @@ impl Slice {
 
     #[inline]
     pub fn as_str(&self) -> &str {
-        unsafe { ::std::str::from_utf8_unchecked(self.to_slice()) }
+        unsafe { ::std::str::from_utf8_unchecked(self.as_slice()) }
+    }
+}
+
+impl Default for Slice {
+    fn default() -> Self {
+        Self::new(ptr::null(), 0)
     }
 }
 
@@ -132,7 +131,7 @@ impl Index<usize> for Slice {
 
 impl Hash for Slice {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        let hash = hash(self.to_slice(), 0xbc9f1d34);
+        let hash = hash(self.as_slice(), 0xbc9f1d34);
         state.write_u32(hash);
         state.finish();
     }

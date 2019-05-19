@@ -263,7 +263,7 @@ impl Iterator for BlockIterator {
             let key_offset = region_offset + (n0 + n1 + n2) as u32;
             let key_len = (shared + not_shared) as usize;
             let mid_key = &src[key_offset as usize..key_offset as usize + key_len];
-            match self.cmp.compare(&mid_key, target.to_slice()) {
+            match self.cmp.compare(&mid_key, target.as_slice()) {
                 Ordering::Less => left = mid,
                 _ => right = mid - 1,
             }
@@ -277,7 +277,7 @@ impl Iterator for BlockIterator {
             if !self.parse_block_entry() {
                 return;
             }
-            match self.cmp.compare(self.key.as_slice(), target.to_slice()) {
+            match self.cmp.compare(self.key.as_slice(), target.as_slice()) {
                 Ordering::Less => {}
                 _ => return,
             }

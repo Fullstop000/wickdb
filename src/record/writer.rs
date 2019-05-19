@@ -50,7 +50,7 @@ impl Writer {
 
     /// Appends a slice into the underlying log file
     pub fn add_record(&mut self, s: &Slice) -> Result<()> {
-        let data = s.to_slice();
+        let data = s.as_slice();
         let mut left = s.size();
         let mut begin = true; // indicate iff the record is a First or Middle record
         while {

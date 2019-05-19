@@ -81,6 +81,8 @@ impl Node {
     }
 }
 
+/// A skiplist with an memory based arena. The skiplist
+/// should be thread safe for reading
 pub struct Skiplist {
     // current max height
     // Should be handled atomically
@@ -96,7 +98,7 @@ pub struct Skiplist {
 impl Skiplist {
     /// Create a new Skiplist with the given arena capacity
     pub fn new(cmp: Arc<dyn Comparator>, mut arena: Box<dyn Arena>) -> Self {
-        let head = Node::new(Slice::new_empty(), MAX_HEIGHT, arena.as_mut());
+        let head = Node::new(Slice::default(), MAX_HEIGHT, arena.as_mut());
         Skiplist {
             comparator: cmp,
             // init height is 1 ( ignore the height of head )
@@ -185,8 +187,8 @@ impl Skiplist {
                 let next = (*node).get_next(level);
                 if next.is_null()
                     || self.comparator.compare(
-                        &((*next).key()).to_slice(),
-                        key.to_slice(),
+                    &((*next).key()).as_slice(),
+                    key.as_slice(),
                     ) != CmpOrdering::Less
                 {
                     // next is nullptr or next.key >= key
@@ -232,7 +234,7 @@ impl Skiplist {
             true
         } else {
             let node_key = unsafe { (*n).key() };
-            match self.comparator.compare(key.to_slice(), node_key.to_slice()) {
+            match self.comparator.compare(key.as_slice(), node_key.as_slice()) {
                 CmpOrdering::Greater => false,
                 _ => true,
             }

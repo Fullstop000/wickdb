@@ -174,11 +174,11 @@ impl Iterator for EmptyIterator {
     fn prev(&mut self) {}
 
     fn key(&self) -> Slice {
-        Slice::new_empty()
+        Slice::default()
     }
 
     fn value(&self) -> Slice {
-        Slice::new_empty()
+        Slice::default()
     }
 
     fn status(&mut self) -> Result<()> {
@@ -235,7 +235,7 @@ impl ConcatenateIterator {
                 match self.factory.produce(self.options.clone(), &v) {
                     Ok(derived) => {
                         // TODO: avoid cloning here
-                        self.prev_derived_value = Vec::from(v.to_slice());
+                        self.prev_derived_value = Vec::from(v.as_slice());
                         self.set_derived(Some(derived));
                     },
                     Err(e) => {
@@ -353,12 +353,12 @@ impl Iterator for ConcatenateIterator {
 
     fn key(&self) -> Slice {
         self.valid_or_panic();
-        self.derived.as_ref().map_or(Slice::new_empty(), |di|di.key())
+        self.derived.as_ref().map_or(Slice::default(), |di|di.key())
     }
 
     fn value(&self) -> Slice {
         self.valid_or_panic();
-        self.derived.as_ref().map_or(Slice::new_empty(), |di|di.value())
+        self.derived.as_ref().map_or(Slice::default(), |di|di.value())
     }
 
     fn status(&mut self) -> Result<()> {
@@ -417,7 +417,7 @@ impl MergingIterator {
                     smallest = Some(child.clone());
                     index = i
                 } else {
-                    if self.cmp.compare(child.borrow().key().to_slice(), smallest.as_ref().unwrap().borrow().key().to_slice()) == Ordering::Less {
+                    if self.cmp.compare(child.borrow().key().as_slice(), smallest.as_ref().unwrap().borrow().key().as_slice()) == Ordering::Less {
                         smallest = Some(child.clone());
                         index = i
                     }
@@ -438,7 +438,7 @@ impl MergingIterator {
                     largest = Some(child.clone());
                     index = i
                 } else {
-                    if self.cmp.compare(child.borrow().key().to_slice(), largest.as_ref().unwrap().borrow().key().to_slice()) == Ordering::Greater {
+                    if self.cmp.compare(child.borrow().key().as_slice(), largest.as_ref().unwrap().borrow().key().as_slice()) == Ordering::Greater {
                         largest = Some(child.clone());
                         index = i
                     }
@@ -486,7 +486,7 @@ impl Iterator for MergingIterator {
             for (i, child) in self.children.iter().enumerate() {
                 if i != self.current_index {
                     child.borrow_mut().seek(&key);
-                    if child.borrow().valid() && self.cmp.compare(key.to_slice(), child.borrow().key().to_slice()) == Ordering::Equal {
+                    if child.borrow().valid() && self.cmp.compare(key.as_slice(), child.borrow().key().as_slice()) == Ordering::Equal {
                         child.borrow_mut().next();
                     }
                 }

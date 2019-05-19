@@ -64,7 +64,7 @@ impl FilterPolicy for BloomFilter {
             // Consider it a match.
             return true;
         };
-        let mut h = Self::bloom_hash(key.to_slice());
+        let mut h = Self::bloom_hash(key.as_slice());
         let delta = (h >> 17) | (h << 15); // rotate right 17 bits
         for _ in 0..k {
             let bit_pos = h % (bits as u32);
