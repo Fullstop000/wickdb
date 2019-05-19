@@ -81,9 +81,14 @@ impl TableCache {
         Ok(parsed_key)
     }
 
-    /// Return an iterator for the specified file number (the corresponding
-    /// file length must be exactly "file_size" bytes).
-    pub fn iter(&self, options: Rc<ReadOptions>, file_number: u64, file_size: u64) -> Box<dyn Iterator> {
+    /// Create an iterator for the specified `file_number` (the corresponding
+    /// file length must be exactly `file_size` bytes).
+    /// The table referenced by returning Iterator will be released after the Iterator is dropped.
+    ///
+    /// Entry format:
+    ///     key: internal key
+    ///     value: value of user key
+    pub fn new_iter(&self, options: Rc<ReadOptions>, file_number: u64, file_size: u64) -> Box<dyn Iterator> {
         match self.find_table(file_number, file_size) {
             Ok(h) => {
                 let table = h.borrow().get_value().unwrap();

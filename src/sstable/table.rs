@@ -285,7 +285,12 @@ fn block_reader(
     Ok(block.iter(options.comparator.clone()))
 }
 
-/// Create a new `ConcatenateIterator` as table iterator
+/// Create a new `ConcatenateIterator` as table iterator.
+/// This iterator is able to yield all the key/values in a `.sst` file
+///
+/// Entry format:
+///     key: internal key
+///     value: value of user key
 pub fn new_table_iterator(table: Rc<Table>, options: Rc<ReadOptions>) -> Box<dyn Iterator> {
     let cmp = table.options.comparator.clone();
     let index_iter = table.index_block.iter(cmp);
@@ -494,9 +499,17 @@ impl TableBuilder {
         self.offset += footer.len() as u64;
         if sync {
             self.file.f_flush()?;
+            self.file.f_close()?;
         }
-        self.file.f_close()?;
         Ok(())
+    }
+
+    /// Mark this builder as closed
+    #[inline]
+    pub fn close(&mut self) {
+        assert!(!self.closed, "[table builder] try to close a closed TableBuilder");
+        self.closed = true;
+        self.file.f_close().is_ok();
     }
 
     /// Returns the number of key/value added so far.

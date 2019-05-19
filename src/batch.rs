@@ -174,6 +174,11 @@ impl WriteBatch {
     pub fn sequence(&self) -> u64{
         decode_fixed_64(self.contents.as_slice())
     }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.contents.is_empty()
+    }
 }
 
 pub struct MemTableInserter {
@@ -209,10 +214,11 @@ mod tests {
     use crate::db::format::{InternalKeyComparator, ParsedInternalKey, ValueType};
     use crate::util::comparator::BytewiseComparator;
     use std::rc::Rc;
+    use std::sync::Arc;
     use std::cell::RefCell;
 
     fn print_contents(batch: &WriteBatch) -> String {
-        let mem =Rc::new(RefCell::new(MemTable::new(InternalKeyComparator::new(Box::new(BytewiseComparator::new())))));
+        let mem =Rc::new(RefCell::new(MemTable::new(Arc::new(InternalKeyComparator::new(Box::new(BytewiseComparator::new()))))));
         let result = batch.insert_into(mem.clone());
         let borrowed = mem.borrow();
         let mut iter = borrowed.new_iterator();
