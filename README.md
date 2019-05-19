@@ -6,6 +6,10 @@
 
 *This lib is in WIP and any current implementation may be unstable*
 
+### Problems
+We need a scheduling implementation for compaction and applying `WriteBatch`. This requires that `DBImpl` should
+be thread-safe otherwise we have to spilt it into several thread-safe types.
+
 ### Plan & Progress
 
 ##### [ongoing]The basic shape of LevelDB
@@ -18,12 +22,12 @@
   - [x] Batch
   - [x] Block
   - [x] Table
-  - [ ] Version
+  - [x] Version
   - [x] VersionEdit
-  - [ ] VersionSet
+  - [x] VersionSet
   - [x] Storage (aka Env)
   - [ ] DB
-- [ ] Compaction implementation
+- [x] Compaction implementation
 - [ ] Scheduling
 - [ ] Solid test cases
 - [ ] Benchmark
