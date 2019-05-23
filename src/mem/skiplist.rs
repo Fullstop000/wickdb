@@ -51,7 +51,7 @@ pub struct Node {
 
 impl Node {
     /// Allocates memory in the given arena for Node
-    pub fn new(key: Slice, height: usize, arena: &mut Arena) -> *mut Node {
+    pub fn new(key: Slice, height: usize, arena: &Arena) -> *mut Node {
         let size = mem::size_of::<Node>() + height * mem::size_of::<AtomicPtr<Node>>();
         let ptr = arena.allocate_aligned(size);
         unsafe {
@@ -110,7 +110,13 @@ impl Skiplist {
 
     /// Insert a node into the skiplist by given key.
     /// The key must be unique otherwise this method panic.
-    pub fn insert(&mut self, key: Slice) {
+    ///
+    /// # NOTICE:
+    ///
+    /// Concurrent insertion is not thread safe but concurrent reading with a
+    /// single writer is safe.
+    ///
+    pub fn insert(&self, key: Slice) {
         let mut prev = [ptr::null_mut(); MAX_HEIGHT];
         let node = self.find_greater_or_equal(&key, Some(&mut prev));
         if !node.is_null() {
@@ -132,10 +138,10 @@ impl Skiplist {
             self.max_height.store(height, Ordering::Release);
         }
         // allocate the key
-        let k = self.arena.as_mut().allocate(key.size());
+        let k = self.arena.allocate(key.size());
         unsafe { copy_nonoverlapping(key.as_ptr(), k, key.size()); }
         // allocate the node
-        let new_node = Node::new(Slice::new(k as *const u8, key.size()), height, self.arena.as_mut());
+        let new_node = Node::new(Slice::new(k as *const u8, key.size()), height, self.arena.as_ref());
         unsafe {
             for i in 1..=height {
                 (*new_node).set_next(i, (*(prev[i - 1])).get_next(i));
@@ -342,8 +348,14 @@ mod tests {
     use super::*;
     use crate::iterator::Iterator;
     use crate::util::comparator::BytewiseComparator;
-    use std::ptr;
-    use std::rc::Rc;
+    use std::{ptr, thread};
+    use std::cmp::Ordering as CmpOrdering;
+    use crate::util::coding::{decode_fixed_64, put_fixed_64};
+    use crate::util::hash::hash as do_hash;
+    use rand::Rng;
+    use rand::RngCore;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{Condvar, Mutex};
 
     fn new_test_skl() -> Skiplist {
         Skiplist::new(
@@ -389,7 +401,7 @@ mod tests {
 
     #[test]
     fn test_key_is_less_than_or_equal() {
-        let mut skl = new_test_skl();
+        let skl = new_test_skl();
         let vec = vec![1u8, 2u8, 3u8];
         let key = Slice::from(vec.as_slice());
 
@@ -405,7 +417,7 @@ mod tests {
             let node = Node::new(
                 Slice::from(node_key.as_slice()),
                 1,
-                skl.arena.as_mut(),
+                skl.arena.as_ref(),
             );
             assert_eq!(expected, skl.key_is_less_than_or_equal(&key, node))
         }
@@ -510,7 +522,7 @@ mod tests {
             "key7",
             "key9",
         ];
-        let mut skl = new_test_skl();
+        let skl = new_test_skl();
         for key in inputs.clone().drain(..) {
             skl.insert(Slice::from(key));
         }
@@ -534,7 +546,7 @@ mod tests {
     #[should_panic]
     fn test_duplicate_insert_should_panic() {
         let mut inputs = vec!["key1", "key1"];
-        let mut skl = new_test_skl();
+        let skl = new_test_skl();
         for key in inputs.drain(..) {
             skl.insert(Slice::from(key));
         }
@@ -543,7 +555,7 @@ mod tests {
     // this is a e2e test for all methods in SkiplistIterator
     #[test]
     fn test_basic() {
-        let mut skl = new_test_skl();
+        let skl = new_test_skl();
         let inputs = vec![
             "key1",
             "key11",
@@ -586,8 +598,280 @@ mod tests {
         assert_eq!("key7", skl_iterator.key().as_str());
     }
 
+    const K: usize = 4;
+
+    // Per-key generation
+    struct State {
+        generation: [AtomicUsize; K]
+    }
+
+    impl State {
+        fn new() -> Self {
+            let mut generation = [
+                AtomicUsize::new(0),
+                AtomicUsize::new(0),
+                AtomicUsize::new(0),
+                AtomicUsize::new(0),
+            ];
+            for i in 0..K {
+                generation[i] = AtomicUsize::new(0)
+            }
+            Self {
+                generation
+            }
+        }
+
+        fn set(&self, k: usize, v: usize) {
+            self.generation[k].store(v, Ordering::Release)
+        }
+
+        fn get(&self, k: usize) -> usize {
+            self.generation[k].load(Ordering::Acquire)
+        }
+    }
+
+    // Extract key
+    fn key(key: u64) -> u64 {
+        key >> 40
+    }
+
+    // Extract gen
+    fn gen(key: u64) -> u64 {
+        (key >> 8) & 0xffffffff
+    }
+
+    // Extract hash
+    fn hash(key: u64) -> u64 {
+        key & 0xff
+    }
+
+    fn hash_numbers(k: u64, g: u64) -> u64 {
+        let mut bytes = vec![];
+        put_fixed_64(&mut bytes, k);
+        put_fixed_64(&mut bytes, g);
+        do_hash(bytes.as_slice(),0) as u64
+    }
+
+    // Format of key:
+    // key | gen | hash
+    fn make_key(k: u64, g: u64) -> u64 {
+        (k << 40) | (g << 8) | (hash_numbers(k, g) & 0xff)
+    }
+
+    fn is_valid_key(k: u64) -> bool {
+        hash(k) == hash_numbers(key(k), gen(k)) & 0xff
+    }
+
+    fn random_target() -> u64 {
+        let mut rand = rand::thread_rng();
+        let r = rand.gen_range(0, 10);
+        match r {
+            0 => make_key(0, 0),
+            1 => make_key(K as u64, 0),
+            _ => make_key(rand.gen_range(0, K) as u64, 0),
+        }
+    }
+
+    struct U64Comparator {}
+    impl Comparator for U64Comparator {
+        fn compare(&self, a: &[u8], b: &[u8]) -> CmpOrdering {
+            let s1 = decode_fixed_64(a);
+            let s2 = decode_fixed_64(b);
+            s1.cmp(&s2)
+        }
+
+        fn name(&self) -> &str {
+            unimplemented!()
+        }
+
+        fn separator(&self, _a: &[u8], _b: &[u8]) -> Vec<u8> {
+            unimplemented!()
+        }
+
+        fn successor(&self, _key: &[u8]) -> Vec<u8> {
+            unimplemented!()
+        }
+    }
+
+    // We want to make sure that with a single writer and multiple
+    // concurrent readers (with no synchronization other than when a
+    // reader's iterator is created), the reader always observes all the
+    // data that was present in the skip list when the iterator was
+    // constructed.  Because insertions are happening concurrently, we may
+    // also observe new values that were inserted since the iterator was
+    // constructed, but we should never miss any values that were present
+    // at iterator construction time.
+    struct ConcurrencyTest {
+        current: State,
+        list: Skiplist,
+    }
+
+    unsafe impl Send for ConcurrencyTest {}
+    unsafe impl Sync for ConcurrencyTest {}
+
+    impl ConcurrencyTest {
+        pub fn new() -> Self {
+            let arena = BlockArena::new();
+            Self {
+                current: State::new(),
+                list: Skiplist::new(Arc::new(U64Comparator{}), Box::new(arena)),
+            }
+        }
+
+        fn write_step(&self) {
+            let k = rand::thread_rng().gen_range(0, K);
+            let g = self.current.get(k) + 1;
+            let key = make_key(k as u64, g as u64);
+            let mut bytes = vec![];
+            put_fixed_64(&mut bytes, key);
+            self.list.insert(Slice::from(&bytes));
+            self.current.set(k, g);
+        }
+
+        fn read_step(&self) {
+            // Remember the initial committed state of the skiplist.
+            let initial_state = State::new();
+            for i in 0..K {
+                initial_state.set(i, self.current.get(i));
+            }
+
+            let mut pos = random_target();
+            let mut pos_bytes = vec![];
+            put_fixed_64(&mut pos_bytes, pos);
+            let mut iter = SkiplistIterator::new(&self.list);
+            iter.seek(&Slice::from(&pos_bytes));
+            loop {
+                let current = if !iter.valid() {
+                    // Seek to end
+                    make_key(K as u64, 0)
+                } else {
+                    let s = iter.key();
+                    let k = decode_fixed_64(s.as_slice());
+                    assert!(is_valid_key(k));
+                    k
+                };
+                // Verify that everything in [pos,current) was not present in
+                // initial_state
+                while pos < current {
+                    assert!(pos <= current,  "should not go backwards. pos: {}, current: {}", pos, current);
+                    assert!(gen(pos) == 0 || gen(pos) > initial_state.get(key(pos) as usize) as u64,
+                            "key: {}; gen: {}; initgetn: {}", key(pos),gen(pos), initial_state.get(key(pos) as usize));
+                    // Advance to next key in the valid key space
+                    if key(pos) < key(current) {
+                        pos = make_key(key(pos) + 1, 0);
+                    } else {
+                        pos = make_key(key(pos), gen(pos) + 1);
+                    }
+
+                }
+                if !iter.valid() {
+                    break
+                }
+                // To next or seek to random position
+                if rand::thread_rng().next_u64() % 2 == 0 {
+                    iter.next();
+                    pos = make_key(key(pos), gen(pos) + 1);
+                } else {
+                    let new_target = random_target();
+                    if new_target > pos {
+                        pos = new_target;
+                        let mut bytes = vec![];
+                        put_fixed_64(&mut bytes, pos);
+                        iter.seek(&Slice::from(&bytes));
+                    }
+                }
+            }
+        }
+
+
+    }
+
     #[test]
-    fn test_concurrent() {
-        // TODO
+    fn test_concurrent_without_threads() {
+        let test = ConcurrencyTest::new();
+        for _ in 0..1000 {
+            test.read_step();
+            test.write_step();
+        }
+    }
+
+    struct TestState {
+        seed: usize,
+        quit_flag: AtomicBool,
+        mu: (Mutex<ReaderState>, Condvar),
+    }
+
+    impl TestState {
+        fn new(s: usize) -> Self {
+            Self {
+                seed: s,
+                quit_flag: AtomicBool::new(false),
+                mu: (Mutex::new(ReaderState::Starting), Condvar::new()),
+            }
+        }
+
+        // Wait util ReaderState reaches given `s`
+        fn wait(&self, s: ReaderState) {
+            let (mu, cv) = &self.mu;
+            let mut guard = mu.lock().unwrap();
+            while *guard != s {
+                guard = cv.wait(guard).unwrap()
+            }
+        }
+
+        // Change the ReaderState to given `s` and wake up all the
+        // threads waiting for this
+        fn change(&self, s: ReaderState) {
+            let (mu, cv) = &self.mu;
+            let mut guard = mu.lock().unwrap();
+            *guard = s;
+            cv.notify_all();
+        }
+    }
+
+    const RANDOM_SEED: usize = 301;
+
+    // Test concurrency read&write
+    fn run_concurrent(run: usize) {
+        let seed = RANDOM_SEED + run * 100;
+        for _ in 0..100 {
+            let test = Arc::new(ConcurrencyTest::new());
+            let test2 = test.clone();
+            let state = Arc::new(TestState::new(seed + 1));
+            let state2 = state.clone();
+            let read = thread::spawn(move || {
+                state.change(ReaderState::Running);
+                while !state.quit_flag.load(Ordering::Acquire) {
+                    test.read_step();
+                }
+                // Wakeup writing thread to exit
+                state.change(ReaderState::Done);
+            });
+            let write = thread::spawn(move || {
+                state2.wait(ReaderState::Running);
+                for _ in 0..1000 {
+                    test2.write_step();
+                }
+                // Break the reading loop
+                state2.quit_flag.store(true, Ordering::Release);
+                state2.wait(ReaderState::Done);
+            });
+            read.join().expect("Read thread panics");
+            write.join().expect("Write thread panics");
+        }
+    }
+
+    #[derive(Eq, PartialEq)]
+    enum ReaderState {
+        Starting,
+        Running,
+        Done,
+    }
+
+    #[test]
+    fn test_concurrency_read_write() {
+        for i in 1..=5 {
+            run_concurrent(i)
+        }
     }
 }
