@@ -37,7 +37,7 @@ use std::sync::Arc;
 /// immutable and persistent.  A Table may be safely accessed from
 /// multiple threads without external synchronization.
 pub struct Table {
-    options: Rc<Options>,
+    options: Arc<Options>,
     file: Box<dyn File>,
     cache_id: u64,
     filter_reader: Option<FilterBlockReader>,
@@ -51,7 +51,7 @@ impl Table {
     /// Attempt to open the table that is stored in bytes `[0..size)`
     /// of `file`, and read the metadata entries necessary to allow
     /// retrieving data from the table.
-    pub fn open(file: Box<dyn File>, size: u64, options: Rc<Options>) -> Result<Self> {
+    pub fn open(file: Box<dyn File>, size: u64, options: Arc<Options>) -> Result<Self> {
         if size < FOOTER_ENCODED_LENGTH as u64 {
             return Err(WickErr::new(
                 Status::Corruption,
@@ -72,7 +72,7 @@ impl Table {
         let index_block = Block::new(index_block_contents)?;
 
         let cache_id = if let Some(cache) = &options.block_cache {
-            cache.borrow_mut().new_id()
+            cache.new_id()
         } else {
             0
         };
@@ -131,9 +131,9 @@ impl Table {
             let mut cache_key_buffer = vec![0; 16];
             put_fixed_64(&mut cache_key_buffer, self.cache_id);
             put_fixed_64(&mut cache_key_buffer, data_block_handle.offset);
-            if let Some(cache_handle) = cache.borrow().look_up(&cache_key_buffer.as_slice()) {
+            if let Some(cache_handle) = cache.look_up(&cache_key_buffer.as_slice()) {
                 let b = cache_handle.get_value().unwrap().clone();
-                cache.borrow_mut().release(cache_handle);
+                cache.release(cache_handle);
                 b
             } else {
                 let data = read_block(
@@ -143,12 +143,10 @@ impl Table {
                 )?;
                 let charge = data.len();
                 let new_block = Block::new(data)?;
-                let b = Rc::new(new_block);
+                let b = Arc::new(new_block);
                 if options.fill_cache {
                     // TODO: avoid clone
-                    cache
-                        .borrow_mut()
-                        .insert(cache_key_buffer, b.clone(), charge, None);
+                    cache.insert(cache_key_buffer, b.clone(), charge, None);
                 }
                 b
             }
@@ -159,7 +157,7 @@ impl Table {
                 options.verify_checksums,
             )?;
             let b = Block::new(data)?;
-            Rc::new(b)
+            Arc::new(b)
         };
         Ok(block.iter(self.options.comparator.clone()))
     }
@@ -232,7 +230,7 @@ impl Table {
 }
 
 pub struct TableIterFactory {
-    table: Rc<Table>,
+    table: Arc<Table>,
 }
 impl DerivedIterFactory for TableIterFactory {
     fn produce(&self, options: Rc<ReadOptions>, value: &Slice) -> Result<Box<Iterator>> {
@@ -248,13 +246,13 @@ fn block_reader(
     data_block_handle: BlockHandle,
     read_options: Rc<ReadOptions>,
 ) -> Result<Box<dyn Iterator>> {
-    let block = if let Some(cache) = &options.block_cache {
+    let block = if let Some(cache) = options.block_cache.clone() {
         let mut cache_key_buffer = vec![0; 16];
         put_fixed_64(&mut cache_key_buffer, cache_id);
         put_fixed_64(&mut cache_key_buffer, data_block_handle.offset);
-        if let Some(cache_handle) = cache.borrow().look_up(&cache_key_buffer.as_slice()) {
+        if let Some(cache_handle) = cache.look_up(&cache_key_buffer.as_slice()) {
             let b = cache_handle.get_value().unwrap().clone();
-            cache.borrow_mut().release(cache_handle);
+            cache.release(cache_handle);
             b
         } else {
             let data = read_block(
@@ -264,11 +262,9 @@ fn block_reader(
             )?;
             let charge = data.len();
             let new_block = Block::new(data)?;
-            let b = Rc::new(new_block);
+            let b = Arc::new(new_block);
             if read_options.fill_cache {
-                cache
-                    .borrow_mut()
-                    .insert(cache_key_buffer, b.clone(), charge, None);
+                cache.insert(cache_key_buffer, b.clone(), charge, None);
             }
             b
         }
@@ -279,7 +275,7 @@ fn block_reader(
             read_options.verify_checksums,
         )?;
         let b = Block::new(data)?;
-        Rc::new(b)
+        Arc::new(b)
     };
     Ok(block.iter(options.comparator.clone()))
 }
@@ -290,7 +286,7 @@ fn block_reader(
 /// Entry format:
 ///     key: internal key
 ///     value: value of user key
-pub fn new_table_iterator(table: Rc<Table>, options: Rc<ReadOptions>) -> Box<dyn Iterator> {
+pub fn new_table_iterator(table: Arc<Table>, options: Rc<ReadOptions>) -> Box<dyn Iterator> {
     let cmp = table.options.comparator.clone();
     let index_iter = table.index_block.iter(cmp);
     let factory = Box::new(TableIterFactory { table });

@@ -34,14 +34,14 @@ use std::sync::Arc;
 pub struct TableCache {
     env: Arc<dyn Storage>,
     db_name: String,
-    options: Rc<Options>,
+    options: Arc<Options>,
     // the key of cache is the file number
-    cache: Rc<RefCell<dyn Cache<Rc<Table>>>>,
+    cache: Arc<dyn Cache<Arc<Table>>>,
 }
 
 impl TableCache {
-    pub fn new(db_name: String, options: Rc<Options>, size: usize) -> Self {
-        let cache = Rc::new(RefCell::new(SharedLRUCache::<Rc<Table>>::new(size)));
+    pub fn new(db_name: String, options: Arc<Options>, size: usize) -> Self {
+        let cache = Arc::new(SharedLRUCache::<Arc<Table>>::new(size));
         Self {
             env: options.env.clone(),
             db_name,
@@ -51,25 +51,25 @@ impl TableCache {
     }
 
     // Try to find the sst file from cache. If not found, try to find the file from storage and insert it into the cache
-    fn find_table(&self, file_number: u64, file_size: u64) -> Result<HandleRef<Rc<Table>>> {
+    fn find_table(&self, file_number: u64, file_size: u64) -> Result<HandleRef<Arc<Table>>> {
         let mut key = vec![];
         VarintU64::put_varint(&mut key, file_number);
-        match self.cache.borrow().look_up(key.as_slice()) {
+        match self.cache.look_up(key.as_slice()) {
             Some(handle) => Ok(handle),
             None => {
                 let filename = generate_filename(self.db_name.as_str(), FileType::Table, file_number);
                 let table_file= self.env.open(filename.as_str())?;
                 let table = Table::open(table_file, file_size, self.options.clone())?;
-                return Ok(self.cache.borrow_mut().insert(key,  Rc::new(table), 1, None));
+                return Ok(self.cache.insert(key,  Arc::new(table), 1, None));
             }
         }
     }
 
     /// Evict any entry for the specified file number
-    pub fn evict(&mut self, file_number: u64) {
+    pub fn evict(&self, file_number: u64) {
         let mut key = vec![];
         VarintU64::put_varint(&mut key, file_number);
-        self.cache.borrow_mut().erase(key.as_slice());
+        self.cache.erase(key.as_slice());
     }
 
     /// Returns the result of a seek to internal key `key` in specified file
@@ -77,7 +77,7 @@ impl TableCache {
         let handle = self.find_table(file_number, file_size)?;
         // every value should be valid so unwrap is safe here
         let parsed_key = handle.get_value().unwrap().internal_get(options, key.as_slice())?;
-        self.cache.borrow_mut().release(handle);
+        self.cache.release(handle);
         Ok(parsed_key)
     }
 
@@ -94,7 +94,7 @@ impl TableCache {
                 let table = h.get_value().unwrap();
                 let mut iter = IterWithCleanup::new(new_table_iterator(table, options));
                 let cache = self.cache.clone();
-                iter.register_task(Box::new(move || cache.borrow_mut().release(h.clone())));
+                iter.register_task(Box::new(move || cache.release(h.clone())));
                 Box::new(iter)
             }
             Err(e) => EmptyIterator::new_with_err(e)
