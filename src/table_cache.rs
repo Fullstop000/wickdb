@@ -76,7 +76,7 @@ impl TableCache {
     pub fn get(&self, options: Rc<ReadOptions>, key: &Slice, file_number: u64, file_size: u64) -> Result<Option<ParsedInternalKey>> {
         let handle = self.find_table(file_number, file_size)?;
         // every value should be valid so unwrap is safe here
-        let parsed_key = handle.borrow().get_value().unwrap().internal_get(options, key.as_slice())?;
+        let parsed_key = handle.get_value().unwrap().internal_get(options, key.as_slice())?;
         self.cache.borrow_mut().release(handle);
         Ok(parsed_key)
     }
@@ -91,7 +91,7 @@ impl TableCache {
     pub fn new_iter(&self, options: Rc<ReadOptions>, file_number: u64, file_size: u64) -> Box<dyn Iterator> {
         match self.find_table(file_number, file_size) {
             Ok(h) => {
-                let table = h.borrow().get_value().unwrap();
+                let table = h.get_value().unwrap();
                 let mut iter = IterWithCleanup::new(new_table_iterator(table, options));
                 let cache = self.cache.clone();
                 iter.register_task(Box::new(move || cache.borrow_mut().release(h.clone())));

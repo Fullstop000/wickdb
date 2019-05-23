@@ -19,8 +19,9 @@ use crate::cache::{Cache, Handle as CacheHandle, HandleRef};
 use hashbrown::hash_map::HashMap;
 use std::cell::RefCell;
 use std::ptr;
+use std::mem;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering, AtomicUsize};
 use std::sync::Mutex;
 
 use crate::util::hash::hash;
@@ -29,6 +30,9 @@ const NUM_SHARD_BITS: usize = 4;
 const NUM_SHARD: usize = 1 << NUM_SHARD_BITS;
 
 // TODO: add benchmark for lru
+
+// TODO: Use Rc::into_raw and Rc::from_raw could be extremely unsafe so we may need a
+//       better implementation.
 
 /// A LRUCache that can be accessed safely in multiple threads
 pub struct SharedLRUCache<T: 'static + Clone> {
@@ -56,7 +60,7 @@ impl<T: 'static + Clone > SharedLRUCache<T> {
 
 impl<T: 'static + Clone> Cache<T> for SharedLRUCache<T> {
     fn insert(
-        &mut self,
+        &self,
         key: Vec<u8>,
         value: T,
         charge: usize,
@@ -71,24 +75,24 @@ impl<T: 'static + Clone> Cache<T> for SharedLRUCache<T> {
         self.shards[s].look_up(key)
     }
 
-    fn release(&mut self, handle: HandleRef<T>) {
-        let p = handle.as_ptr() as *mut LRUHandle<T>;
+    fn release(&self, handle: HandleRef<T>) {
+        let p = Rc::into_raw(handle) as *mut LRUHandle<T>;
         let hash = unsafe { (*p).hash };
-        self.shards[(hash >> (32 - NUM_SHARD_BITS)) as usize].release(handle);
+        self.shards[(hash >> (32 - NUM_SHARD_BITS)) as usize].release(unsafe { Rc::from_raw(p) });
     }
 
-    fn erase(&mut self, key: &[u8]) {
+    fn erase(&self, key: &[u8]) {
         let s = self.shard(key);
         self.shards[s].erase(key)
     }
 
-    fn new_id(&mut self) -> u64 {
+    fn new_id(&self) -> u64 {
         let i = self.last_id.fetch_add(1, Ordering::SeqCst);
         i + 1
     }
 
-    fn prune(&mut self) {
-        for p in self.shards.iter_mut() {
+    fn prune(&self) {
+        for p in self.shards.iter() {
             p.prune();
         }
     }
@@ -96,7 +100,7 @@ impl<T: 'static + Clone> Cache<T> for SharedLRUCache<T> {
     fn total_charge(&self) -> usize {
         self.shards
             .iter()
-            .fold(0, |sum, lru| sum + lru.mutex.lock().unwrap().usage)
+            .fold(0, |sum, lru| sum + lru.total_charge())
     }
 }
 
@@ -203,12 +207,12 @@ pub struct LRUCache<T: Clone> {
     /// The capacity of LRU
     capacity: usize,
     mutex: Mutex<MutexFields<T>>,
+    /// The size of space which have been allocated
+    usage: AtomicUsize,
 }
 
 struct MutexFields<T: Clone>
 {
-    /// The size of space which have been allocated
-    usage: usize,
     /// Dummy head of LRU list.
     /// lru.prev is newest entry, lru.next is oldest entry.
     /// Entries have refs==1 and in_cache==true.
@@ -218,18 +222,18 @@ struct MutexFields<T: Clone>
     /// Entries are in use by clients, and have refs >= 2 and in_cache==true.
     in_use: *mut LRUHandle<T>,
 
-    table: HashMap<Vec<u8>, Rc<RefCell<LRUHandle<T>>>>,
+    table: HashMap<Vec<u8>, Rc<LRUHandle<T>>>,
 }
 
 impl<T: 'static + Clone> LRUCache<T> {
     pub fn new(cap: usize) -> Self {
         let mutex = MutexFields {
-            usage: 0,
             lru: Self::create_dummy_node(),
             in_use: Self::create_dummy_node(),
             table: HashMap::new(),
         };
         LRUCache {
+            usage: AtomicUsize::new(0),
             capacity: cap,
             mutex: Mutex::new(mutex),
         }
@@ -259,36 +263,39 @@ impl<T: 'static + Clone> LRUCache<T> {
     // Increment ref for a LRUHandle
     fn inc_ref(
         in_use: *mut LRUHandle<T>,
-        n: &Rc<RefCell<LRUHandle<T>>>,
-    ) -> Rc<RefCell<LRUHandle<T>>> {
+        n: &Rc<LRUHandle<T>>,
+    ) -> Rc<LRUHandle<T>> {
         if Rc::strong_count(n) == 1 {
-            // means the 'n' is only in the 'table' so move to the 'in_use' list
-            Self::lru_remove(n.as_ptr());
-            Self::lru_append(in_use, n.as_ptr());
+            // The strong count is 1 means the 'n' is only in the 'table' so move to the 'in_use' list
+            let p = Rc::into_raw(n.clone()) as *mut LRUHandle<T>; // incre to 2
+            Self::lru_remove(p);
+            Self::lru_append(in_use, p);
+            unsafe { Rc::from_raw(p)}
+        } else {
+            n.clone()
         }
-        // ref +1 here
-        n.clone()
     }
 
     // Decrement ref for a LRUHandle
     fn dec_ref(lru: *mut LRUHandle<T>, n: HandleRef<T>) {
-        let refs = Rc::strong_count(&n);
         // 2 = 1(the given n) + 1(in cache)
         // dec from 2 to 1 because the given n will be dropped
-        if refs == 2 {
-            let p = n.as_ptr() as *mut LRUHandle<T>;
+        if Rc::strong_count(&n) == 2 {
+            let p = Rc::into_raw(n) as *mut LRUHandle<T>;
             // move to 'lru' from 'in_use'
             Self::lru_remove(p);
             Self::lru_append(lru, p);
+            mem::drop(unsafe { Rc::from_raw(p) }); // manually drop
         }
         // refs is 1 , n is dropped so nothing left
     }
 
-    // unlink the given handle and
-    fn finish_erase(data: &mut MutexFields<T>, n: Rc<RefCell<LRUHandle<T>>>) {
-        data.usage -= n.borrow().charge;
-        Self::lru_remove(n.as_ptr());
-        Self::dec_ref(data.lru, n);
+    fn finish_erase(data: &mut MutexFields<T>, n: HandleRef<T>) {
+        let p = Rc::into_raw(n) as *mut LRUHandle<T>;
+        Self::lru_remove(p);
+        let h = unsafe { Rc::from_raw(p) };
+        mem::drop(p);
+        Self::dec_ref(data.lru, h);
     }
 
     // Create a dummy node whose 'next' and 'prev' are both itself
@@ -304,20 +311,23 @@ impl<T: 'static + Clone> LRUCache<T> {
 
 impl<T: 'static + Clone> Cache<T> for LRUCache<T> {
     fn insert(
-        &mut self,
+        &self,
         key: Vec<u8>,
         value: T,
         charge: usize,
         deleter: Option<Box<FnMut(&[u8], T)>>,
     ) -> HandleRef<T> {
-        let mut mutex_data = self.mutex.get_mut().unwrap();
+        let mut mutex_data = self.mutex.lock().unwrap();
         let handle = LRUHandle::new(key.clone().into_boxed_slice(), value, deleter, charge);
-        let r = Rc::new(RefCell::new(handle));
+        let r = Rc::new(handle);
         if self.capacity > 0 {
-            Self::lru_append(mutex_data.in_use, r.clone().as_ptr());
-            mutex_data.usage += charge;
+            let p = Rc::into_raw(r.clone()) as *mut LRUHandle<T>;
+            Self::lru_append(mutex_data.in_use, p);
+            mem::drop(unsafe { Rc::from_raw(p)});
+            self.usage.fetch_add(charge, Ordering::SeqCst);
             if let Some(old) = mutex_data.table.insert(key, r.clone()) {
-                Self::finish_erase(mutex_data, old);
+                self.usage.fetch_sub(old.charge, Ordering::SeqCst);
+                Self::finish_erase(&mut mutex_data, old);
             }
             // self and used in hashtable
             assert_eq!(
@@ -329,8 +339,8 @@ impl<T: 'static + Clone> Cache<T> for LRUCache<T> {
         }
         // evict unused lru entries
         unsafe {
-            while mutex_data.usage > self.capacity && (*mutex_data.lru).next != mutex_data.lru {
-                let old = (*mutex_data.lru).next;
+            while self.usage.load(Ordering::Acquire) > self.capacity && (*(*mutex_data).lru).next != mutex_data.lru {
+                let old = (*(&mutex_data).lru).next;
                 if let Some(n) = mutex_data.table.remove(&(*old).key[..]) {
                     assert_eq!(
                         Rc::strong_count(&n),
@@ -338,11 +348,12 @@ impl<T: 'static + Clone> Cache<T> for LRUCache<T> {
                         "[lru cache] refs is {}, expect 1 when evicted",
                         Rc::strong_count(&n)
                     );
-                    Self::finish_erase(mutex_data, n);
+                    self.usage.fetch_sub(n.charge, Ordering::SeqCst);
+                    Self::finish_erase(&mut mutex_data, n);
                 }
             }
         }
-        r.clone()
+        r
     }
 
     fn look_up(&self, key: &[u8]) -> Option<HandleRef<T>> {
@@ -357,32 +368,34 @@ impl<T: 'static + Clone> Cache<T> for LRUCache<T> {
         }
     }
 
-    fn release(&mut self, handle: HandleRef<T>) {
-        let mutex = self.mutex.get_mut().unwrap();
+    fn release(&self, handle: HandleRef<T>) {
+        let mutex = self.mutex.lock().unwrap();
         Self::dec_ref(mutex.lru, handle);
     }
 
-    fn erase(&mut self, key: &[u8]) {
-        let mutex_data = self.mutex.get_mut().unwrap();
+    fn erase(&self, key: &[u8]) {
+        let mut mutex_data = self.mutex.lock().unwrap();
         // remove the key in hashtable
         if let Some(n) = mutex_data.table.remove(key) {
-            Self::finish_erase(mutex_data, n);
+            self.usage.fetch_sub(n.charge, Ordering::SeqCst);
+            Self::finish_erase(&mut mutex_data, n);
         }
     }
 
     #[inline]
-    fn new_id(&mut self) -> u64 {
+    fn new_id(&self) -> u64 {
         0
     }
 
-    fn prune(&mut self) {
-        let data = self.mutex.get_mut().unwrap();
+    fn prune(&self) {
+        let mut data = self.mutex.lock().unwrap();
         unsafe {
             while (*data.lru).next != data.lru {
-                let h = (*data.lru).next;
+                let h = (*(&data).lru).next;
                 if let Some(v) = data.table.remove((*h).key.as_ref()) {
                     assert_eq!(Rc::strong_count(&v), 1 , "[lru cache] to prune cache, non active entry's ref should be 1, but got {}", Rc::strong_count(&v));
-                    Self::finish_erase(data, v);
+                    self.usage.fetch_sub(v.charge, Ordering::SeqCst);
+                    Self::finish_erase(&mut data, v);
                 }
             }
         }
@@ -390,7 +403,7 @@ impl<T: 'static + Clone> Cache<T> for LRUCache<T> {
 
     #[inline]
     fn total_charge(&self) -> usize {
-        self.mutex.lock().unwrap().usage
+        self.usage.load(Ordering::Acquire)
     }
 }
 
@@ -415,12 +428,12 @@ mod tests {
                 deleted_values: Rc::new(RefCell::new(vec![])),
             }
         }
-        pub fn look_up(&mut self, key: u32) -> Option<u32> {
+        pub fn look_up(&self, key: u32) -> Option<u32> {
             let mut k = vec![];
             put_fixed_32(&mut k, key);
             match self.cache.look_up(k.as_slice()) {
                 Some(h) => {
-                    let v = h.borrow().get_value().unwrap();
+                    let v = h.get_value().unwrap();
                     self.cache.release(h);
                     Some(v)
                 }
@@ -428,12 +441,12 @@ mod tests {
             }
         }
 
-        pub fn insert(&mut self, key: u32, value: u32) {
+        pub fn insert(&self, key: u32, value: u32) {
             let h = self.insert_and_return(key, value);
             self.cache.release(h);
         }
 
-        pub fn insert_with_charge(&mut self, key: u32, value: u32, charge: usize) {
+        pub fn insert_with_charge(&self, key: u32, value: u32, charge: usize) {
             let h = self.cache.insert(
                 encoded_u32(key),
                 value,
@@ -446,7 +459,7 @@ mod tests {
             self.cache.release(h)
         }
 
-        pub fn insert_and_return(&mut self, key: u32, value: u32) -> HandleRef<u32> {
+        pub fn insert_and_return(&self, key: u32, value: u32) -> HandleRef<u32> {
             self.cache.insert(
                 encoded_u32(key),
                 value,
@@ -457,7 +470,7 @@ mod tests {
                 )),
             )
         }
-        pub fn erase(&mut self, key: u32) {
+        pub fn erase(&self, key: u32) {
             let mut k = vec![];
             put_fixed_32(&mut k, key);
             self.cache.erase(k.as_slice());
@@ -472,7 +485,7 @@ mod tests {
         pub fn assert_inside_handle(&self, key: u32, want: u32) -> HandleRef<u32> {
             let encoded = encoded_u32(key);
             let h = self.cache.look_up(encoded.as_slice()).unwrap();
-            assert_eq!(want, h.borrow().get_value().unwrap());
+            assert_eq!(want, h.get_value().unwrap());
             h
         }
     }
@@ -495,7 +508,7 @@ mod tests {
 
     #[test]
     fn test_hit_and_miss() {
-        let mut cache = CacheTest::new(CACHE_SIZE);
+        let cache = CacheTest::new(CACHE_SIZE);
         assert_eq!(None, cache.look_up(100));
 
         cache.insert(100, 101);
@@ -519,7 +532,7 @@ mod tests {
 
     #[test]
     fn test_erase() {
-        let mut cache = CacheTest::new(CACHE_SIZE);
+        let cache = CacheTest::new(CACHE_SIZE);
         cache.erase(200);
         assert_eq!(0, cache.deleted_keys.borrow().len());
 
@@ -540,7 +553,7 @@ mod tests {
 
     #[test]
     fn test_entries_are_pinned() {
-        let mut cache = CacheTest::new(CACHE_SIZE);
+        let cache = CacheTest::new(CACHE_SIZE);
         cache.insert(100, 101);
         let h1 = cache.assert_inside_handle(100, 101);
 
@@ -566,7 +579,7 @@ mod tests {
 
     #[test]
     fn test_eviction_policy() {
-        let mut cache = CacheTest::new(CACHE_SIZE);
+        let cache = CacheTest::new(CACHE_SIZE);
         cache.insert(100, 101);
         cache.insert(200, 201);
         cache.insert(300, 301);
@@ -587,7 +600,7 @@ mod tests {
 
     #[test]
     fn test_prune() {
-        let mut cache = CacheTest::new(CACHE_SIZE);
+        let cache = CacheTest::new(CACHE_SIZE);
         cache.insert(1, 100);
         cache.insert(2, 200);
         assert_eq!(2, cache.cache.total_charge());
@@ -606,7 +619,7 @@ mod tests {
 
     #[test]
     fn test_use_exceeds_cache_size() {
-        let mut cache = CacheTest::new(CACHE_SIZE);
+        let cache = CacheTest::new(CACHE_SIZE);
         let mut handles = vec![];
         // overfill the cache, keeping handles on all inserted entries
         for i in 0..(CACHE_SIZE + 100) as u32 {
@@ -626,7 +639,7 @@ mod tests {
 
     #[test]
     fn test_heavy_entries() {
-        let mut cache = CacheTest::new(CACHE_SIZE);
+        let cache = CacheTest::new(CACHE_SIZE);
         let light = 1;
         let heavy = 10;
         let mut added = 0;
@@ -650,7 +663,7 @@ mod tests {
 
     #[test]
     fn test_new_id() {
-        let mut cache = CacheTest::new(0);
+        let cache = CacheTest::new(0);
         let a = cache.cache.new_id();
         let b = cache.cache.new_id();
         let c = cache.cache.new_id();
@@ -660,7 +673,7 @@ mod tests {
 
     #[test]
     fn test_zero_size_cache() {
-        let mut cache = CacheTest::new(0);
+        let cache = CacheTest::new(0);
         cache.insert(100, 101);
         assert_eq!(None, cache.look_up(100));
     }

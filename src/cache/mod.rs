@@ -53,7 +53,7 @@ pub trait Cache<T> {
     /// When the inserted entry is no longer needed, the key and
     /// value will be passed to "deleter".
     fn insert(
-        &mut self,
+        &self,
         key: Vec<u8>,
         value: T,
         charge: usize,
@@ -70,26 +70,26 @@ pub trait Cache<T> {
     /// Release a mapping returned by a previous `look_up()`.
     /// REQUIRES: handle must not have been released yet.
     /// REQUIRES: handle must have been returned by a method on *this.
-    fn release(&mut self, handle: HandleRef<T>);
+    fn release(&self, handle: HandleRef<T>);
 
     /// If the cache contains entry for key, erase it.  Note that the
     /// underlying entry will be kept around until all existing handles
     /// to it have been released.
-    fn erase(&mut self, key: &[u8]);
+    fn erase(&self, key: &[u8]);
 
     /// Return a new numeric id.  May be used by multiple clients who are
     /// sharing the same cache to partition the key space.  Typically the
     /// client will allocate a new id at startup and prepend the id to
     /// its cache keys.
-    fn new_id(&mut self) -> u64;
+    fn new_id(&self) -> u64;
 
     /// Remove all cache entries that are not actively in use. Memory-constrained
     /// applications may wish to call this method to reduce memory usage.
-    fn prune(&mut self);
+    fn prune(&self);
 
     /// Return an estimate of the combined charges of all elements stored in the
     /// cache.
     fn total_charge(&self) -> usize;
 }
 
-pub type HandleRef<T> = Rc<RefCell<dyn Handle<T>>>;
+pub type HandleRef<T> = Rc<dyn Handle<T>>;

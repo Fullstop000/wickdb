@@ -132,8 +132,7 @@ impl Table {
             put_fixed_64(&mut cache_key_buffer, self.cache_id);
             put_fixed_64(&mut cache_key_buffer, data_block_handle.offset);
             if let Some(cache_handle) = cache.borrow().look_up(&cache_key_buffer.as_slice()) {
-                // TODO: use Rc to avoid value copy ?
-                let b = cache_handle.borrow().get_value().unwrap().clone();
+                let b = cache_handle.get_value().unwrap().clone();
                 cache.borrow_mut().release(cache_handle);
                 b
             } else {
@@ -254,7 +253,7 @@ fn block_reader(
         put_fixed_64(&mut cache_key_buffer, cache_id);
         put_fixed_64(&mut cache_key_buffer, data_block_handle.offset);
         if let Some(cache_handle) = cache.borrow().look_up(&cache_key_buffer.as_slice()) {
-            let b = cache_handle.borrow().get_value().unwrap().clone();
+            let b = cache_handle.get_value().unwrap().clone();
             cache.borrow_mut().release(cache_handle);
             b
         } else {
