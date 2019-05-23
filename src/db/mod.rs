@@ -176,7 +176,7 @@ impl DBImpl {
             }
         }
         let current = self.versions.current();
-        let (value, seek_stats) = current.borrow().data.get(options, lookup_key)?;
+        let (value, seek_stats) = current.borrow().data.get(options, lookup_key, self.table_cache.clone())?;
         if current.borrow_mut().data.update_stats(seek_stats) {
             self.maybe_schedule_compaction()
         }

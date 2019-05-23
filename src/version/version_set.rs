@@ -110,7 +110,7 @@ impl VersionBuilder {
     pub fn apply_to_new(&mut self) -> Version {
         // TODO: config this to the option
         let icmp = Arc::new(InternalKeyComparator::new(Box::new(BytewiseComparator::new())));
-        let mut v = Version::new(self.base.options.clone(), icmp.clone(), self.base.table_cache.clone());
+        let mut v = Version::new(self.base.options.clone(), icmp.clone());
         for (level, (mut base_files, delta)) in self.base.files.drain(..).zip(self.levels.drain(..)).enumerate() {
             for file in base_files.drain(..) {
                 // filter the deleted files
@@ -146,7 +146,6 @@ pub struct VersionSet {
     // db path
     db_name: String,
     options: Arc<Options>,
-    table_cache: Rc<RefCell<TableCache>>,
     icmp: Arc<InternalKeyComparator>,
 
     // the next available file number
@@ -245,7 +244,7 @@ impl VersionSet {
         let mut record = vec![];
         edit.encode_to(&mut record);
 
-        let mut v = Version::new(self.options.clone(), self.icmp.clone(), self.table_cache.clone() );
+        let mut v = Version::new(self.options.clone(), self.icmp.clone());
         let mut builder = VersionBuilder::new(v);
         builder.accumulate(&edit, self);
         v = builder.apply_to_new();

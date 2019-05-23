@@ -114,6 +114,7 @@ impl WriteBatch {
         self.count = 0;
     }
 
+    /// Insert all the records in the batch into the given `MemTable`
     pub fn insert_into(&self, mem: Rc<RefCell<MemTable>>) -> Result<()> {
         let mut handler = MemTableInserter {
             seq: self.sequence(),

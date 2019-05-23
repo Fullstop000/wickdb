@@ -75,16 +75,13 @@ pub struct Version {
     // score < 1 means compaction is not strictly needed. These fields are initialized by `finalize`
     compaction_score: f32,
     compaction_level: usize,
-
-    // table cache
-    table_cache: Rc<RefCell<TableCache>>
 }
 /// A helper for representing the file has been seeked
 pub struct SeekStats {
     // the file has been seeked
-    seek_file: Option<Arc<FileMetaData>>,
+    pub seek_file: Option<Arc<FileMetaData>>,
     // the level the 'seek_file' is at
-    seek_file_level: Option<usize>,
+    pub seek_file_level: Option<usize>,
 }
 impl SeekStats {
     #[inline]
@@ -97,7 +94,7 @@ impl SeekStats {
 }
 
 impl Version {
-    pub fn new(options: Arc<Options>, icmp: Arc<InternalKeyComparator>, table_cache: Rc<RefCell<TableCache>>) -> Self {
+    pub fn new(options: Arc<Options>, icmp: Arc<InternalKeyComparator>) -> Self {
         let max_levels = options.max_levels as usize;
         let mut files = Vec::with_capacity(max_levels);
         for _ in 0..max_levels {
@@ -111,12 +108,11 @@ impl Version {
             file_to_compact_level: 0,
             compaction_score: 0f32,
             compaction_level: 0,
-            table_cache,
         }
     }
 
     /// Search the value by the given key in sstables level by level
-    pub fn get(&self, options: ReadOptions, key: LookupKey) -> Result<(Option<Slice>, SeekStats)> {
+    pub fn get(&self, options: ReadOptions, key: LookupKey, table_cache: Rc<RefCell<TableCache>>) -> Result<(Option<Slice>, SeekStats)> {
         let opt = Rc::new(options);
         let ikey = key.internal_key();
         let ukey = key.user_key();
@@ -139,7 +135,7 @@ impl Version {
                 }
             } else {
                 let index = Self::find_file(self.icmp.clone(), self.files[level].as_slice(), &ikey);
-                if index >= files.len() { // maybe '==' is enough ?
+                if index >= files.len() { // TODO: maybe '==' is enough ?
                     // we reach the end but not found a file matches
                 } else {
                     let target = files[index].clone();
@@ -153,7 +149,7 @@ impl Version {
             for file in files_to_seek.iter() {
                 seek_stats.seek_file_level = Some(level);
                 seek_stats.seek_file = Some(file.clone());
-                match self.table_cache.borrow().get(opt.clone(), &ikey, file.number, file.file_size)? {
+                match table_cache.borrow().get(opt.clone(), &ikey, file.number, file.file_size)? {
                     None => continue, // keep searching
                     Some(parsed_key) => {
                         match parsed_key.value_type {
