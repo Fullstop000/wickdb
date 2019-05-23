@@ -67,7 +67,7 @@ pub trait MemoryTable {
     ///   +---------------------------------+
     /// ```
     ///
-    fn add(&mut self, seq_number: u64, val_type: ValueType, key: &[u8], value: &[u8]);
+    fn add(&self, seq_number: u64, val_type: ValueType, key: &[u8], value: &[u8]);
 
     /// If memtable contains a value for key, returns it in `Some(Ok())`.
     /// If memtable contains a deletion for key, returns `Some(Err(Status::NotFound))` .
@@ -137,7 +137,7 @@ impl MemoryTable for MemTable {
         Box::new(iter)
     }
 
-    fn add(&mut self, seq_number: u64, val_type: ValueType, key: &[u8], value: &[u8]) {
+    fn add(&self, seq_number: u64, val_type: ValueType, key: &[u8], value: &[u8]) {
         let key_size = key.len();
         let internal_key_size = key_size + 8;
         let mut buf = vec![];
