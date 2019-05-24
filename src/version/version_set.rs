@@ -204,6 +204,14 @@ impl VersionSet {
         self.next_file_number = new;
     }
 
+    /// Increase current next file number by 1 and return previous number
+    #[inline]
+    pub fn inc_next_file_number(&mut self) -> u64 {
+        let n = self.next_file_number;
+        self.next_file_number += 1;
+        n
+    }
+
     /// Returns the current manifest number
     #[inline]
     pub fn get_manifest_number(&self) -> u64 {
@@ -270,7 +278,9 @@ impl VersionSet {
             }
         }
 
-        // TODO: in origin C++ implementation below is async style
+        // Write to current MANIFEST
+        // In origin C++ implementation, the relative part unlocks the global mutex. But we dont need
+        // to do this in wickdb since we split the mutex into several ones for more subtle controlling.
         if let Some(writer) = self.manifest_writer.as_mut() {
             match writer.add_record(&Slice::from(record.as_slice())) {
                 Ok(()) => {

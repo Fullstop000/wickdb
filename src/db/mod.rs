@@ -252,8 +252,7 @@ impl DBImpl {
             } else {
                 // there must be no prev log
                 let new_log_num = self.versions.get_next_file_number();
-                let log_file = {
-                    self.env.create(generate_filename(self.db_name.as_str(),FileType::Log, new_log_num).as_str())? };
+                let log_file = self.env.create(generate_filename(self.db_name.as_str(),FileType::Log, new_log_num).as_str())?;
                 self.versions.set_next_file_number(new_log_num + 1);
                 self.record_writer = Writer::new(log_file);
                 // rotate the mem to immutable mem
@@ -301,8 +300,7 @@ impl DBImpl {
     fn write_level0_table(&mut self, mem: &MemTable, edit: &mut VersionEdit, base: Option<NodePtr<Version>>) -> Result<()> {
         let now = SystemTime::now();
         let mut meta = FileMetaData::default();
-        meta.number = self.versions.get_next_file_number();
-        self.versions.set_next_file_number(meta.number + 1);
+        meta.number = self.versions.inc_next_file_number();
         self.pending_outputs.insert(meta.number);
         let mem_iter = mem.new_iterator();
         info!(
@@ -634,8 +632,7 @@ impl DBImpl {
     // Create new table builder and physical file for current output in Compaction
     fn open_compaction_output_file(&mut self, compact: &mut Compaction) -> Result<()> {
         assert!(compact.builder.is_none());
-        let file_number = self.versions.get_next_file_number();
-        self.versions.set_next_file_number(file_number + 1);
+        let file_number = self.versions.inc_next_file_number();
         // TODO: need lock the pending_outputs first
         self.pending_outputs.insert(file_number);
         let mut output = FileMetaData::default();
