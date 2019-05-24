@@ -35,6 +35,7 @@ use std::cmp::Ordering as CmpOrdering;
 use std::mem;
 use crate::compaction::Compaction;
 use crate::db::filename::{generate_filename, FileType};
+use std::collections::vec_deque::VecDeque;
 
 struct LevelState {
     // set of new deleted files
@@ -160,7 +161,7 @@ pub struct VersionSet {
     manifest_file_number: u64,
     manifest_writer: Option<Writer>,
 
-    versions: DoubleLinkedList<Version>,
+    versions: VecDeque<Arc<Version>>,
 
     compaction_pointer: Vec<Rc<InternalKey>>,
 }
@@ -171,7 +172,7 @@ impl VersionSet {
     #[inline]
     pub fn level_files_count(&self, level: usize) -> usize {
         assert!(level < self.options.max_levels as usize);
-        self.versions.front().unwrap().borrow().data.files[level].len()
+        self.versions.front().unwrap().files[level].len()
     }
 
     /// Returns `prev_log_number`
@@ -189,7 +190,8 @@ impl VersionSet {
     /// Whether the current version needs to be compacted
     #[inline]
     pub fn needs_compaction(&self) -> bool {
-        self.versions.front().unwrap().borrow().data.compaction_score > 1.0 || self.versions.front().unwrap().borrow().data.file_to_compact.is_some()
+        let current = self.current();
+        current.compaction_score > 1.0 || current.file_to_compact.read().unwrap().is_some()
     }
 
     /// Returns the next file number
@@ -224,9 +226,15 @@ impl VersionSet {
         self.last_sequence
     }
 
+    /// Mutate `last_sequence` by given input `new`
+    #[inline]
+    pub fn set_last_sequence(&mut self, new: u64) {
+        self.last_sequence = new
+    }
+
     /// Get the current newest version
     #[inline]
-    pub fn current(&self) -> NodePtr<Version> {
+    pub fn current(&self) -> Arc<Version> {
         self.versions.front().unwrap().clone()
     }
 
@@ -263,6 +271,9 @@ impl VersionSet {
         v = builder.apply_to_new();
         v.finalize();
 
+        // cleanup all the old versions
+        self.gc();
+
         // Initialize new manifest file if necessary by creating a temporary file that contains a snapshot of the current version.
         let mut new_manifest_file = String::new();
         if self.manifest_writer.is_none() {
@@ -298,7 +309,7 @@ impl VersionSet {
                                 }
                             }
                             // install new version
-                            self.versions.append(v);
+                            self.versions.push_front(Arc::new(v));
                             self.log_number = edit.log_number.unwrap();
                             self.prev_log_number = edit.prev_log_number.unwrap();
                         },
@@ -323,8 +334,7 @@ impl VersionSet {
     /// the specified level.  Returns `None` if there is nothing in that
     /// level that overlaps the specified range
     pub fn compact_range(&mut self, level: usize, begin: Option<Rc<InternalKey>>, end: Option<Rc<InternalKey>>) -> Option<Compaction> {
-        let current = self.current();
-        let version = &current.borrow().data;
+        let version = self.current();
         let mut overlapping_inputs =  version.get_overlapping_inputs(level, begin, end);
         if overlapping_inputs.is_empty() {
             return None
@@ -344,7 +354,7 @@ impl VersionSet {
             }
         }
         let mut c = Compaction::new(self.options.clone(), level);
-        c.input_version= Some(current.clone());
+        c.input_version= Some(version.clone());
         c.inputs[0] = overlapping_inputs;
         Some(self.setup_other_inputs(c))
     }
@@ -354,19 +364,27 @@ impl VersionSet {
     /// Otherwise returns compaction object that
     /// describes the compaction.
     pub fn pick_compaction(&mut self) -> Option<Compaction> {
-        let current = &self.current();
-        let size_compaction = current.borrow().data.compaction_score >= 1.0;
-        let seek_compaction = current.borrow().data.file_to_compact.is_some();
+        let current = self.current();
+        let size_compaction = current.compaction_score >= 1.0;
+        let mut file_to_compact = Arc::new(FileMetaData::default());
+        let mut seek_compaction = false;
+        {
+            let guard = current.file_to_compact.read().unwrap();
+            if let Some(f) = &(*guard) {
+                file_to_compact = f.clone();
+                seek_compaction = true;
+            }
+        }
         // We prefer compactions triggered by too much data in a level over
         // the compactions triggered by seeks
         let mut compaction = {
             if size_compaction {
-                let level = current.borrow().data.compaction_level;
+                let level = current.compaction_level;
                 assert!(level + 1 < self.options.max_levels as usize,
                         "[compaction] target compaction level {} should be less Lmax {} - 1", level, self.options.max_levels as usize);
                 let mut compaction = Compaction::new(self.options.clone(), level);
                 // Pick the first file that comes after compact_pointer[level]
-                for file in current.borrow().data.files[level].iter() {
+                for file in current.files[level].iter() {
                     if self.compaction_pointer[level].is_empty() ||
                         self.icmp.compare(file.largest.data(), self.compaction_pointer[level].data()) == CmpOrdering::Greater {
                         compaction.inputs[0].push(file.clone());
@@ -374,16 +392,16 @@ impl VersionSet {
                     }
                 }
                 if compaction.inputs[0].is_empty() {
-                    if let Some(file) = current.borrow().data.files[0].first() {
+                    if let Some(file) = current.files[0].first() {
                         // Wrap-around to the beginning of the key spac
                         compaction.inputs[0].push(file.clone())
                     }
                 }
                 compaction
             } else if seek_compaction {
-                let level = current.borrow().data.file_to_compact_level;
+                let level = current.file_to_compact_level.load(Ordering::Acquire);
                 let mut compaction = Compaction::new(self.options.clone(), level);
-                compaction.inputs[0].push(current.borrow().data.file_to_compact.as_ref().unwrap().clone());
+                compaction.inputs[0].push(file_to_compact);
                 compaction
             } else {
                 return None;
@@ -396,7 +414,7 @@ impl VersionSet {
             // Note that the next call will discard the file we placed in
             // inputs[0] earlier and replace it with an overlapping set
             // which will include the picked file.
-            compaction.inputs[0] = current.borrow().data.get_overlapping_inputs(compaction.level, Some(smallest), Some(largest));
+            compaction.inputs[0] = current.get_overlapping_inputs(compaction.level, Some(smallest), Some(largest));
             assert!(!compaction.inputs[0].is_empty());
         }
 
@@ -404,14 +422,13 @@ impl VersionSet {
     }
 
     /// Add all living files in all versions into the given `set`
-    pub fn add_live_files(head: NodePtr<Version>, set: &mut HashSet<u64>) {
-        for files in head.borrow().value().files.iter() {
-            for file in files.iter() {
-                set.insert(file.number);
+    pub fn add_live_files(&self, set: &mut HashSet<u64>) {
+        for version in self.versions.iter() {
+            for files in version.files.iter() {
+                for f in files.iter() {
+                    set.insert(f.number);
+                }
             }
-        }
-        if let Some(next) = head.borrow().next.as_ref() {
-            Self::add_live_files(next.clone(), set);
         }
     }
 
@@ -419,6 +436,11 @@ impl VersionSet {
     #[inline]
     pub fn total_file_size(files: &[Arc<FileMetaData>]) -> u64 {
         files.iter().fold(0, |accum, file| accum + file.file_size )
+    }
+
+    // Remove all the old versions
+    fn gc(&mut self) {
+        self.versions.retain(|v| Arc::strong_count(v) > 1)
     }
 
     // Create snapshot of current version and persistent to manifest file.
@@ -436,7 +458,7 @@ impl VersionSet {
 
         // Save files
         for level in 0..self.options.max_levels as usize {
-            for file in self.versions.front().unwrap().borrow_mut().data.files[level].iter() {
+            for file in self.current().files[level].iter() {
                 edit.add_file(level, file.number, file.file_size, file.smallest.clone(), file.largest.clone());
             }
         }
@@ -456,8 +478,7 @@ impl VersionSet {
         let current = &self.current();
         // re-calculate the range
         let (smallest,mut largest) = c.base_range(&self.icmp);
-        c.inputs[0] = current.borrow().data
-            .get_overlapping_inputs(c.level + 1, Some(smallest.clone()), Some(largest.clone()));
+        c.inputs[0] = current.get_overlapping_inputs(c.level + 1, Some(smallest.clone()), Some(largest.clone()));
         let (mut all_smallest, mut all_largest) = c.total_range(&self.icmp);
 
         // See if we can grow the number of inputs in "level" without
@@ -465,7 +486,7 @@ impl VersionSet {
         if !c.inputs[0].is_empty() {
             // re-count the L(n) inputs
             // We fill the compaction 'holes' left by `add_boundary_inputs` here
-            let mut expanded0 = current.borrow().data.get_overlapping_inputs(c.level, Some(all_smallest.clone()), Some(all_largest.clone()));
+            let mut expanded0 = current.get_overlapping_inputs(c.level, Some(all_smallest.clone()), Some(all_largest.clone()));
             // add boundary for expanded L(n) inputs
             self.add_boundary_inputs_for_compact_files(c.level, &mut expanded0);
             let expanded0_size = Self::total_file_size(expanded0.as_slice());
@@ -474,7 +495,7 @@ impl VersionSet {
             if expanded0.len() > c.inputs[0].len() && inputs1_size + expanded0_size <= self.options.expanded_compaction_byte_size_limit() {
                 let (new_smallest, new_largest) = c.base_range(&self.icmp);
                 // TODO: use a more sufficient way to checking expanding in L(n+1) ?
-                let expanded1 = current.borrow().data.get_overlapping_inputs(c.level + 1, Some(new_smallest.clone()), Some(new_largest.clone()));
+                let expanded1 = current.get_overlapping_inputs(c.level + 1, Some(new_smallest.clone()), Some(new_largest.clone()));
                 // the L(n+1) compacting files shouldn't be expanded
                 if expanded1.len() == c.inputs[1].len() {
                     let expanded1_size = Self::total_file_size(expanded1.as_slice());
@@ -498,7 +519,7 @@ impl VersionSet {
         // Compute the set of grandparent files that overlap this compaction
         // (parent == level+1; grandparent == level+2)
         if c.level + 2 < self.options.max_levels as usize {
-            c.grand_parents = current.borrow().data.get_overlapping_inputs(c.level + 2, Some(all_smallest), Some(all_largest));
+            c.grand_parents = current.get_overlapping_inputs(c.level + 2, Some(all_smallest), Some(all_largest));
         }
         // Update the place where we will do the next compaction for this level.
         // We update this immediately instead of waiting for the VersionEdit
@@ -552,7 +573,7 @@ impl VersionSet {
     fn find_smallest_boundary_file(&self, level: usize, largest_key: &InternalKey) -> Option<Arc<FileMetaData>> {
         let ucmp = &self.icmp.user_comparator;
         let current = self.current().clone();
-        let level_files = &current.borrow().data.files[level];
+        let level_files = &current.files[level];
         let mut smallest_boundary_file: Option<Arc<FileMetaData>> = None;
         for f in level_files.iter() {
             if self.icmp.compare(f.smallest.data(), largest_key.data()) == CmpOrdering::Greater

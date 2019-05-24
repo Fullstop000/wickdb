@@ -20,14 +20,14 @@ use crate::version::version_edit::FileMetaData;
 use crate::options::{ReadOptions, Options};
 use crate::db::format::{LookupKey, InternalKeyComparator, ValueType, InternalKey, VALUE_TYPE_FOR_SEEK};
 use crate::util::status::{Result, WickErr, Status};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::cmp::Ordering as CmpOrdering;
 use crate::util::slice::Slice;
 use crate::util::comparator::Comparator;
 use std::cell::RefCell;
 use crate::table_cache::TableCache;
 use std::rc::Rc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{Ordering, AtomicUsize};
 use crate::compaction::Compaction;
 use crate::iterator::Iterator;
 use crate::util::collection::NodePtr;
@@ -68,8 +68,10 @@ pub struct Version {
     files: Vec<Vec<Arc<FileMetaData>>>,
 
     // next file to compact based on seek stats
-    file_to_compact: Option<Arc<FileMetaData>>,
-    file_to_compact_level: usize,
+    // TODO: maybe use ShardLock from crossbeam instead.
+    //       See https://docs.rs/crossbeam/0.7.1/crossbeam/sync/struct.ShardedLock.html
+    file_to_compact: RwLock<Option<Arc<FileMetaData>>>,
+    file_to_compact_level: AtomicUsize,
 
     // level that should be compacted next and its compaction score
     // score < 1 means compaction is not strictly needed.
@@ -105,8 +107,8 @@ impl Version {
             options,
             icmp,
             files,
-            file_to_compact: None,
-            file_to_compact_level: 0,
+            file_to_compact: RwLock::new(None),
+            file_to_compact_level: AtomicUsize::new(0),
             compaction_score: 0f32,
             compaction_level: 0,
         }
@@ -167,12 +169,13 @@ impl Version {
 
     /// Update seek stats for a sstable file. If it runs out of `allow_seek`, 
     /// mark it as a pending compaction file and returns true.
-    pub fn update_stats(&mut self, stats: SeekStats) -> bool {
+    pub fn update_stats(&self, stats: SeekStats) -> bool {
         if let Some(f) = stats.seek_file {
             let old = f.allowed_seeks.fetch_sub(1, Ordering::SeqCst);
-            if self.file_to_compact.is_none() && old == 1 {
-                self.file_to_compact = Some(f);
-                self.file_to_compact_level = stats.seek_file_level.unwrap();
+            let mut file_to_compact = self.file_to_compact.write().unwrap();
+            if file_to_compact.is_none() && old == 1 {
+                *file_to_compact = Some(f);
+                self.file_to_compact_level.store(stats.seek_file_level.unwrap(), Ordering::Release);
                 return true
             }
         }

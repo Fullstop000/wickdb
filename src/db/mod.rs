@@ -176,8 +176,8 @@ impl DBImpl {
             }
         }
         let current = self.versions.current();
-        let (value, seek_stats) = current.borrow().data.get(options, lookup_key, self.table_cache.clone())?;
-        if current.borrow_mut().data.update_stats(seek_stats) {
+        let (value, seek_stats) = current.get(options, lookup_key, self.table_cache.clone())?;
+        if current.update_stats(seek_stats) {
             self.maybe_schedule_compaction()
         }
         Ok(value)
@@ -196,7 +196,7 @@ impl DBImpl {
             // or may not have been committed, so we cannot safely garbage collect
             return
         }
-        VersionSet::add_live_files(self.versions.current(), &mut self.pending_outputs);
+        self.versions.add_live_files(&mut self.pending_outputs);
         // ignore IO error on purpose
         if let Ok(files) = self.env.list(self.db_name.as_str()) {
             for file in files.iter() {
@@ -216,6 +216,7 @@ impl DBImpl {
                             self.table_cache.evict(number)
                         }
                         info!("Delete type={:?} #{}", file_type, number);
+                        // ignore the result
                         self.env.remove(format!("{}{}{:?}", self.db_name.as_str(), MAIN_SEPARATOR, file).as_str());
                     }
                 }
@@ -297,7 +298,7 @@ impl DBImpl {
     // Persistent given memtable into a single level file.
     // If `base` is not `None`, we might choose a proper level for the generated
     // file other we add it to the level0
-    fn write_level0_table(&mut self, mem: &MemTable, edit: &mut VersionEdit, base: Option<NodePtr<Version>>) -> Result<()> {
+    fn write_level0_table(&mut self, mem: &MemTable, edit: &mut VersionEdit, base: Option<Arc<Version>>) -> Result<()> {
         let now = SystemTime::now();
         let mut meta = FileMetaData::default();
         meta.number = self.versions.inc_next_file_number();
@@ -321,7 +322,7 @@ impl DBImpl {
             let smallest_ukey = Slice::from(meta.smallest.user_key());
             let largest_ukey = Slice::from(meta.largest.user_key());
             if let Some(v) = base {
-                level = v.borrow().data.pick_level_for_memtable_output(&smallest_ukey, &largest_ukey);
+                level = v.pick_level_for_memtable_output(&smallest_ukey, &largest_ukey);
             }
             edit.add_file(level, meta.number, meta.file_size, meta.smallest.clone(), meta.largest.clone());
         }
@@ -382,7 +383,7 @@ impl DBImpl {
                             debug!("Error in compaction: {:?}", &e);
                             self.record_bg_error(e);
                         }
-                        let current_summary = self.versions.current().borrow().data.level_summary();
+                        let current_summary = self.versions.current().level_summary();
                         info!(
                             "Moved #{} to level-{} {} bytes, current level summary: {}",
                             f.number, compaction.level + 1, f.file_size, current_summary
@@ -534,7 +535,7 @@ impl DBImpl {
             self.record_bg_error(e)
         }
 
-        let summary = self.versions.current().borrow().data.level_summary();
+        let summary = self.versions.current().level_summary();
         info!(
             "compacted to : {}", summary
         )

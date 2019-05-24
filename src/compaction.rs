@@ -56,7 +56,7 @@ pub struct Compaction {
     options: Arc<Options>,
     // Target level to be compacted
     pub level: usize,
-    pub input_version: Option<NodePtr<Version>>,
+    pub input_version: Option<Arc<Version>>,
     // Summary of the compaction result
     pub edit: VersionEdit,
     // level n and level n + 1
@@ -234,13 +234,13 @@ impl Compaction {
     /// the compaction is producing data in "level+1" for which no relative key exists
     /// in levels greater than "level+1".
     pub fn key_exist_in_deeper_level(&mut self, ukey: &Slice) -> bool {
-        let v = self.input_version.as_ref().unwrap().borrow();
-        let icmp = v.value().get_comparator().clone();
+        let v = self.input_version.as_ref().unwrap().clone();
+        let icmp = v.get_comparator().clone();
         let ucmp = icmp.user_comparator.as_ref();
         let max_levels = self.options.max_levels as usize;
         if self.level + 2 < max_levels {
             for level in self.level + 2..max_levels {
-                let files = v.value().get_level_files(level);
+                let files = v.get_level_files(level);
                 while self.level_ptrs[level] < files.len() {
                     let f = files[self.level_ptrs[level]].clone();
                     if ucmp.compare(ukey.as_slice(), f.largest.user_key()) != CmpOrdering::Greater {
