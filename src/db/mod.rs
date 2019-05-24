@@ -92,6 +92,7 @@ pub struct DBImpl {
     // the table cache
     table_cache: Arc<TableCache>,
 
+    // TODO: add mutex
     versions: VersionSet,
 
     // signal of compaction finished
@@ -106,15 +107,12 @@ pub struct DBImpl {
     log_file_num: u64,
     mem: MemTable,
     im_mem: Option<MemTable>,// iff the memtable is compacted
-    snapshots: SnapshotList,
     // Set of table files to protect from deletion because they are part of ongoing compaction
     pending_outputs: HashSet<u64>,
     // Have we encountered a background error in paranoid mode
     bg_error: RwLock<Option<WickErr>>,
     // Whether the db is closing
     is_shutting_down: AtomicBool,
-    // The compaction stats for every level
-    compaction_stats: Vec<CompactionStats>,
 
 }
 
@@ -152,6 +150,11 @@ impl BatchTask {
 }
 
 impl DBImpl {
+
+    pub fn get_snapshot(&mut self) -> Arc<Snapshot> {
+        self.versions.new_snapshot()
+    }
+
     pub fn get(&self, options: ReadOptions, key: Slice) -> Result<Option<Slice>> {
         let snapshot = match &options.snapshot {
             Some(snapshot) => snapshot.sequence(),
@@ -326,7 +329,7 @@ impl DBImpl {
             }
             edit.add_file(level, meta.number, meta.file_size, meta.smallest.clone(), meta.largest.clone());
         }
-        self.compaction_stats[level].accumulate(
+        self.versions.compaction_stats[level].accumulate(
             now.elapsed().unwrap().as_micros() as u64,
             0,
             meta.file_size,
@@ -389,6 +392,23 @@ impl DBImpl {
                             f.number, compaction.level + 1, f.file_size, current_summary
                         )
                     } else {
+                        let level = compaction.level;
+                        info!(
+                            "Compacting {}@{} + {}@{} files",
+                            compaction.inputs[CompactionInputsRelation::Source as usize].len(), level,
+                            compaction.inputs[CompactionInputsRelation::Parent as usize].len(), level + 1
+                        );
+                        {
+                            let snapshots = &mut self.versions.snapshots;
+                            // Cleanup all redundant snapshots first
+                            snapshots.gc();
+                            if snapshots.is_empty() {
+                                compaction.oldest_snapshot_alive = self.versions.get_last_sequence();
+                            } else {
+                                compaction.oldest_snapshot_alive = snapshots.oldest().sequence();
+                            }
+                        }
+                        // TODO: reactor below as scheduling an compaction work
                         self.do_compaction(&mut compaction);
                         self.cleanup_compaction(&mut compaction);
                         self.delete_obsolete_files();
@@ -408,19 +428,6 @@ impl DBImpl {
     // keep the still-in-use files
     fn do_compaction(&mut self, c: &mut Compaction) {
         let now = SystemTime::now();
-        let level = c.level;
-        info!(
-            "Compacting {}@{} + {}@{} files",
-            c.inputs[CompactionInputsRelation::Source as usize].len(), level,
-            c.inputs[CompactionInputsRelation::Parent as usize].len(), level + 1
-        );
-        if self.snapshots.is_empty() {
-            c.oldest_snapshot_alive = self.versions.get_last_sequence();
-        } else {
-            c.oldest_snapshot_alive = self.snapshots.oldest().sequence();
-        }
-
-        // TODO: reactor as scheduling an compaction work
         let mut input_iter = c.new_input_iterator(self.internal_comparator.clone(), self.table_cache.clone());
         let mut mem_compaction_duration = 0;
         input_iter.seek_to_first();
@@ -523,7 +530,7 @@ impl DBImpl {
             status = input_iter.status()
         }
         // Calculate the stats of this compaction
-        self.compaction_stats[c.level + 1].accumulate(
+        self.versions.compaction_stats[c.level + 1].accumulate(
             now.elapsed().unwrap().as_micros() as u64 - mem_compaction_duration,
             c.bytes_read(),
             c.bytes_written(),

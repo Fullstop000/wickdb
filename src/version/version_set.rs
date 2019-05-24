@@ -33,9 +33,10 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
 use std::cmp::Ordering as CmpOrdering;
 use std::mem;
-use crate::compaction::Compaction;
+use crate::compaction::{Compaction, CompactionStats};
 use crate::db::filename::{generate_filename, FileType};
 use std::collections::vec_deque::VecDeque;
+use crate::snapshot::{SnapshotList, Snapshot};
 
 struct LevelState {
     // set of new deleted files
@@ -143,6 +144,12 @@ impl VersionBuilder {
 
 /// The collection of all the Versions produced
 pub struct VersionSet {
+
+    pub snapshots: SnapshotList,
+
+    // The compaction stats for every level
+    pub compaction_stats: Vec<CompactionStats>,
+
     env: Arc<dyn Storage>,
     // db path
     db_name: String,
@@ -163,6 +170,7 @@ pub struct VersionSet {
 
     versions: VecDeque<Arc<Version>>,
 
+    // Indicates that every level's compaction progress of last compaction.
     compaction_pointer: Vec<Rc<InternalKey>>,
 }
 
@@ -236,6 +244,12 @@ impl VersionSet {
     #[inline]
     pub fn current(&self) -> Arc<Version> {
         self.versions.front().unwrap().clone()
+    }
+
+    /// Create new snapshot with `last_sequence`
+    #[inline]
+    pub fn new_snapshot(&mut self) -> Arc<Snapshot> {
+        self.snapshots.snapshot(self.last_sequence)
     }
 
 

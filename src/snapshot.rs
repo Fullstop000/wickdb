@@ -16,7 +16,7 @@
 // found in the LICENSE file.
 
 use std::collections::vec_deque::VecDeque;
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// Abstract handle to particular state of a DB.
 /// A `Snapshot` is an immutable object and can therefore be safely
@@ -40,7 +40,7 @@ impl Snapshot {
 // TODO: implement delete snapshot to avoid oom
 pub struct SnapshotList {
     // Since the Snapshot is immutable, the Rc is suitable here
-    snapshots: VecDeque<Rc<Snapshot>>,
+    snapshots: VecDeque<Arc<Snapshot>>,
 }
 
 impl SnapshotList {
@@ -56,26 +56,32 @@ impl SnapshotList {
     }
 
     #[inline]
-    pub fn oldest(&self) -> Rc<Snapshot> {
+    pub fn oldest(&self) -> Arc<Snapshot> {
         assert!(!self.is_empty());
         self.snapshots.front().unwrap().clone()
     }
 
     #[inline]
-    pub fn newest(&self) -> Rc<Snapshot> {
+    pub fn newest(&self) -> Arc<Snapshot> {
         assert!(!self.is_empty());
         self.snapshots.back().unwrap().clone()
     }
 
     /// Creates a `Snapshot` and appends it to the end of the list
-    pub fn snapshot(&mut self, seq: u64) -> Rc<Snapshot> {
+    pub fn snapshot(&mut self, seq: u64) -> Arc<Snapshot> {
         let last_seq = self.last_seq();
         assert!(seq >= last_seq, "[snapshot] the sequence number shouldn't be monotonically decreasing : [new: {}], [last: {}]", seq, last_seq);
-        let s = Rc::new(Snapshot{
+        let s = Arc::new(Snapshot{
             sequence_number: seq,
         });
         self.snapshots.push_back(s.clone());
         s
+    }
+
+    /// Remove redundant snapshots
+    #[inline]
+    pub fn gc(&mut self) {
+        self.snapshots.retain(|s|Arc::strong_count(s) > 1)
     }
 
     #[inline]
