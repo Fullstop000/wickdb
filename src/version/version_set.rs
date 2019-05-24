@@ -144,11 +144,12 @@ impl VersionBuilder {
 
 /// The collection of all the Versions produced
 pub struct VersionSet {
-
+    // Snapshots that clients might be acquiring
     pub snapshots: SnapshotList,
-
     // The compaction stats for every level
     pub compaction_stats: Vec<CompactionStats>,
+    // Set of table files to protect from deletion because they are part of ongoing compaction
+    pub pending_outputs: HashSet<u64>,
 
     env: Arc<dyn Storage>,
     // db path
@@ -435,12 +436,13 @@ impl VersionSet {
         Some(self.setup_other_inputs(compaction))
     }
 
-    /// Add all living files in all versions into the given `set`
-    pub fn add_live_files(&self, set: &mut HashSet<u64>) {
+    /// Add all living files in all versions into the `pending_outputs` to
+    /// prevent them to be deleted
+    pub fn lock_live_files(&mut self) {
         for version in self.versions.iter() {
             for files in version.files.iter() {
                 for f in files.iter() {
-                    set.insert(f.number);
+                    self.pending_outputs.insert(f.number);
                 }
             }
         }

@@ -107,8 +107,6 @@ pub struct DBImpl {
     log_file_num: u64,
     mem: MemTable,
     im_mem: Option<MemTable>,// iff the memtable is compacted
-    // Set of table files to protect from deletion because they are part of ongoing compaction
-    pending_outputs: HashSet<u64>,
     // Have we encountered a background error in paranoid mode
     bg_error: RwLock<Option<WickErr>>,
     // Whether the db is closing
@@ -199,7 +197,7 @@ impl DBImpl {
             // or may not have been committed, so we cannot safely garbage collect
             return
         }
-        self.versions.add_live_files(&mut self.pending_outputs);
+        self.versions.lock_live_files();
         // ignore IO error on purpose
         if let Ok(files) = self.env.list(self.db_name.as_str()) {
             for file in files.iter() {
@@ -208,10 +206,10 @@ impl DBImpl {
                     match file_type {
                         FileType::Log => keep = number >= self.versions.get_log_number() || number == self.versions.get_prev_log_number(),
                         FileType::Manifest => keep = number >= self.versions.get_manifest_number(),
-                        FileType::Table => keep = self.pending_outputs.contains(&number),
+                        FileType::Table => keep = self.versions.pending_outputs.contains(&number),
                         // Any temp files that are currently being written to must
                         // be recorded in pending_outputs
-                        FileType::Temp => keep = self.pending_outputs.contains(&number),
+                        FileType::Temp => keep = self.versions.pending_outputs.contains(&number),
                         _ => {},
                     }
                     if !keep {
@@ -219,7 +217,7 @@ impl DBImpl {
                             self.table_cache.evict(number)
                         }
                         info!("Delete type={:?} #{}", file_type, number);
-                        // ignore the result
+                        // ignore the IO error here
                         self.env.remove(format!("{}{}{:?}", self.db_name.as_str(), MAIN_SEPARATOR, file).as_str());
                     }
                 }
@@ -305,7 +303,7 @@ impl DBImpl {
         let now = SystemTime::now();
         let mut meta = FileMetaData::default();
         meta.number = self.versions.inc_next_file_number();
-        self.pending_outputs.insert(meta.number);
+        self.versions.pending_outputs.insert(meta.number);
         let mem_iter = mem.new_iterator();
         info!(
             "Level-0 table #{} : started",
@@ -316,7 +314,7 @@ impl DBImpl {
             "Level-0 table #{} : {} bytes [{:?}]",
             meta.number, meta.file_size, &build_result
         );
-        self.pending_outputs.remove(&meta.number);
+        self.versions.pending_outputs.remove(&meta.number);
         let mut level = 0;
 
         // Note that if file_size is zero, the file has been deleted and
@@ -554,8 +552,7 @@ impl DBImpl {
             builder.close()
         }
         for output in c.outputs.iter() {
-            // TODO: lock required
-            self.pending_outputs.remove(&output.number);
+            self.versions.pending_outputs.remove(&output.number);
         }
     }
 
@@ -642,7 +639,7 @@ impl DBImpl {
         assert!(compact.builder.is_none());
         let file_number = self.versions.inc_next_file_number();
         // TODO: need lock the pending_outputs first
-        self.pending_outputs.insert(file_number);
+        self.versions.pending_outputs.insert(file_number);
         let mut output = FileMetaData::default();
         output.number = file_number;
         let file_name = generate_filename(self.db_name.as_str(), FileType::Table, file_number);

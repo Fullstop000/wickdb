@@ -37,7 +37,6 @@ impl Snapshot {
 /// a safe double-linked circular list implementation in Rust is tough and not worth it.
 /// Although Rust provides a standard double linked list, use a array based containers are faster.
 /// See https://doc.rust-lang.org/std/collections/struct.LinkedList.html
-// TODO: implement delete snapshot to avoid oom
 pub struct SnapshotList {
     // Since the Snapshot is immutable, the Rc is suitable here
     snapshots: VecDeque<Arc<Snapshot>>,
