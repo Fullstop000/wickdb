@@ -72,7 +72,8 @@ pub struct Version {
     file_to_compact_level: usize,
 
     // level that should be compacted next and its compaction score
-    // score < 1 means compaction is not strictly needed. These fields are initialized by `finalize`
+    // score < 1 means compaction is not strictly needed.
+    // These fields are initialized by `finalize`
     compaction_score: f32,
     compaction_level: usize,
 }
@@ -236,6 +237,41 @@ impl Version {
             }
         }
         level
+    }
+
+    // Calculate the compaction score of the version
+    // The level with highest score will be marked as compaction needed.
+    pub fn finalize(&mut self) {
+        // pre-computed best level for next compaction
+        let mut best_level = 0;
+        let mut best_score = 0.0;
+        for level in 0..self.options.max_levels as usize {
+            let score = {
+                if level == 0 {
+                    // We treat level-0 specially by bounding the number of files
+                    // instead of number of bytes for two reasons:
+                    //
+                    // (1) With larger write-buffer sizes, it is nice not to do too
+                    // many level-0 compactions.
+                    //
+                    // (2) The files in level-0 are merged on every read and
+                    // therefore we wish to avoid too many files when the individual
+                    // file size is small (perhaps because of a small write-buffer
+                    // setting, or very high compression ratios, or lots of
+                    // overwrites/deletions)
+                    self.files[level].len() as f64 / self.options.l0_compaction_threshold as f64
+                } else {
+                    let level_bytes = VersionSet::total_file_size(self.files[level].as_ref());
+                    level_bytes as f64 / self.options.max_bytes_for_level(level) as f64
+                }
+            };
+            if score > best_score {
+                best_score = score;
+                best_level = level;
+            }
+        }
+        self.compaction_level = best_level;
+        self.compaction_score = best_score as f32;
     }
 
     /// Returns `icmp`
