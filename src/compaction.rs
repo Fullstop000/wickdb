@@ -178,7 +178,7 @@ impl Compaction {
     /// Entry format:
     ///     key: internal key
     ///     value: value of user key
-    pub fn new_input_iterator(&self,icmp: Arc<InternalKeyComparator>, table_cache: Rc<RefCell<TableCache>>) -> impl Iterator{
+    pub fn new_input_iterator(&self,icmp: Arc<InternalKeyComparator>, table_cache: Arc<TableCache>) -> impl Iterator{
         let read_options = Rc::new(ReadOptions {
             verify_checksums: self.options.paranoid_checks,
             fill_cache : false,
@@ -197,7 +197,7 @@ impl Compaction {
                 if self.level + i == 0 { // level0
                     for file in self.inputs[CompactionInputsRelation::Source as usize].iter() {
                         // all the level0 tables are guaranteed being added into the table_cache via minor compaction
-                        iter_list.push(Rc::new(RefCell::new(table_cache.clone().borrow().new_iter(read_options.clone(), file.number, file.file_size))));
+                        iter_list.push(Rc::new(RefCell::new(table_cache.clone().new_iter(read_options.clone(), file.number, file.file_size))));
                     }
                 } else {
                     let origin = LevelFileNumIterator::new(icmp.clone(), self.inputs[i].clone());
@@ -284,7 +284,7 @@ impl Compaction {
 }
 
 struct FileIterFactory {
-    table_cache: Rc<RefCell<TableCache>>,
+    table_cache: Arc<TableCache>,
 }
 
 impl DerivedIterFactory for FileIterFactory {
@@ -294,7 +294,7 @@ impl DerivedIterFactory for FileIterFactory {
         } else {
             let file_number = decode_fixed_64(value.as_slice());
             let file_size = decode_fixed_64(&value.as_slice()[8..]);
-            Ok(self.table_cache.borrow().new_iter(options, file_number, file_size))
+            Ok(self.table_cache.new_iter(options, file_number, file_size))
         }
     }
 }

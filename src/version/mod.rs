@@ -112,7 +112,7 @@ impl Version {
     }
 
     /// Search the value by the given key in sstables level by level
-    pub fn get(&self, options: ReadOptions, key: LookupKey, table_cache: Rc<RefCell<TableCache>>) -> Result<(Option<Slice>, SeekStats)> {
+    pub fn get(&self, options: ReadOptions, key: LookupKey, table_cache: Arc<TableCache>) -> Result<(Option<Slice>, SeekStats)> {
         let opt = Rc::new(options);
         let ikey = key.internal_key();
         let ukey = key.user_key();
@@ -149,7 +149,7 @@ impl Version {
             for file in files_to_seek.iter() {
                 seek_stats.seek_file_level = Some(level);
                 seek_stats.seek_file = Some(file.clone());
-                match table_cache.borrow().get(opt.clone(), &ikey, file.number, file.file_size)? {
+                match table_cache.get(opt.clone(), &ikey, file.number, file.file_size)? {
                     None => continue, // keep searching
                     Some(parsed_key) => {
                         match parsed_key.value_type {

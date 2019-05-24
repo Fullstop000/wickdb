@@ -90,7 +90,7 @@ pub struct DBImpl {
 
     batch_scheduler: BatchScheduler,
     // the table cache
-    table_cache: Rc<RefCell<TableCache>>,
+    table_cache: Arc<TableCache>,
 
     versions: VersionSet,
 
@@ -213,7 +213,7 @@ impl DBImpl {
                     }
                     if !keep {
                         if file_type == FileType::Table {
-                            self.table_cache.borrow_mut().evict(number)
+                            self.table_cache.evict(number)
                         }
                         info!("Delete type={:?} #{}", file_type, number);
                         self.env.remove(format!("{}{}{:?}", self.db_name.as_str(), MAIN_SEPARATOR, file).as_str());
@@ -613,7 +613,7 @@ impl DBImpl {
                 status = builder.finish(true).and_then(|_| {
                     meta.file_size = builder.file_size();
                     // make sure that the new file is in the cache
-                    let mut it = self.table_cache.borrow().new_iter(Rc::new(ReadOptions::default()), meta.number, meta.file_size);
+                    let mut it = self.table_cache.new_iter(Rc::new(ReadOptions::default()), meta.number, meta.file_size);
                     it.status()
                 })
             }
@@ -666,7 +666,7 @@ impl DBImpl {
         if status.is_ok() && current_entries > 0{
             let output_number = compact.outputs[length - 1].number;
             // make sure that the new file is in the cache
-            let mut it = self.table_cache.borrow().new_iter(Rc::new(ReadOptions::default()), output_number, current_bytes);
+            let mut it = self.table_cache.new_iter(Rc::new(ReadOptions::default()), output_number, current_bytes);
             it.status()?;
             info!(
                 "Generated table #{}@{}: {} keys, {} bytes",

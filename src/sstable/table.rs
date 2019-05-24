@@ -233,7 +233,7 @@ pub struct TableIterFactory {
     table: Arc<Table>,
 }
 impl DerivedIterFactory for TableIterFactory {
-    fn produce(&self, options: Rc<ReadOptions>, value: &Slice) -> Result<Box<Iterator>> {
+    fn produce(&self, options: Rc<ReadOptions>, value: &Slice) -> Result<Box<dyn Iterator>> {
         BlockHandle::decode_from(value.as_slice())
             .and_then(|(handle,_)| self.table.block_reader(handle, options))
     }
