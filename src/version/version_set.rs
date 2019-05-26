@@ -27,7 +27,7 @@ use crate::db::format::{InternalKeyComparator, InternalKey};
 use crate::record::writer::Writer;
 use crate::util::comparator::{BytewiseComparator, Comparator};
 use crate::util::collection::{DoubleLinkedList, Node, NodePtr};
-use crate::util::status::Result;
+use crate::util::status::{Result, WickErr};
 use crate::util::slice::Slice;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
@@ -37,6 +37,9 @@ use crate::compaction::{Compaction, CompactionStats};
 use crate::db::filename::{generate_filename, FileType};
 use std::collections::vec_deque::VecDeque;
 use crate::snapshot::{SnapshotList, Snapshot};
+use crate::sstable::table::TableBuilder;
+use crate::mem::{MemTable, MemoryTable};
+use std::time::SystemTime;
 
 struct LevelState {
     // set of new deleted files
@@ -150,6 +153,8 @@ pub struct VersionSet {
     pub compaction_stats: Vec<CompactionStats>,
     // Set of table files to protect from deletion because they are part of ongoing compaction
     pub pending_outputs: HashSet<u64>,
+    // Background error
+    pub bg_error: Option<WickErr>,
 
     env: Arc<dyn Storage>,
     // db path
@@ -452,6 +457,19 @@ impl VersionSet {
     #[inline]
     pub fn total_file_size(files: &[Arc<FileMetaData>]) -> u64 {
         files.iter().fold(0, |accum, file| accum + file.file_size )
+    }
+
+    /// Create new table builder and physical file for current output in Compaction
+    pub fn open_compaction_output_file(&mut self, compact: &mut Compaction) -> Result<()> {
+        assert!(compact.builder.is_none());
+        let file_number = self.inc_next_file_number();
+        self.pending_outputs.insert(file_number);
+        let mut output = FileMetaData::default();
+        output.number = file_number;
+        let file_name = generate_filename(self.db_name.as_str(), FileType::Table, file_number);
+        let file = self.env.create(file_name.as_str())?;
+        compact.builder = Some(TableBuilder::new(file, self.options.clone()));
+        Ok(())
     }
 
     // Remove all the old versions

@@ -92,13 +92,13 @@ pub struct DBImpl {
     // the table cache
     table_cache: Arc<TableCache>,
 
-    // TODO: add mutex
-    versions: VersionSet,
+    versions: Mutex<VersionSet>,
 
     // signal of compaction finished
-    background_work_finished_signal: Receiver<()>,
+    background_work_finished_signal: (Sender<()>, Receiver<()>),
     // whether we have a compaction running
     background_compaction_scheduled: AtomicBool,
+    do_compaction: (Sender<()>, Receiver<()>),
     // iff should schedule a manual compaction, temporarily just for test
     manual_compaction: Option<ManualCompaction>,
     // a controlled mutex
@@ -106,7 +106,7 @@ pub struct DBImpl {
     // file number of current .log file
     log_file_num: u64,
     mem: MemTable,
-    im_mem: Option<MemTable>,// iff the memtable is compacted
+    im_mem: Mutex<Option<MemTable>>,// iff the memtable is compacted
     // Have we encountered a background error in paranoid mode
     bg_error: RwLock<Option<WickErr>>,
     // Whether the db is closing
@@ -150,13 +150,13 @@ impl BatchTask {
 impl DBImpl {
 
     pub fn get_snapshot(&mut self) -> Arc<Snapshot> {
-        self.versions.new_snapshot()
+        self.versions.lock().unwrap().new_snapshot()
     }
 
     pub fn get(&self, options: ReadOptions, key: Slice) -> Result<Option<Slice>> {
         let snapshot = match &options.snapshot {
             Some(snapshot) => snapshot.sequence(),
-            None => self.versions.get_last_sequence(),
+            None => self.versions.lock().unwrap().get_last_sequence(),
         };
         let lookup_key = LookupKey::new(key.as_slice(), snapshot);
         // search the memtable
@@ -168,7 +168,7 @@ impl DBImpl {
             }
         }
         // search the immutable memtable
-        if let Some(im_mem) = &self.im_mem {
+        if let Some(im_mem) = &*self.im_mem.lock().unwrap() {
             if let Some(result) = im_mem.get(&lookup_key) {
                 match result {
                     Ok(value) => return Ok(Some(value)),
@@ -176,7 +176,7 @@ impl DBImpl {
                 }
             }
         }
-        let current = self.versions.current();
+        let current = self.versions.lock().unwrap().current();
         let (value, seek_stats) = current.get(options, lookup_key, self.table_cache.clone())?;
         if current.update_stats(seek_stats) {
             self.maybe_schedule_compaction()
@@ -191,25 +191,25 @@ impl DBImpl {
 
     // Delete any unneeded files and stale in-memory entries.
     #[allow(unused_must_use)]
-    fn delete_obsolete_files(&mut self) {
+    fn delete_obsolete_files(&self, mut versions: MutexGuard<VersionSet>) {
         if self.bg_error.read().is_err() {
             // After a background error, we don't know whether a new version may
             // or may not have been committed, so we cannot safely garbage collect
             return
         }
-        self.versions.lock_live_files();
+        versions.lock_live_files();
         // ignore IO error on purpose
         if let Ok(files) = self.env.list(self.db_name.as_str()) {
             for file in files.iter() {
                 if let Some((file_type, number)) = parse_filename(file) {
                     let mut keep = true;
                     match file_type {
-                        FileType::Log => keep = number >= self.versions.get_log_number() || number == self.versions.get_prev_log_number(),
-                        FileType::Manifest => keep = number >= self.versions.get_manifest_number(),
-                        FileType::Table => keep = self.versions.pending_outputs.contains(&number),
+                        FileType::Log => keep = number >= versions.get_log_number() || number == versions.get_prev_log_number(),
+                        FileType::Manifest => keep = number >= versions.get_manifest_number(),
+                        FileType::Table => keep = versions.pending_outputs.contains(&number),
                         // Any temp files that are currently being written to must
                         // be recorded in pending_outputs
-                        FileType::Temp => keep = self.versions.pending_outputs.contains(&number),
+                        FileType::Temp => keep = versions.pending_outputs.contains(&number),
                         _ => {},
                     }
                     if !keep {
@@ -228,12 +228,13 @@ impl DBImpl {
     fn make_room_for_write(&mut self, mut force: bool) -> Result<()> {
         let mutex = self.mutex.lock().unwrap();
         let mut allow_delay = !force;
+        let mut versions = self.versions.lock().unwrap();
         loop {
             if let Some(e) = {
                 self.bg_error.get_mut().unwrap().take()
             } {
                 return Err(e)
-            } else if allow_delay && self.versions.level_files_count(0) >= self.options.l0_slowdown_writes_threshold {
+            } else if allow_delay && versions.level_files_count(0) >= self.options.l0_slowdown_writes_threshold {
                 // We are getting close to hitting a hard limit on the number of
                 // L0 files.  Rather than delaying a single write by several
                 // seconds when we hit the hard limit, start delaying each
@@ -245,21 +246,21 @@ impl DBImpl {
             } else if !force && self.mem.approximate_memory_usage() <= self.options.write_buffer_size {
                 // There is room in current memtable
                 break;
-            } else if self.im_mem.is_some() {
+            } else if self.im_mem.lock().unwrap().is_some() {
                 info!("Current memtable full; waiting...");
-                let _ = self.background_work_finished_signal.recv();
-            } else if self.versions.level_files_count(0) >= self.options.l0_stop_writes_threshold {
+                let _ = self.background_work_finished_signal.1.recv();
+            } else if versions.level_files_count(0) >= self.options.l0_stop_writes_threshold {
                 info!("Too many L0 files; waiting...");
-                let _ = self.background_work_finished_signal.recv();
+                let _ = self.background_work_finished_signal.1.recv();
             } else {
                 // there must be no prev log
-                let new_log_num = self.versions.get_next_file_number();
+                let new_log_num = versions.get_next_file_number();
                 let log_file = self.env.create(generate_filename(self.db_name.as_str(),FileType::Log, new_log_num).as_str())?;
                 self.versions.set_next_file_number(new_log_num + 1);
                 self.record_writer = Writer::new(log_file);
                 // rotate the mem to immutable mem
                 let memtable = mem::replace(&mut self.mem, MemTable::new(self.internal_comparator.clone()));
-                self.im_mem = Some(memtable);
+                self.im_mem = Mutex::new(Some(memtable));
                 force = false; // do not force another compaction if have room
                 self.maybe_schedule_compaction();
             }
@@ -268,30 +269,31 @@ impl DBImpl {
     }
 
     // Compact immutable memory table to level0 files
-    fn compact_mem_table(&mut self) {
-        assert!(self.im_mem.is_some(), "[compaction] Unable to compact empty immutable table");
-        let base = self.versions.current();
+    fn compact_mem_table(&self) {
+        let mut versions = self.versions.lock().unwrap();
+        let base = versions.current();
         let mut edit = VersionEdit::new(self.options.max_levels);
-        let im_mem = self.im_mem.take().unwrap();
-        match self.write_level0_table(&im_mem, &mut edit, Some(base)) {
+        let mut im_mem = self.im_mem.lock().unwrap();
+        match self.write_level0_table(im_mem.as_ref().unwrap(), &mut edit, Some(base)) {
             Ok(()) => {
                 if self.is_shutting_down.load(Ordering::Acquire) {
                     self.record_bg_error(WickErr::new(Status::IOError, Some("Deleting DB during memtable compaction")))
                 } else {
                     edit.prev_log_number = Some(0);
-                    edit.log_number = Some(self.log_file_num);
-                    match self.versions.log_and_apply(&mut edit) {
-                        Ok(()) => self.delete_obsolete_files(),
+                    edit.log_number = Some(versions.get_log_number());
+                    match versions.log_and_apply(&mut edit) {
+                        Ok(()) => {
+                            *im_mem = None;
+                            self.delete_obsolete_files(versions);
+                        },
                         Err(e) => {
                             self.record_bg_error(e);
-                            self.im_mem = Some(im_mem);
                         }
                     }
                 }
             },
             Err(e) => {
                 self.record_bg_error(e);
-                self.im_mem = Some(im_mem);
             }
         }
     }
@@ -299,11 +301,12 @@ impl DBImpl {
     // Persistent given memtable into a single level file.
     // If `base` is not `None`, we might choose a proper level for the generated
     // file other we add it to the level0
-    fn write_level0_table(&mut self, mem: &MemTable, edit: &mut VersionEdit, base: Option<Arc<Version>>) -> Result<()> {
+    fn write_level0_table(&self, mem: &MemTable, edit: &mut VersionEdit, base: Option<Arc<Version>>) -> Result<()> {
+        let mut versions = self.versions.lock().unwrap();
         let now = SystemTime::now();
         let mut meta = FileMetaData::default();
-        meta.number = self.versions.inc_next_file_number();
-        self.versions.pending_outputs.insert(meta.number);
+        meta.number = versions.inc_next_file_number();
+        versions.pending_outputs.insert(meta.number);
         let mem_iter = mem.new_iterator();
         info!(
             "Level-0 table #{} : started",
@@ -314,7 +317,7 @@ impl DBImpl {
             "Level-0 table #{} : {} bytes [{:?}]",
             meta.number, meta.file_size, &build_result
         );
-        self.versions.pending_outputs.remove(&meta.number);
+        versions.pending_outputs.remove(&meta.number);
         let mut level = 0;
 
         // Note that if file_size is zero, the file has been deleted and
@@ -327,7 +330,7 @@ impl DBImpl {
             }
             edit.add_file(level, meta.number, meta.file_size, meta.smallest.clone(), meta.largest.clone());
         }
-        self.versions.compaction_stats[level].accumulate(
+        versions.compaction_stats[level].accumulate(
             now.elapsed().unwrap().as_micros() as u64,
             0,
             meta.file_size,
@@ -336,18 +339,19 @@ impl DBImpl {
     }
 
     // The complete compaction process
-    fn background_compaction(&mut self) {
-        if self.im_mem.is_some() {
+    fn background_compaction(&self) {
+        if self.im_mem.lock().unwrap().is_some() {
             // minor compaction
             self.compact_mem_table();
         } else {
             let mut is_manual = false;
+            let mut versions = self.versions.lock().unwrap();
             match {
-                match self.manual_compaction.as_mut() {
+                match &self.manual_compaction {
                     // manul compaction
-                    Some(manual) => {
-                        // TODO: refactor this match to FP style?
-                        let compaction = self.versions.compact_range(manual.level, manual.begin.clone(), manual.end.clone());
+                    Some(m) => {
+                        let mut manual = m.lock().unwrap();
+                        let compaction = versions.compact_range(manual.level, manual.begin.clone(), manual.end.clone());
                         manual.done = compaction.is_none();
                         let begin = if let Some(begin) = &manual.begin {
                             format!("{:?}", begin)
@@ -371,7 +375,7 @@ impl DBImpl {
                         is_manual = true;
                         compaction
                     },
-                    None => self.versions.pick_compaction()
+                    None => versions.pick_compaction()
                 }
             } {
                 Some(mut compaction) => {
@@ -380,11 +384,11 @@ impl DBImpl {
                         let f = compaction.inputs[CompactionInputsRelation::Source as usize].first().unwrap();
                         compaction.edit.delete_file(compaction.level, f.number);
                         compaction.edit.add_file(compaction.level + 1, f.number, f.file_size, f.smallest.clone(), f.largest.clone());
-                        if let Err(e) = self.versions.log_and_apply(&mut compaction.edit) {
+                        if let Err(e) = versions.log_and_apply(&mut compaction.edit) {
                             debug!("Error in compaction: {:?}", &e);
                             self.record_bg_error(e);
                         }
-                        let current_summary = self.versions.current().level_summary();
+                        let current_summary = versions.current().level_summary();
                         info!(
                             "Moved #{} to level-{} {} bytes, current level summary: {}",
                             f.number, compaction.level + 1, f.file_size, current_summary
@@ -397,19 +401,18 @@ impl DBImpl {
                             compaction.inputs[CompactionInputsRelation::Parent as usize].len(), level + 1
                         );
                         {
-                            let snapshots = &mut self.versions.snapshots;
+                            let snapshots = &mut versions.snapshots;
                             // Cleanup all redundant snapshots first
                             snapshots.gc();
                             if snapshots.is_empty() {
-                                compaction.oldest_snapshot_alive = self.versions.get_last_sequence();
+                                compaction.oldest_snapshot_alive = versions.get_last_sequence();
                             } else {
                                 compaction.oldest_snapshot_alive = snapshots.oldest().sequence();
                             }
                         }
                         // TODO: reactor below as scheduling an compaction work
-                        self.do_compaction(&mut compaction);
-                        self.cleanup_compaction(&mut compaction);
-                        self.delete_obsolete_files();
+                        // TODO: release versions mutex here
+                        self.delete_obsolete_files(self.do_compaction(&mut compaction));
                     }
                     if !self.is_shutting_down.load(Ordering::Acquire) {
                         if let Some(e) = self.bg_error.read().unwrap().as_ref(){
@@ -424,7 +427,7 @@ impl DBImpl {
 
     // Merging files in level n into file in level n + 1 and
     // keep the still-in-use files
-    fn do_compaction(&mut self, c: &mut Compaction) {
+    fn do_compaction(&self, c: &mut Compaction) -> MutexGuard<VersionSet> {
         let now = SystemTime::now();
         let mut input_iter = c.new_input_iterator(self.internal_comparator.clone(), self.table_cache.clone());
         let mut mem_compaction_duration = 0;
@@ -442,9 +445,8 @@ impl DBImpl {
         // Iterate every key
         while input_iter.valid() && !self.is_shutting_down.load(Ordering::Acquire) {
             // Prioritize immutable compaction work
-            if self.im_mem.is_some() {
+            if self.im_mem.lock().unwrap().is_some() {
                 let imm_start = SystemTime::now();
-                // TODO: need mutex
                 self.compact_mem_table();
                 mem_compaction_duration = imm_start.elapsed().unwrap().as_micros() as u64;
             }
@@ -484,7 +486,7 @@ impl DBImpl {
                     if !drop {
                         // Open output file if necessary
                         if c.builder.is_none() {
-                            status = self.open_compaction_output_file(c);
+                            status = self.versions.lock().unwrap().open_compaction_output_file(c);
                             if status.is_err() {
                                 break;
                             }
@@ -528,41 +530,51 @@ impl DBImpl {
             status = input_iter.status()
         }
         // Calculate the stats of this compaction
-        self.versions.compaction_stats[c.level + 1].accumulate(
+        let mut versions = self.versions.lock().unwrap();
+        versions.compaction_stats[c.level + 1].accumulate(
             now.elapsed().unwrap().as_micros() as u64 - mem_compaction_duration,
             c.bytes_read(),
             c.bytes_written(),
         );
         if status.is_ok() {
-            status = self.install_compaction_results(c)
+            info!(
+                "Compacted {}@{} + {}@{} files => {} bytes",
+                c.inputs[CompactionInputsRelation::Source as usize].len(), c.level,
+                c.inputs[CompactionInputsRelation::Parent as usize].len(), c.level + 1,
+                c.total_bytes,
+            );
+            c.apply_to_edit();
+            status = versions.log_and_apply(&mut c.edit);
         }
         if let Err(e) = status {
             self.record_bg_error(e)
         }
 
-        let summary = self.versions.current().level_summary();
+        let summary = versions.current().level_summary();
         info!(
             "compacted to : {}", summary
-        )
-    }
+        );
 
-    // Close unclosed table builder and remove files in `pending_outputs`
-    fn cleanup_compaction(&mut self, c: &mut Compaction) {
+        // Close unclosed table builder and remove files in `pending_outputs`
         if let Some(builder) = c.builder.as_mut() {
             builder.close()
         }
         for output in c.outputs.iter() {
-            self.versions.pending_outputs.remove(&output.number);
+            versions.pending_outputs.remove(&output.number);
         }
+        versions
     }
 
+
+
     // Replace the `bg_error` with new WickErr if it's None
-    fn record_bg_error(&mut self, e: WickErr) {
+    fn record_bg_error(&self, e: WickErr) {
         let old = self.bg_error.read().unwrap();
         if old.is_none() {
             mem::drop(old);
             let mut x = self.bg_error.write().unwrap();
             *x = Some(e);
+            self.background_work_finished_signal.0.send(()).expect("Sender panic");
         }
     }
 
@@ -578,9 +590,11 @@ impl DBImpl {
             // DB is being shutting down
         } else if self.bg_error.read().unwrap().is_some() {
             // Got err
-        } else if self.im_mem.is_none() && self.manual_compaction.is_none() && !self.versions.needs_compaction() {
+        } else if self.im_mem.lock().unwrap().is_none() && self.manual_compaction.is_none() && !self.versions.lock().unwrap().needs_compaction() {
             // No work needs to be done
         } else {
+            self.background_compaction_scheduled.store(true, Ordering::Release);
+
             // TODO: schedule a compaction
         }
     }
@@ -634,20 +648,6 @@ impl DBImpl {
         }
     }
 
-    // Create new table builder and physical file for current output in Compaction
-    fn open_compaction_output_file(&mut self, compact: &mut Compaction) -> Result<()> {
-        assert!(compact.builder.is_none());
-        let file_number = self.versions.inc_next_file_number();
-        // TODO: need lock the pending_outputs first
-        self.versions.pending_outputs.insert(file_number);
-        let mut output = FileMetaData::default();
-        output.number = file_number;
-        let file_name = generate_filename(self.db_name.as_str(), FileType::Table, file_number);
-        let file = self.env.create(file_name.as_str())?;
-        compact.builder = Some(TableBuilder::new(file, self.options.clone()));
-        Ok(())
-    }
-
     // Finish the current output file by calling `buidler.finish` and insert it into the table cache
     fn finish_output_file(&self, compact: &mut Compaction, input_iter_valid: bool) -> Result<()> {
         assert!(compact.outputs.len() > 0);
@@ -676,17 +676,6 @@ impl DBImpl {
             );
         }
         status
-    }
-
-    fn install_compaction_results(&mut self, c: &mut Compaction) -> Result<()> {
-        info!(
-            "Compacted {}@{} + {}@{} files => {} bytes",
-            c.inputs[CompactionInputsRelation::Source as usize].len(), c.level,
-            c.inputs[CompactionInputsRelation::Parent as usize].len(), c.level + 1,
-            c.total_bytes,
-        );
-        c.apply_to_edit();
-        self.versions.log_and_apply(&mut c.edit)
     }
 }
 

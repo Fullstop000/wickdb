@@ -70,11 +70,15 @@ impl SnapshotList {
     pub fn snapshot(&mut self, seq: u64) -> Arc<Snapshot> {
         let last_seq = self.last_seq();
         assert!(seq >= last_seq, "[snapshot] the sequence number shouldn't be monotonically decreasing : [new: {}], [last: {}]", seq, last_seq);
-        let s = Arc::new(Snapshot{
-            sequence_number: seq,
-        });
-        self.snapshots.push_back(s.clone());
-        s
+        if last_seq == seq {
+            self.snapshots.back().unwrap().clone()
+        } else {
+            let s = Arc::new(Snapshot{
+                sequence_number: seq,
+            });
+            self.snapshots.push_back(s.clone());
+            s
+        }
     }
 
     /// Remove redundant snapshots

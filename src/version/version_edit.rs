@@ -66,7 +66,7 @@ pub struct FileMetaData {
     // A seek in a level n file might miss because the key range overlaps with files in level
     // n + 1 so we just go ahead to seek the level n + 1. But the IO cost in the prev seek is a
     // waste. If lots of seek missing to a level n file happens, it indicates that we have a sst
-    // with heavily overlapping with the sst in next level n + 1, which just tell use that the file
+    // with heavily overlapping with the sst in next level n + 1, which just tell us that the file
     // should be compacted
     pub allowed_seeks: AtomicUsize,
     // File size in bytes

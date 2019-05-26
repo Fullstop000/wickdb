@@ -301,25 +301,25 @@ impl DerivedIterFactory for FileIterFactory {
 
 /// A helper struct for recording the statistics in compactions
 pub struct CompactionStats {
-    micros: AtomicU64,
-    bytes_read: AtomicU64,
-    bytes_written: AtomicU64,
+    micros: u64,
+    bytes_read: u64,
+    bytes_written: u64,
 }
 
 impl CompactionStats {
     pub fn new() -> Self {
         CompactionStats {
-            micros: AtomicU64::new(0),
-            bytes_read: AtomicU64::new(0),
-            bytes_written: AtomicU64::new(0),
+            micros: 0,
+            bytes_read: 0,
+            bytes_written: 0,
         }
     }
 
     /// Add new stats to self
     #[inline]
-    pub fn accumulate(&self, micros: u64, bytes_read: u64, bytes_written: u64) {
-        self.micros.fetch_add(micros, Ordering::SeqCst);
-        self.bytes_read.fetch_add(bytes_read, Ordering::SeqCst);
-        self.bytes_written.fetch_add(bytes_written, Ordering::SeqCst);
+    pub fn accumulate(&mut self, micros: u64, bytes_read: u64, bytes_written: u64) {
+        self.micros+= micros;
+        self.bytes_read += bytes_read;
+        self.bytes_written += bytes_written;
     }
 }
