@@ -27,6 +27,7 @@ extern crate log;
 extern crate lazy_static;
 extern crate crc;
 extern crate crossbeam_channel;
+extern crate crossbeam_utils;
 extern crate rand;
 extern crate snap;
 
