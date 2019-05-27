@@ -172,7 +172,7 @@ impl Compaction {
     /// moving a single input file to the next level (no merging or splitting)
     pub fn is_trivial_move(&self) -> bool {
         self.inputs[CompactionInputsRelation::Source as usize].len() == 1
-            && self.inputs[CompactionInputsRelation::Parent as usize].len() == 0
+            && self.inputs[CompactionInputsRelation::Parent as usize].is_empty()
             && VersionSet::total_file_size(self.grand_parents.as_slice())
                 <= self.options.max_grandparent_overlap_bytes()
     }

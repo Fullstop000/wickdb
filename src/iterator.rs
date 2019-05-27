@@ -419,23 +419,18 @@ impl MergingIterator {
 
     // Find the iterator with the smallest 'key' and set it as current
     pub fn find_smallest(&mut self) {
-        let mut smallest = None;
+        let mut smallest: Option<Rc<RefCell<Box<dyn Iterator>>>> = None;
         let mut index = self.current_index;
         for (i, child) in self.children.iter().enumerate() {
-            if child.borrow().valid() {
-                if smallest.is_none() {
-                    smallest = Some(child.clone());
-                    index = i
-                } else {
-                    if self.cmp.compare(
-                        child.borrow().key().as_slice(),
-                        smallest.as_ref().unwrap().borrow().key().as_slice(),
-                    ) == Ordering::Less
-                    {
-                        smallest = Some(child.clone());
-                        index = i
-                    }
-                }
+            if child.borrow().valid()
+                && (self.cmp.compare(
+                    child.borrow().key().as_slice(),
+                    smallest.as_ref().unwrap().borrow().key().as_slice(),
+                ) == Ordering::Less
+                    || smallest.is_none())
+            {
+                smallest = Some(child.clone());
+                index = i
             }
         }
         self.current_index = index;
@@ -444,23 +439,18 @@ impl MergingIterator {
 
     // Find the iterator with the largest 'key' and set it as current
     pub fn find_largest(&mut self) {
-        let mut largest = None;
+        let mut largest: Option<Rc<RefCell<Box<dyn Iterator>>>> = None;
         let mut index = self.current_index;
         for (i, child) in self.children.iter().enumerate() {
-            if child.borrow().valid() {
-                if largest.is_none() {
-                    largest = Some(child.clone());
-                    index = i
-                } else {
-                    if self.cmp.compare(
+            if child.borrow().valid()
+                && (largest.is_none()
+                    || self.cmp.compare(
                         child.borrow().key().as_slice(),
                         largest.as_ref().unwrap().borrow().key().as_slice(),
-                    ) == Ordering::Greater
-                    {
-                        largest = Some(child.clone());
-                        index = i
-                    }
-                }
+                    ) == Ordering::Greater)
+            {
+                largest = Some(child.clone());
+                index = i
             }
         }
         self.current_index = index;

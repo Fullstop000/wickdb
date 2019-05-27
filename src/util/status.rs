@@ -99,7 +99,7 @@ impl Clone for WickErr {
     fn clone(&self) -> Self {
         Self {
             t: self.t.clone(),
-            msg: self.msg.clone(),
+            msg: self.msg,
             raw: self.raw.clone(),
         }
     }

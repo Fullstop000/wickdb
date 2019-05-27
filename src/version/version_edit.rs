@@ -413,7 +413,7 @@ fn get_internal_key(mut src: &mut Slice) -> Option<InternalKey> {
 fn get_level(max_levels: u8, src: &mut Slice) -> Option<u32> {
     match VarintU32::drain_read(src) {
         Some(l) => {
-            if l <= max_levels as u32 {
+            if l <= u32::from(max_levels) {
                 return Some(l);
             }
             None

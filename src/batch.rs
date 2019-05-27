@@ -21,14 +21,8 @@ use crate::util::coding::{decode_fixed_64, encode_fixed_64};
 use crate::util::slice::Slice;
 use crate::util::status::{Result, Status, WickErr};
 use crate::util::varint::VarintU32;
-use std::sync::Arc;
 
 const HEADER_SIZE: usize = 12;
-
-pub trait BatchHandler {
-    fn put(&mut self, key: &[u8], value: &[u8]);
-    fn delete(&mut self, key: &[u8]);
-}
 
 /// `WriteBatch` holds a collection of updates to apply atomically to a DB.
 ///
@@ -60,7 +54,7 @@ pub trait BatchHandler {
 /// non-const method, all threads accessing the same WriteBatch must use
 /// external synchronization.
 ///
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct WriteBatch {
     pub(super) contents: Vec<u8>,
     count: u32,
@@ -135,7 +129,7 @@ impl WriteBatch {
             found += 1;
             let tag = s[0];
             s.remove_prefix(1);
-            match ValueType::from(tag as u64) {
+            match ValueType::from(u64::from(tag)) {
                 ValueType::Value => {
                     if let Some(key) = VarintU32::get_varint_prefixed_slice(&mut s) {
                         if let Some(value) = VarintU32::get_varint_prefixed_slice(&mut s) {
@@ -151,7 +145,7 @@ impl WriteBatch {
                 }
                 ValueType::Deletion => {
                     if let Some(key) = VarintU32::get_varint_prefixed_slice(&mut s) {
-                        mem.add(seq, ValueType::Deletion, key.as_slice(), "".as_bytes());
+                        mem.add(seq, ValueType::Deletion, key.as_slice(), b"");
                         seq += 1;
                         continue;
                     }
@@ -196,33 +190,6 @@ impl WriteBatch {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.contents.is_empty()
-    }
-}
-
-pub struct MemTableInserter {
-    seq: u64,
-    memtable: Arc<MemTable>,
-}
-
-impl MemTableInserter {
-    pub fn new(mem: Arc<MemTable>) -> Self {
-        Self {
-            seq: 0,
-            memtable: mem,
-        }
-    }
-}
-
-impl BatchHandler for MemTableInserter {
-    fn put(&mut self, key: &[u8], value: &[u8]) {
-        self.memtable.add(self.seq, ValueType::Value, key, value);
-        self.seq += 1;
-    }
-
-    fn delete(&mut self, key: &[u8]) {
-        self.memtable
-            .add(self.seq, ValueType::Deletion, key, "".as_bytes());
-        self.seq += 1;
     }
 }
 

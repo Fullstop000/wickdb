@@ -222,7 +222,7 @@ impl Version {
                 right = mid;
             }
         }
-        return right;
+        right
     }
 
     /// Return the level at which we should place a new memtable compaction

@@ -638,17 +638,12 @@ impl VersionSet {
             }
             let mut largest_key = &tmp.largest;
             let mut smallest_boundary_file = self.find_smallest_boundary_file(level, &largest_key);
-            loop {
+            while let Some(file) = &smallest_boundary_file {
                 // If a boundary file was found advance largest_key, otherwise we're done.
                 // This might leave 'holes' in files to be compacted because we only append the last boundary file
                 // the 'holes' will be filled later (by calling `get_overlapping_inputs`).
-                match &smallest_boundary_file {
-                    Some(file) => {
-                        files_to_compact.push(file.clone());
-                        largest_key = &file.largest;
-                    }
-                    None => break,
-                }
+                files_to_compact.push(file.clone());
+                largest_key = &file.largest;
                 smallest_boundary_file = self.find_smallest_boundary_file(level, &largest_key);
             }
         }
@@ -688,7 +683,7 @@ impl VersionSet {
     fn update_current(env: Arc<dyn Storage>, dbname: &str, manifest_file_num: u64) -> Result<()> {
         // Remove leading "dbname/" and add newline to manifest file nam
         let mut manifest = generate_filename(dbname, FileType::Manifest, manifest_file_num);
-        manifest.drain(0..dbname.len() + 1);
+        manifest.drain(0..=dbname.len());
         // write into tmp first then rename it as CURRENT
         let tmp = generate_filename(dbname, FileType::Temp, manifest_file_num);
         let result = do_write_string_to_file(env.clone(), manifest, tmp.as_str(), true);

@@ -60,7 +60,7 @@ impl TableCache {
                     generate_filename(self.db_name.as_str(), FileType::Table, file_number);
                 let table_file = self.env.open(filename.as_str())?;
                 let table = Table::open(table_file, file_size, self.options.clone())?;
-                return Ok(self.cache.insert(key, Arc::new(table), 1, None));
+                Ok(self.cache.insert(key, Arc::new(table), 1, None))
             }
         }
     }

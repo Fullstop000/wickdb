@@ -75,8 +75,7 @@ impl BlockArena {
     }
 
     pub(super) fn allocate_new_block(&self, block_bytes: usize) -> *mut u8 {
-        let mut new_block = Vec::with_capacity(block_bytes);
-        new_block.resize(block_bytes, 0u8);
+        let mut new_block = vec![0; block_bytes];
         let p = new_block.as_mut_ptr();
         self.blocks.borrow_mut().push(new_block);
         self.memory_usage.fetch_add(block_bytes, Ordering::Relaxed);

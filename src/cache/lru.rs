@@ -17,7 +17,7 @@
 
 use crate::cache::{Cache, Handle as CacheHandle, HandleRef};
 use hashbrown::hash_map::HashMap;
-use std::cell::RefCell;
+
 use std::mem;
 use std::ptr;
 use std::rc::Rc;
@@ -290,7 +290,6 @@ impl<T: 'static + Clone> LRUCache<T> {
         let p = Rc::into_raw(n) as *mut LRUHandle<T>;
         Self::lru_remove(p);
         let h = unsafe { Rc::from_raw(p) };
-        mem::drop(p);
         Self::dec_ref(data.lru, h);
     }
 
@@ -338,7 +337,7 @@ impl<T: 'static + Clone> Cache<T> for LRUCache<T> {
             while self.usage.load(Ordering::Acquire) > self.capacity
                 && (*(*mutex_data).lru).next != mutex_data.lru
             {
-                let old = (*(&mutex_data).lru).next;
+                let old = (*mutex_data.lru).next;
                 if let Some(n) = mutex_data.table.remove(&(*old).key[..]) {
                     assert_eq!(
                         Rc::strong_count(&n),
@@ -389,7 +388,7 @@ impl<T: 'static + Clone> Cache<T> for LRUCache<T> {
         let mut data = self.mutex.lock().unwrap();
         unsafe {
             while (*data.lru).next != data.lru {
-                let h = (*(&data).lru).next;
+                let h = (*data.lru).next;
                 if let Some(v) = data.table.remove((*h).key.as_ref()) {
                     assert_eq!(Rc::strong_count(&v), 1 , "[lru cache] to prune cache, non active entry's ref should be 1, but got {}", Rc::strong_count(&v));
                     self.usage.fetch_sub(v.charge, Ordering::SeqCst);
@@ -409,6 +408,7 @@ impl<T: 'static + Clone> Cache<T> for LRUCache<T> {
 mod tests {
     use super::*;
     use crate::util::coding::{decode_fixed_32, put_fixed_32};
+    use std::cell::RefCell;
 
     const CACHE_SIZE: usize = 100;
 

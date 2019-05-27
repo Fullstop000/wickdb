@@ -118,7 +118,7 @@ impl WickDB {
                 // down the small write too much
                 let mut max_size = 1 << 20;
                 if size <= 128 << 10 {
-                    max_size = size + 128 << 10
+                    max_size = size + (128 << 10)
                 }
                 let mut signals = vec![];
                 signals.push(first.signal.clone());
@@ -144,16 +144,14 @@ impl WickDB {
                     Ok(mut versions) => {
                         let mut last_seq = versions.get_last_sequence();
                         grouped.batch.set_sequence(last_seq + 1);
-                        last_seq += grouped.batch.count() as u64;
+                        last_seq += u64::from(grouped.batch.count());
                         let mut writer = db.record_writer.lock().unwrap();
                         let mut status = writer.add_record(&Slice::from(grouped.batch.data()));
                         let mut sync_err = false;
-                        if status.is_ok() {
-                            if grouped.options.sync {
-                                status = writer.sync();
-                                if status.is_err() {
-                                    sync_err = true;
-                                }
+                        if status.is_ok() && grouped.options.sync {
+                            status = writer.sync();
+                            if status.is_err() {
+                                sync_err = true;
                             }
                         }
                         if status.is_ok() {
@@ -197,27 +195,22 @@ impl WickDB {
     fn process_compaction(&self) {
         let db = self.inner.clone();
         thread::spawn(move || {
-            loop {
-                match db.do_compaction.1.recv() {
-                    Ok(()) => {
-                        if db.is_shutting_down.load(Ordering::Acquire) {
-                            // No more background work when shutting down
-                            break;
-                        } else if db.bg_error.read().unwrap().is_some() {
-                            // Non more background work after a background error
-                        } else {
-                            db.background_compaction();
-                        }
-                        db.background_compaction_scheduled
-                            .store(false, Ordering::Release);
-
-                        // Previous compaction may have produced too many files in a level,
-                        // so reschedule another compaction if needed
-                        db.maybe_schedule_compaction();
-                        db.background_work_finished_signal.notify_all();
-                    }
-                    Err(_e) => break,
+            while let Ok(()) = db.do_compaction.1.recv() {
+                if db.is_shutting_down.load(Ordering::Acquire) {
+                    // No more background work when shutting down
+                    break;
+                } else if db.bg_error.read().unwrap().is_some() {
+                    // Non more background work after a background error
+                } else {
+                    db.background_compaction();
                 }
+                db.background_compaction_scheduled
+                    .store(false, Ordering::Release);
+
+                // Previous compaction may have produced too many files in a level,
+                // so reschedule another compaction if needed
+                db.maybe_schedule_compaction();
+                db.background_work_finished_signal.notify_all();
             }
         });
     }
@@ -517,7 +510,7 @@ impl DBImpl {
         } else {
             let mut is_manual = false;
             let mut versions = self.versions.lock().unwrap();
-            match {
+            if let Some(mut compaction) = {
                 match &self.manual_compaction {
                     // manul compaction
                     Some(m) => {
@@ -560,60 +553,57 @@ impl DBImpl {
                     None => versions.pick_compaction(),
                 }
             } {
-                Some(mut compaction) => {
-                    if is_manual && compaction.is_trivial_move() {
-                        // just move file to next level
-                        let f = compaction.inputs[CompactionInputsRelation::Source as usize]
-                            .first()
-                            .unwrap();
-                        compaction.edit.delete_file(compaction.level, f.number);
-                        compaction.edit.add_file(
-                            compaction.level + 1,
-                            f.number,
-                            f.file_size,
-                            f.smallest.clone(),
-                            f.largest.clone(),
-                        );
-                        if let Err(e) = versions.log_and_apply(&mut compaction.edit) {
-                            debug!("Error in compaction: {:?}", &e);
-                            self.record_bg_error(e);
-                        }
-                        let current_summary = versions.current().level_summary();
-                        info!(
-                            "Moved #{} to level-{} {} bytes, current level summary: {}",
-                            f.number,
-                            compaction.level + 1,
-                            f.file_size,
-                            current_summary
-                        )
-                    } else {
-                        let level = compaction.level;
-                        info!(
-                            "Compacting {}@{} + {}@{} files",
-                            compaction.inputs[CompactionInputsRelation::Source as usize].len(),
-                            level,
-                            compaction.inputs[CompactionInputsRelation::Parent as usize].len(),
-                            level + 1
-                        );
-                        {
-                            let snapshots = &mut versions.snapshots;
-                            // Cleanup all redundant snapshots first
-                            snapshots.gc();
-                            if snapshots.is_empty() {
-                                compaction.oldest_snapshot_alive = versions.get_last_sequence();
-                            } else {
-                                compaction.oldest_snapshot_alive = snapshots.oldest().sequence();
-                            }
-                        }
-                        self.delete_obsolete_files(self.do_compaction(&mut compaction));
+                if is_manual && compaction.is_trivial_move() {
+                    // just move file to next level
+                    let f = compaction.inputs[CompactionInputsRelation::Source as usize]
+                        .first()
+                        .unwrap();
+                    compaction.edit.delete_file(compaction.level, f.number);
+                    compaction.edit.add_file(
+                        compaction.level + 1,
+                        f.number,
+                        f.file_size,
+                        f.smallest.clone(),
+                        f.largest.clone(),
+                    );
+                    if let Err(e) = versions.log_and_apply(&mut compaction.edit) {
+                        debug!("Error in compaction: {:?}", &e);
+                        self.record_bg_error(e);
                     }
-                    if !self.is_shutting_down.load(Ordering::Acquire) {
-                        if let Some(e) = self.bg_error.read().unwrap().as_ref() {
-                            info!("Compaction error: {:?}", e)
+                    let current_summary = versions.current().level_summary();
+                    info!(
+                        "Moved #{} to level-{} {} bytes, current level summary: {}",
+                        f.number,
+                        compaction.level + 1,
+                        f.file_size,
+                        current_summary
+                    )
+                } else {
+                    let level = compaction.level;
+                    info!(
+                        "Compacting {}@{} + {}@{} files",
+                        compaction.inputs[CompactionInputsRelation::Source as usize].len(),
+                        level,
+                        compaction.inputs[CompactionInputsRelation::Parent as usize].len(),
+                        level + 1
+                    );
+                    {
+                        let snapshots = &mut versions.snapshots;
+                        // Cleanup all redundant snapshots first
+                        snapshots.gc();
+                        if snapshots.is_empty() {
+                            compaction.oldest_snapshot_alive = versions.get_last_sequence();
+                        } else {
+                            compaction.oldest_snapshot_alive = snapshots.oldest().sequence();
                         }
+                    }
+                    self.delete_obsolete_files(self.do_compaction(&mut compaction));
+                }
+                if !self.is_shutting_down.load(Ordering::Acquire) {
+                    if let Some(e) = self.bg_error.read().unwrap().as_ref() {
+                        info!("Compaction error: {:?}", e)
                     }
                 }
-                None => {}
             }
         }
     }
@@ -665,11 +655,10 @@ impl DBImpl {
                         last_sequence_for_key = u64::max_value();
                     }
                     // Keep the still-in-use old key or not
-                    if last_sequence_for_key <= c.oldest_snapshot_alive {
-                        drop = true
-                    } else if key.value_type == ValueType::Deletion
-                        && key.seq <= c.oldest_snapshot_alive
-                        && !c.key_exist_in_deeper_level(&key.user_key)
+                    if last_sequence_for_key <= c.oldest_snapshot_alive
+                        || (key.value_type == ValueType::Deletion
+                            && key.seq <= c.oldest_snapshot_alive
+                            && !c.key_exist_in_deeper_level(&key.user_key))
                     {
                         // For this user key:
                         // (1) there is no data in higher levels
@@ -790,15 +779,15 @@ impl DBImpl {
     // 3. no error has been encountered
     // 4. there is an immutable table or a manual compaction request or current version needs to be compacted
     fn maybe_schedule_compaction(&self) {
-        if self.background_compaction_scheduled.load(Ordering::Acquire) {
+        if self.background_compaction_scheduled.load(Ordering::Acquire)
             // Already scheduled
-        } else if self.is_shutting_down.load(Ordering::Acquire) {
+        || self.is_shutting_down.load(Ordering::Acquire)
             // DB is being shutting down
-        } else if self.bg_error.read().unwrap().is_some() {
+        || self.bg_error.read().unwrap().is_some()
             // Got err
-        } else if self.im_mem.read().unwrap().is_none()
+        ||  (self.im_mem.read().unwrap().is_none()
             && self.manual_compaction.is_none()
-            && !self.versions.lock().unwrap().needs_compaction()
+            && !self.versions.lock().unwrap().needs_compaction())
         {
             // No work needs to be done
         } else {
@@ -859,7 +848,7 @@ impl DBImpl {
         }
 
         let iter_status = iter.status();
-        if !iter_status.is_ok() {
+        if iter_status.is_err() {
             status = iter_status;
         };
         if status.is_err() || meta.file_size == 0 {
@@ -872,15 +861,15 @@ impl DBImpl {
 
     // Finish the current output file by calling `buidler.finish` and insert it into the table cache
     fn finish_output_file(&self, compact: &mut Compaction, input_iter_valid: bool) -> Result<()> {
-        assert!(compact.outputs.len() > 0);
+        assert!(!compact.outputs.is_empty());
         assert!(compact.builder.is_some());
         let current_entries = compact.builder.as_ref().unwrap().num_entries();
-        let mut status = Ok(());
-        if input_iter_valid {
-            status = compact.builder.as_mut().unwrap().finish(true);
+        let status = if input_iter_valid {
+            compact.builder.as_mut().unwrap().finish(true)
         } else {
             compact.builder.as_mut().unwrap().close();
-        }
+            Ok(())
+        };
         let current_bytes = compact.builder.as_ref().unwrap().file_size();
         // update current output
         let length = compact.outputs.len();
