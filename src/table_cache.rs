@@ -15,18 +15,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use crate::storage::Storage;
-use std::rc::Rc;
-use crate::options::{Options, ReadOptions};
-use crate::cache::{Cache, HandleRef};
-use crate::sstable::table::{Table, new_table_iterator};
 use crate::cache::lru::SharedLRUCache;
+use crate::cache::{Cache, HandleRef};
+use crate::db::filename::{generate_filename, FileType};
+use crate::db::format::ParsedInternalKey;
+use crate::iterator::{EmptyIterator, IterWithCleanup, Iterator};
+use crate::options::{Options, ReadOptions};
+use crate::sstable::table::{new_table_iterator, Table};
+use crate::storage::Storage;
+use crate::util::slice::Slice;
 use crate::util::status::Result;
 use crate::util::varint::VarintU64;
-use crate::db::filename::{generate_filename, FileType};
-use crate::util::slice::Slice;
-use crate::iterator::{Iterator, EmptyIterator, IterWithCleanup};
-use crate::db::format::ParsedInternalKey;
+use std::rc::Rc;
 use std::sync::Arc;
 
 /// A `TableCache` is the cache for the sst files and the sstable in them
@@ -56,10 +56,11 @@ impl TableCache {
         match self.cache.look_up(key.as_slice()) {
             Some(handle) => Ok(handle),
             None => {
-                let filename = generate_filename(self.db_name.as_str(), FileType::Table, file_number);
-                let table_file= self.env.open(filename.as_str())?;
+                let filename =
+                    generate_filename(self.db_name.as_str(), FileType::Table, file_number);
+                let table_file = self.env.open(filename.as_str())?;
                 let table = Table::open(table_file, file_size, self.options.clone())?;
-                return Ok(self.cache.insert(key,  Arc::new(table), 1, None));
+                return Ok(self.cache.insert(key, Arc::new(table), 1, None));
             }
         }
     }
@@ -72,10 +73,19 @@ impl TableCache {
     }
 
     /// Returns the result of a seek to internal key `key` in specified file
-    pub fn get(&self, options: Rc<ReadOptions>, key: &Slice, file_number: u64, file_size: u64) -> Result<Option<ParsedInternalKey>> {
+    pub fn get(
+        &self,
+        options: Rc<ReadOptions>,
+        key: &Slice,
+        file_number: u64,
+        file_size: u64,
+    ) -> Result<Option<ParsedInternalKey>> {
         let handle = self.find_table(file_number, file_size)?;
         // every value should be valid so unwrap is safe here
-        let parsed_key = handle.get_value().unwrap().internal_get(options, key.as_slice())?;
+        let parsed_key = handle
+            .get_value()
+            .unwrap()
+            .internal_get(options, key.as_slice())?;
         self.cache.release(handle);
         Ok(parsed_key)
     }
@@ -87,7 +97,12 @@ impl TableCache {
     /// Entry format:
     ///     key: internal key
     ///     value: value of user key
-    pub fn new_iter(&self, options: Rc<ReadOptions>, file_number: u64, file_size: u64) -> Box<dyn Iterator> {
+    pub fn new_iter(
+        &self,
+        options: Rc<ReadOptions>,
+        file_number: u64,
+        file_size: u64,
+    ) -> Box<dyn Iterator> {
         match self.find_table(file_number, file_size) {
             Ok(h) => {
                 let table = h.get_value().unwrap();
@@ -96,7 +111,7 @@ impl TableCache {
                 iter.register_task(Box::new(move || cache.release(h.clone())));
                 Box::new(iter)
             }
-            Err(e) => EmptyIterator::new_with_err(e)
+            Err(e) => EmptyIterator::new_with_err(e),
         }
     }
 }

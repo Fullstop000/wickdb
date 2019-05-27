@@ -23,16 +23,16 @@ use crate::cache::lru::SharedLRUCache;
 use crate::options::CompressionType::{NoCompression, SnappyCompression, Unknown};
 use crate::snapshot::Snapshot;
 use crate::sstable::block::Block;
+use crate::storage::file::FileStorage;
+use crate::storage::Storage;
 use std::rc::Rc;
 use std::sync::Arc;
-use crate::storage::Storage;
-use crate::storage::file::FileStorage;
 
 #[derive(Clone, Copy, Debug)]
 pub enum CompressionType {
     NoCompression = 0,
     SnappyCompression = 1,
-    Unknown
+    Unknown,
 }
 
 impl From<u8> for CompressionType {
@@ -174,7 +174,7 @@ impl Options {
         // Result for both level-0 and level-1
         let mut result = self.l1_max_bytes;
         while level > 1 {
-            result *= 10 ;
+            result *= 10;
             level -= 1;
         }
         result
@@ -188,7 +188,7 @@ impl Default for Options {
             create_if_missing: false,
             error_if_exists: false,
             paranoid_checks: false,
-            env: Arc::new(FileStorage{}),
+            env: Arc::new(FileStorage {}),
             max_levels: 7,
             l0_compaction_threshold: 4,
             l0_slowdown_writes_threshold: 8,

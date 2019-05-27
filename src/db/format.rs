@@ -15,13 +15,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use crate::filter::FilterPolicy;
 use crate::util::coding::{decode_fixed_64, put_fixed_64};
 use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
+use crate::util::varint::VarintU32;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Error, Formatter};
-use crate::util::varint::VarintU32;
-use crate::filter::FilterPolicy;
 use std::rc::Rc;
 
 /// The max key sequence number. The value is 2^56 - 1 because the seq number
@@ -72,12 +72,12 @@ impl ParsedInternalKey {
     pub fn decode_from(internal_key: Slice) -> Option<Self> {
         let size = internal_key.size();
         if size < 8 {
-            return None
+            return None;
         }
-        let num = decode_fixed_64(&internal_key.as_slice()[size-8..]);
+        let num = decode_fixed_64(&internal_key.as_slice()[size - 8..]);
         let t = ValueType::from(num & 0xff);
         if t == ValueType::Unknown {
-            return None
+            return None;
         }
         let seq = num >> 8;
         Some(Self {
@@ -138,12 +138,14 @@ impl InternalKey {
     pub fn decoded_from(src: &[u8]) -> Self {
         // TODO: avoid copy here
         Self {
-            data: Vec::from(src)
+            data: Vec::from(src),
         }
     }
 
     #[inline]
-    pub fn is_empty(&self) -> bool { self.data.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
 
     #[inline]
     pub fn data(&self) -> &[u8] {
@@ -169,13 +171,11 @@ impl InternalKey {
         let t = ValueType::from(num & 0xff as u64);
         match t {
             ValueType::Unknown => None,
-            _ => Some(
-                ParsedInternalKey {
-                    user_key,
-                    seq: num >> 8,
-                    value_type: t,
-                }
-            )
+            _ => Some(ParsedInternalKey {
+                user_key,
+                seq: num >> 8,
+                value_type: t,
+            }),
         }
     }
 }
@@ -185,7 +185,7 @@ impl Debug for InternalKey {
         if let Some(parsed) = self.parsed() {
             write!(f, "{:?}", parsed)
         } else {
-            let s = unsafe { ::std::str::from_utf8_unchecked(self.data.as_slice())};
+            let s = unsafe { ::std::str::from_utf8_unchecked(self.data.as_slice()) };
             write!(f, "(bad){}", s)
         }
     }
@@ -193,9 +193,7 @@ impl Debug for InternalKey {
 
 impl Default for InternalKey {
     fn default() -> Self {
-        InternalKey {
-            data: vec![],
-        }
+        InternalKey { data: vec![] }
     }
 }
 
@@ -222,16 +220,16 @@ impl LookupKey {
         let mut data = vec![];
         let ukey_start = VarintU32::put_varint(&mut data, (user_key.len() + 8) as u32);
         data.extend_from_slice(user_key);
-        put_fixed_64(&mut data, pack_seq_and_type(seq_number, VALUE_TYPE_FOR_SEEK ));
-        Self {
-            data,
-            ukey_start,
-        }
+        put_fixed_64(
+            &mut data,
+            pack_seq_and_type(seq_number, VALUE_TYPE_FOR_SEEK),
+        );
+        Self { data, ukey_start }
     }
 
     /// Returns a key suitable for lookup in a MemTable.
     /// NOTICE: the LookupKey self should live at least as long as the returning Slice
-    pub fn mem_key(&self)-> Slice {
+    pub fn mem_key(&self) -> Slice {
         Slice::from(self.data.as_slice())
     }
 

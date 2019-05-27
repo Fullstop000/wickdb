@@ -73,7 +73,6 @@ mod tests {
     use std::cmp::min;
     use std::io::SeekFrom;
     use std::rc::Rc;
-    
 
     // Construct a string of the specified length made out of the supplied
     // partial string.
@@ -230,7 +229,7 @@ mod tests {
             let _f = StringFile::new(data.clone());
             let r = Rc::new(RefCell::new(reporter));
             let writer = Writer::new(Box::new(StringFile::new(data.clone())));
-            let read_source =Rc::new(RefCell::new(StringFile::new(data.clone())));
+            let read_source = Rc::new(RefCell::new(StringFile::new(data.clone())));
             Self {
                 source: data.clone(),
                 read_source: read_source.clone(),
@@ -278,9 +277,7 @@ mod tests {
 
         pub fn shrink_size(&mut self, bytes: usize) {
             let written_bytes = self.source.borrow().len();
-            self.source
-                .borrow_mut()
-                .truncate(written_bytes - bytes)
+            self.source.borrow_mut().truncate(written_bytes - bytes)
         }
 
         pub fn fix_checksum(&mut self, header_offset: usize, len: usize) {

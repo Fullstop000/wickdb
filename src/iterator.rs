@@ -15,15 +15,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
+use crate::options::ReadOptions;
+use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
 use crate::util::status::{Result, WickErr};
-use crate::options::ReadOptions;
+use std::cell::RefCell;
+use std::cmp::Ordering;
 use std::mem;
 use std::rc::Rc;
-use std::cmp::Ordering;
-use crate::util::comparator::Comparator;
 use std::sync::Arc;
-use std::cell::RefCell;
 
 /// A common trait for iterating all the key/value entries.
 // TODO: use Relative Type or Generics instead of explicitly using Slice as the type of key and value
@@ -90,7 +90,7 @@ impl IterWithCleanup {
     }
 }
 
-impl Drop for IterWithCleanup{
+impl Drop for IterWithCleanup {
     fn drop(&mut self) {
         for mut t in self.tasks.drain(..) {
             t()
@@ -148,12 +148,12 @@ pub struct EmptyIterator {
 impl EmptyIterator {
     #[inline]
     pub fn new() -> Box<dyn Iterator> {
-        Box::new( Self { err: None })
+        Box::new(Self { err: None })
     }
 
     #[inline]
     pub fn new_with_err(e: WickErr) -> Box<dyn Iterator> {
-        Box::new( Self { err: Some(e) })
+        Box::new(Self { err: Some(e) })
     }
 }
 
@@ -206,7 +206,11 @@ pub trait DerivedIterFactory {
 }
 
 impl ConcatenateIterator {
-    pub fn new(options: Rc<ReadOptions> , origin: Box<dyn Iterator>, factory: Box<dyn DerivedIterFactory>) -> Self {
+    pub fn new(
+        options: Rc<ReadOptions>,
+        origin: Box<dyn Iterator>,
+        factory: Box<dyn DerivedIterFactory>,
+    ) -> Self {
         Self {
             options,
             origin,
@@ -230,16 +234,16 @@ impl ConcatenateIterator {
             self.derived = None
         } else {
             let v = self.origin.value();
-            if self.derived.is_none() || v.compare(&Slice::from(self.prev_derived_value.as_slice())) != Ordering::Equal {
+            if self.derived.is_none()
+                || v.compare(&Slice::from(self.prev_derived_value.as_slice())) != Ordering::Equal
+            {
                 match self.factory.produce(self.options.clone(), &v) {
                     Ok(derived) => {
                         // TODO: avoid cloning here
                         self.prev_derived_value = Vec::from(v.as_slice());
                         self.set_derived(Some(derived));
-                    },
-                    Err(e) => {
-                        self.set_derived(Some(EmptyIterator::new_with_err(e)))
                     }
+                    Err(e) => self.set_derived(Some(EmptyIterator::new_with_err(e))),
                 }
             }
         }
@@ -298,7 +302,10 @@ impl ConcatenateIterator {
 
     #[inline]
     fn valid_or_panic(&self) {
-        assert!(self.valid(), "[concatenated iterator] invalid derived iterator")
+        assert!(
+            self.valid(),
+            "[concatenated iterator] invalid derived iterator"
+        )
     }
 }
 
@@ -340,24 +347,28 @@ impl Iterator for ConcatenateIterator {
 
     fn next(&mut self) {
         self.valid_or_panic();
-        self.derived.as_mut().map_or((), |di|di.next());
+        self.derived.as_mut().map_or((), |di| di.next());
         self.skip_forward();
     }
 
     fn prev(&mut self) {
         self.valid_or_panic();
-        self.derived.as_mut().map_or((), |di|di.prev());
+        self.derived.as_mut().map_or((), |di| di.prev());
         self.skip_backward();
     }
 
     fn key(&self) -> Slice {
         self.valid_or_panic();
-        self.derived.as_ref().map_or(Slice::default(), |di|di.key())
+        self.derived
+            .as_ref()
+            .map_or(Slice::default(), |di| di.key())
     }
 
     fn value(&self) -> Slice {
         self.valid_or_panic();
-        self.derived.as_ref().map_or(Slice::default(), |di|di.value())
+        self.derived
+            .as_ref()
+            .map_or(Slice::default(), |di| di.value())
     }
 
     fn status(&mut self) -> Result<()> {
@@ -416,7 +427,11 @@ impl MergingIterator {
                     smallest = Some(child.clone());
                     index = i
                 } else {
-                    if self.cmp.compare(child.borrow().key().as_slice(), smallest.as_ref().unwrap().borrow().key().as_slice()) == Ordering::Less {
+                    if self.cmp.compare(
+                        child.borrow().key().as_slice(),
+                        smallest.as_ref().unwrap().borrow().key().as_slice(),
+                    ) == Ordering::Less
+                    {
                         smallest = Some(child.clone());
                         index = i
                     }
@@ -437,7 +452,11 @@ impl MergingIterator {
                     largest = Some(child.clone());
                     index = i
                 } else {
-                    if self.cmp.compare(child.borrow().key().as_slice(), largest.as_ref().unwrap().borrow().key().as_slice()) == Ordering::Greater {
+                    if self.cmp.compare(
+                        child.borrow().key().as_slice(),
+                        largest.as_ref().unwrap().borrow().key().as_slice(),
+                    ) == Ordering::Greater
+                    {
                         largest = Some(child.clone());
                         index = i
                     }
@@ -485,7 +504,12 @@ impl Iterator for MergingIterator {
             for (i, child) in self.children.iter().enumerate() {
                 if i != self.current_index {
                     child.borrow_mut().seek(&key);
-                    if child.borrow().valid() && self.cmp.compare(key.as_slice(), child.borrow().key().as_slice()) == Ordering::Equal {
+                    if child.borrow().valid()
+                        && self
+                            .cmp
+                            .compare(key.as_slice(), child.borrow().key().as_slice())
+                            == Ordering::Equal
+                    {
                         child.borrow_mut().next();
                     }
                 }
@@ -528,7 +552,7 @@ impl Iterator for MergingIterator {
 
     fn status(&mut self) -> Result<()> {
         for child in self.children.iter() {
-            let status =  child.borrow_mut().status();
+            let status = child.borrow_mut().status();
             if status.is_err() {
                 return status;
             }
@@ -537,13 +561,12 @@ impl Iterator for MergingIterator {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
+    use crate::iterator::{EmptyIterator, IterWithCleanup};
     use std::cell::RefCell;
-    use std::rc::Rc;
     use std::mem;
-    use crate::iterator::{IterWithCleanup, EmptyIterator};
+    use std::rc::Rc;
 
     struct TestCleanup {
         results: Vec<usize>,
@@ -551,9 +574,7 @@ mod tests {
 
     #[test]
     fn test_iter_with_cleanup() {
-        let test_cleaned_up = Rc::new(RefCell::new(TestCleanup {
-            results: vec![],
-        }));
+        let test_cleaned_up = Rc::new(RefCell::new(TestCleanup { results: vec![] }));
 
         let mut iter = IterWithCleanup::new(EmptyIterator::new());
         for i in 0..100 {

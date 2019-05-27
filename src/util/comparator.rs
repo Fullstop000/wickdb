@@ -63,8 +63,8 @@ pub trait Comparator: Send + Sync {
 
 pub struct BytewiseComparator {}
 
-unsafe impl Send for BytewiseComparator{}
-unsafe impl Sync for BytewiseComparator{}
+unsafe impl Send for BytewiseComparator {}
+unsafe impl Sync for BytewiseComparator {}
 
 impl BytewiseComparator {
     pub fn new() -> BytewiseComparator {

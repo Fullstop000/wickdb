@@ -15,11 +15,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use crate::mem::{MemTable, MemoryTable};
 use crate::db::format::ValueType;
+use crate::mem::{MemTable, MemoryTable};
+use crate::util::coding::{decode_fixed_64, encode_fixed_64};
 use crate::util::slice::Slice;
-use crate::util::status::{Result, WickErr, Status};
-use crate::util::coding::{encode_fixed_64, decode_fixed_64};
+use crate::util::status::{Result, Status, WickErr};
 use crate::util::varint::VarintU32;
 use std::sync::Arc;
 
@@ -68,11 +68,8 @@ pub struct WriteBatch {
 
 impl WriteBatch {
     pub fn new() -> Self {
-        let contents = vec![0;HEADER_SIZE];
-        Self {
-            contents,
-            count: 0,
-        }
+        let contents = vec![0; HEADER_SIZE];
+        Self { contents, count: 0 }
     }
 
     #[inline]
@@ -82,7 +79,7 @@ impl WriteBatch {
 
     /// Stores the mapping "key -> value" in the database
     pub fn put(&mut self, key: &[u8], value: &[u8]) {
-        self.count +=1;
+        self.count += 1;
         self.contents.push(ValueType::Value as u8);
         VarintU32::put_varint(&mut self.contents, key.len() as u32);
         self.contents.extend_from_slice(key);
@@ -92,7 +89,7 @@ impl WriteBatch {
 
     /// If the database contains a mapping for "key", erase it. Else do nothing
     pub fn delete(&mut self, key: &[u8]) {
-        self.count +=1;
+        self.count += 1;
         self.contents.push(ValueType::Deletion as u8);
         VarintU32::put_varint(&mut self.contents, key.len() as u32);
         self.contents.extend_from_slice(key);
@@ -106,7 +103,10 @@ impl WriteBatch {
 
     /// Copies the operations in "source" to this batch.
     pub fn append(&mut self, mut src: WriteBatch) {
-        assert!(src.contents.len() >= HEADER_SIZE, "[batch] malformed WriteBatch (too small) to append");
+        assert!(
+            src.contents.len() >= HEADER_SIZE,
+            "[batch] malformed WriteBatch (too small) to append"
+        );
         self.count += src.count;
         src.contents.drain(0..HEADER_SIZE);
         self.contents.append(&mut src.contents)
@@ -121,9 +121,12 @@ impl WriteBatch {
     }
 
     /// Insert all the records in the batch into the given `MemTable`
-    pub fn insert_into(&self, mem: &MemTable) ->Result<()> {
+    pub fn insert_into(&self, mem: &MemTable) -> Result<()> {
         if self.contents.len() < HEADER_SIZE {
-            return Err(WickErr::new(Status::Corruption, Some("[batch] malformed WriteBatch (too small)")));
+            return Err(WickErr::new(
+                Status::Corruption,
+                Some("[batch] malformed WriteBatch (too small)"),
+            ));
         }
         let mut s = Slice::from(&self.contents.as_slice()[HEADER_SIZE..]);
         let mut found = 0;
@@ -141,7 +144,10 @@ impl WriteBatch {
                             continue;
                         }
                     }
-                    return Err(WickErr::new(Status::Corruption, Some("[batch] bad WriteBatch put")))
+                    return Err(WickErr::new(
+                        Status::Corruption,
+                        Some("[batch] bad WriteBatch put"),
+                    ));
                 }
                 ValueType::Deletion => {
                     if let Some(key) = VarintU32::get_varint_prefixed_slice(&mut s) {
@@ -149,20 +155,31 @@ impl WriteBatch {
                         seq += 1;
                         continue;
                     }
-                    return Err(WickErr::new(Status::Corruption, Some("[batch] bad WriteBatch delete")))
+                    return Err(WickErr::new(
+                        Status::Corruption,
+                        Some("[batch] bad WriteBatch delete"),
+                    ));
                 }
-                ValueType::Unknown => return Err(WickErr::new(Status::Corruption, Some("[batch] unknown WriteBatch value type")))
+                ValueType::Unknown => {
+                    return Err(WickErr::new(
+                        Status::Corruption,
+                        Some("[batch] unknown WriteBatch value type"),
+                    ))
+                }
             }
         }
         if found != self.count() {
-            return Err(WickErr::new(Status::Corruption, Some("[batch] WriteBatch has wrong count")));
+            return Err(WickErr::new(
+                Status::Corruption,
+                Some("[batch] WriteBatch has wrong count"),
+            ));
         }
         Ok(())
     }
 
     #[inline]
     pub fn count(&self) -> u32 {
-//        decode_fixed_32(&self.contents.as_slice()[8..])
+        //        decode_fixed_32(&self.contents.as_slice()[8..])
         self.count
     }
 
@@ -172,7 +189,7 @@ impl WriteBatch {
     }
 
     #[inline]
-    pub fn sequence(&self) -> u64{
+    pub fn sequence(&self) -> u64 {
         decode_fixed_64(self.contents.as_slice())
     }
 
@@ -203,7 +220,8 @@ impl BatchHandler for MemTableInserter {
     }
 
     fn delete(&mut self, key: &[u8]) {
-        self.memtable.add(self.seq, ValueType::Deletion, key, "".as_bytes());
+        self.memtable
+            .add(self.seq, ValueType::Deletion, key, "".as_bytes());
         self.seq += 1;
     }
 }
@@ -211,13 +229,15 @@ impl BatchHandler for MemTableInserter {
 #[cfg(test)]
 mod tests {
     use crate::batch::WriteBatch;
-    use crate::mem::{MemTable, MemoryTable};
     use crate::db::format::{InternalKeyComparator, ParsedInternalKey, ValueType};
+    use crate::mem::{MemTable, MemoryTable};
     use crate::util::comparator::BytewiseComparator;
     use std::sync::Arc;
 
     fn print_contents(batch: &WriteBatch) -> String {
-        let mem = MemTable::new(Arc::new(InternalKeyComparator::new(Box::new(BytewiseComparator::new()))));
+        let mem = MemTable::new(Arc::new(InternalKeyComparator::new(Box::new(
+            BytewiseComparator::new(),
+        ))));
         let result = batch.insert_into(&mem);
         let mut iter = mem.new_iterator();
         iter.as_mut().seek_to_first();
@@ -227,14 +247,15 @@ mod tests {
             if let Some(ikey) = ParsedInternalKey::decode_from(iter.key()) {
                 match ikey.value_type {
                     ValueType::Value => {
-                        let tmp = format!("Put({}, {})", ikey.user_key.as_str(), iter.value().as_str());
+                        let tmp =
+                            format!("Put({}, {})", ikey.user_key.as_str(), iter.value().as_str());
                         s.push_str(tmp.as_str());
-                        count+=1
+                        count += 1
                     }
                     ValueType::Deletion => {
                         let tmp = format!("Delete({})", ikey.user_key.as_str());
                         s.push_str(tmp.as_str());
-                        count+=1
+                        count += 1
                     }
                     _ => {}
                 }
@@ -243,7 +264,7 @@ mod tests {
                 s.push('|');
             }
             iter.next();
-        };
+        }
         if result.is_err() {
             s.push_str("ParseError()")
         } else if count != batch.count() {
@@ -268,7 +289,10 @@ mod tests {
         b.set_sequence(100);
         assert_eq!(100, b.sequence());
         assert_eq!(3, b.count());
-        assert_eq!("Put(baz, boo)@102|Delete(box)@101|Put(foo, bar)@100|", print_contents(&b).as_str());
+        assert_eq!(
+            "Put(baz, boo)@102|Delete(box)@101|Put(foo, bar)@100|",
+            print_contents(&b).as_str()
+        );
     }
 
     #[test]
@@ -278,7 +302,10 @@ mod tests {
         b.delete("box".as_bytes());
         b.set_sequence(200);
         b.contents.truncate(b.contents.len() - 1);
-        assert_eq!("Put(foo, bar)@200|ParseError()", print_contents(&b).as_str());
+        assert_eq!(
+            "Put(foo, bar)@200|ParseError()",
+            print_contents(&b).as_str()
+        );
     }
 
     #[test]
@@ -298,7 +325,10 @@ mod tests {
         assert_eq!("Put(a, va)@200|Put(b, vb)@201|", print_contents(&b1));
         b2.delete("foo".as_bytes());
         b1.append(b2.clone());
-        assert_eq!("Put(a, va)@200|Put(b, vb)@202|Put(b, vb)@201|Delete(foo)@203|", print_contents(&b1));
+        assert_eq!(
+            "Put(a, va)@200|Put(b, vb)@202|Put(b, vb)@201|Delete(foo)@203|",
+            print_contents(&b1)
+        );
     }
 
     #[test]
@@ -311,7 +341,7 @@ mod tests {
 
         b.put("baz".as_bytes(), "boo".as_bytes());
         let two_keys_size = b.approximate_size();
-        assert!(one_key_size< two_keys_size);
+        assert!(one_key_size < two_keys_size);
 
         b.delete("box".as_bytes());
         let post_delete_size = b.approximate_size();

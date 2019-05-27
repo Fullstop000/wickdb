@@ -64,7 +64,9 @@ impl Slice {
             self.data = ptr::null();
             self.size = 0;
         } else {
-            unsafe { self.data = self.data.add(n); }
+            unsafe {
+                self.data = self.data.add(n);
+            }
             self.size -= n;
         }
     }

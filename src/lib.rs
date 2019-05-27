@@ -13,7 +13,6 @@
 
 // TODO: remove below when the implementation is stable
 #![allow(dead_code)]
-
 #![allow(clippy::unreadable_literal)]
 #![allow(clippy::new_ret_no_self)]
 #![allow(clippy::type_complexity)]
@@ -44,8 +43,8 @@ pub mod options;
 mod record;
 mod snapshot;
 mod sstable;
+pub mod storage;
 mod table_cache;
 mod version;
-pub mod storage;
 
 pub use util::status;

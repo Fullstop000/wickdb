@@ -15,21 +15,23 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use crate::version::version_edit::FileMetaData;
-use crate::options::{ReadOptions, Options};
-use crate::db::format::{LookupKey, InternalKeyComparator, ValueType, InternalKey, VALUE_TYPE_FOR_SEEK};
-use crate::util::status::Result;
-use std::sync::{Arc, RwLock};
-use std::cmp::Ordering as CmpOrdering;
-use crate::util::slice::Slice;
-use crate::util::comparator::Comparator;
-use crate::table_cache::TableCache;
-use std::rc::Rc;
-use std::sync::atomic::{Ordering, AtomicUsize};
+use crate::db::format::{
+    InternalKey, InternalKeyComparator, LookupKey, ValueType, VALUE_TYPE_FOR_SEEK,
+};
 use crate::iterator::Iterator;
-use crate::version::version_set::VersionSet;
-use std::mem;
+use crate::options::{Options, ReadOptions};
+use crate::table_cache::TableCache;
 use crate::util::coding::put_fixed_64;
+use crate::util::comparator::Comparator;
+use crate::util::slice::Slice;
+use crate::util::status::Result;
+use crate::version::version_edit::FileMetaData;
+use crate::version::version_set::VersionSet;
+use std::cmp::Ordering as CmpOrdering;
+use std::mem;
+use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
 
 pub mod version_edit;
 pub mod version_set;
@@ -110,7 +112,12 @@ impl Version {
     }
 
     /// Search the value by the given key in sstables level by level
-    pub fn get(&self, options: ReadOptions, key: LookupKey, table_cache: Arc<TableCache>) -> Result<(Option<Slice>, SeekStats)> {
+    pub fn get(
+        &self,
+        options: ReadOptions,
+        key: LookupKey,
+        table_cache: Arc<TableCache>,
+    ) -> Result<(Option<Slice>, SeekStats)> {
         let opt = Rc::new(options);
         let ikey = key.internal_key();
         let ukey = key.user_key();
@@ -119,21 +126,24 @@ impl Version {
         let mut seek_stats = SeekStats::new();
         for (level, files) in self.files.iter().enumerate() {
             if files.is_empty() {
-                continue
+                continue;
             }
             if level == 0 {
                 // Level-0 files may overlap each other. Find all files that
                 // overlap user_key and process them in order from newest to oldest because
                 // the last level-0 file always has the newest entries.
                 for f in files.iter().rev() {
-                    if ucmp.compare(ukey.as_slice(), f.largest.data()) != CmpOrdering::Greater && ucmp.compare(ukey.as_slice(), f.smallest.data()) != CmpOrdering::Less {
+                    if ucmp.compare(ukey.as_slice(), f.largest.data()) != CmpOrdering::Greater
+                        && ucmp.compare(ukey.as_slice(), f.smallest.data()) != CmpOrdering::Less
+                    {
                         files_to_seek.push(f.clone());
                     }
                     files_to_seek.sort_by(|a, b| b.number.cmp(&a.number))
                 }
             } else {
                 let index = Self::find_file(self.icmp.clone(), self.files[level].as_slice(), &ikey);
-                if index >= files.len() { // TODO: maybe '==' is enough ?
+                if index >= files.len() {
+                    // TODO: maybe '==' is enough ?
                     // we reach the end but not found a file matches
                 } else {
                     let target = files[index].clone();
@@ -149,20 +159,20 @@ impl Version {
                 seek_stats.seek_file = Some(file.clone());
                 match table_cache.get(opt.clone(), &ikey, file.number, file.file_size)? {
                     None => continue, // keep searching
-                    Some(parsed_key) => {
-                        match parsed_key.value_type {
-                            ValueType::Value => return Ok((Some(parsed_key.user_key.clone()), seek_stats)),
-                            ValueType::Deletion => return Ok((None, seek_stats)),
-                            _ => {},
+                    Some(parsed_key) => match parsed_key.value_type {
+                        ValueType::Value => {
+                            return Ok((Some(parsed_key.user_key.clone()), seek_stats))
                         }
-                    }
+                        ValueType::Deletion => return Ok((None, seek_stats)),
+                        _ => {}
+                    },
                 }
             }
         }
         Ok((None, seek_stats))
     }
 
-    /// Update seek stats for a sstable file. If it runs out of `allow_seek`, 
+    /// Update seek stats for a sstable file. If it runs out of `allow_seek`,
     /// mark it as a pending compaction file and returns true.
     pub fn update_stats(&self, stats: SeekStats) -> bool {
         if let Some(f) = stats.seek_file {
@@ -170,8 +180,9 @@ impl Version {
             let mut file_to_compact = self.file_to_compact.write().unwrap();
             if file_to_compact.is_none() && old == 1 {
                 *file_to_compact = Some(f);
-                self.file_to_compact_level.store(stats.seek_file_level.unwrap(), Ordering::Release);
-                return true
+                self.file_to_compact_level
+                    .store(stats.seek_file_level.unwrap(), Ordering::Release);
+                return true;
             }
         }
         false
@@ -191,7 +202,11 @@ impl Version {
 
     /// Binary search given files to find earliest index of index whose largest key >= ikey.
     /// If not found, returns the length of files.
-    pub fn find_file(icmp: Arc<InternalKeyComparator>, files: &[Arc<FileMetaData>], ikey: &Slice ) -> usize {
+    pub fn find_file(
+        icmp: Arc<InternalKeyComparator>,
+        files: &[Arc<FileMetaData>],
+        ikey: &Slice,
+    ) -> usize {
         let mut left = 0;
         let mut right = files.len();
         while left < right {
@@ -207,31 +222,45 @@ impl Version {
                 right = mid;
             }
         }
-        return right
+        return right;
     }
 
     /// Return the level at which we should place a new memtable compaction
     /// result that covers the range `[smallest_user_key,largest_user_key]`.
-    pub fn pick_level_for_memtable_output(&self, smallest_ukey: &Slice, largest_ukey: &Slice) -> usize {
+    pub fn pick_level_for_memtable_output(
+        &self,
+        smallest_ukey: &Slice,
+        largest_ukey: &Slice,
+    ) -> usize {
         let mut level = 0;
         if !self.overlap_in_level(level, smallest_ukey, largest_ukey) {
             // No overlapping in level 0
             // we might directly push files to next level if there is no overlap in next level
-            let smallest_ikey = Rc::new(InternalKey::new(smallest_ukey, u64::max_value(),VALUE_TYPE_FOR_SEEK));
+            let smallest_ikey = Rc::new(InternalKey::new(
+                smallest_ukey,
+                u64::max_value(),
+                VALUE_TYPE_FOR_SEEK,
+            ));
             let largest_ikey = Rc::new(InternalKey::new(largest_ukey, 0, ValueType::Deletion));
             let max_levels = self.options.max_levels as usize;
-            while level < max_levels{
+            while level < max_levels {
                 if self.overlap_in_level(level + 1, smallest_ukey, largest_ukey) {
-                    break
+                    break;
                 }
-                if level + 2 < max_levels{
+                if level + 2 < max_levels {
                     // Check that file does not overlap too many grandparent bytes
-                    let overlaps = self.get_overlapping_inputs(level + 2, Some(smallest_ikey.clone()), Some(largest_ikey.clone()));
-                    if VersionSet::total_file_size(&overlaps) > self.options.max_grandparent_overlap_bytes() {
-                        break
+                    let overlaps = self.get_overlapping_inputs(
+                        level + 2,
+                        Some(smallest_ikey.clone()),
+                        Some(largest_ikey.clone()),
+                    );
+                    if VersionSet::total_file_size(&overlaps)
+                        > self.options.max_grandparent_overlap_bytes()
+                    {
+                        break;
                     }
                 }
-                level +=1;
+                level += 1;
             }
         }
         level
@@ -285,7 +314,12 @@ impl Version {
     /// `level` is out bound of `files`
     #[inline]
     pub fn get_level_files(&self, level: usize) -> &[Arc<FileMetaData>] {
-        assert!(level < self.files.len(), "[version] invalid level {}, the max level is {}", level, self.options.max_levels - 1);
+        assert!(
+            level < self.files.len(),
+            "[version] invalid level {}, the max level is {}",
+            level,
+            self.options.max_levels - 1
+        );
         self.files[level].as_slice()
     }
 
@@ -297,8 +331,10 @@ impl Version {
         if level == 0 {
             // need to check against all files in level 0
             for file in self.files[0].iter() {
-                if self.key_is_after_file(file.clone(), smallest_ukey) || self.key_is_before_file(file.clone(), largest_ukey) {
-                    continue
+                if self.key_is_after_file(file.clone(), smallest_ukey)
+                    || self.key_is_before_file(file.clone(), largest_ukey)
+                {
+                    continue;
                 } else {
                     return true;
                 }
@@ -308,26 +344,41 @@ impl Version {
         // binary search in level > 0
         let index = {
             if !smallest_ukey.is_empty() {
-                let smallest_ikey = InternalKey::new(smallest_ukey, u64::max_value(), VALUE_TYPE_FOR_SEEK);
-                Self::find_file(self.icmp.clone(), &self.files[level], &Slice::from(smallest_ikey.data()))
+                let smallest_ikey =
+                    InternalKey::new(smallest_ukey, u64::max_value(), VALUE_TYPE_FOR_SEEK);
+                Self::find_file(
+                    self.icmp.clone(),
+                    &self.files[level],
+                    &Slice::from(smallest_ikey.data()),
+                )
             } else {
                 0
             }
         };
         if index >= self.files[level].len() {
             // beginning of range is after all files, so no overlap
-            return false
+            return false;
         }
         // check iff the upper bound is overlapping
         !self.key_is_before_file(self.files[level][index].clone(), largest_ukey)
     }
 
     fn key_is_after_file(&self, file: Arc<FileMetaData>, ukey: &Slice) -> bool {
-        !ukey.is_empty() && self.icmp.user_comparator.compare(ukey.as_slice(), file.largest.user_key()) == CmpOrdering::Greater
+        !ukey.is_empty()
+            && self
+                .icmp
+                .user_comparator
+                .compare(ukey.as_slice(), file.largest.user_key())
+                == CmpOrdering::Greater
     }
 
     fn key_is_before_file(&self, file: Arc<FileMetaData>, ukey: &Slice) -> bool {
-        !ukey.is_empty() && self.icmp.user_comparator.compare(ukey.as_slice(), file.smallest.user_key()) == CmpOrdering::Less
+        !ukey.is_empty()
+            && self
+                .icmp
+                .user_comparator
+                .compare(ukey.as_slice(), file.smallest.user_key())
+                == CmpOrdering::Less
     }
 
     // Return all files in `level` that overlap [begin, end]
@@ -337,7 +388,12 @@ impl Version {
     // total range could be larger than [begin, end]
     // A None begin is considered as -infinite
     // A None end is considered as +infinite
-    fn get_overlapping_inputs(&self, level: usize, begin: Option<Rc<InternalKey>>, end: Option<Rc<InternalKey>>) -> Vec<Arc<FileMetaData>> {
+    fn get_overlapping_inputs(
+        &self,
+        level: usize,
+        begin: Option<Rc<InternalKey>>,
+        end: Option<Rc<InternalKey>>,
+    ) -> Vec<Arc<FileMetaData>> {
         // TODO: the implementation treating level 0 files is somewhat tricky ( since we use unsafe pointer ).
         //       Consider separate this into two single functions: one for level 0, one for level > 0
         let mut result = vec![];
@@ -348,25 +404,33 @@ impl Version {
             for file in self.files[level].iter() {
                 let file_begin = file.smallest.user_key();
                 let file_end = file.largest.user_key();
-                if !user_begin.is_empty() && cmp.compare(file_end, user_begin.as_slice()) == CmpOrdering::Less {
-                   // 'file' is completely before the specified range; skip it
-                    continue
+                if !user_begin.is_empty()
+                    && cmp.compare(file_end, user_begin.as_slice()) == CmpOrdering::Less
+                {
+                    // 'file' is completely before the specified range; skip it
+                    continue;
                 }
-                if !user_end.is_empty() && cmp.compare(file_begin, user_end.as_slice()) == CmpOrdering::Greater {
+                if !user_end.is_empty()
+                    && cmp.compare(file_begin, user_end.as_slice()) == CmpOrdering::Greater
+                {
                     // 'file' is completely after the specified range; skip it
-                    continue
+                    continue;
                 }
                 result.push(file.clone());
                 if level == 0 {
                     // Level-0 files may overlap each other.  So check if the newly
                     // added file has expanded the range.  If so, restart search to make sure that
                     // we includes all the overlapping level 0 files
-                    if !user_begin.is_empty() && cmp.compare(file_begin, user_begin.as_slice()) == CmpOrdering::Less {
+                    if !user_begin.is_empty()
+                        && cmp.compare(file_begin, user_begin.as_slice()) == CmpOrdering::Less
+                    {
                         user_begin = Slice::from(file_begin);
                         result.clear();
                         continue 'outer;
                     }
-                    if !user_end.is_empty() && cmp.compare(file_end, user_end.as_slice()) == CmpOrdering::Greater {
+                    if !user_end.is_empty()
+                        && cmp.compare(file_end, user_end.as_slice()) == CmpOrdering::Greater
+                    {
                         user_end = Slice::from(file_end);
                         result.clear();
                         continue 'outer;
@@ -376,7 +440,6 @@ impl Version {
             return result;
         }
     }
-
 }
 
 /// file number and file size are both u64, so 2 * size_of(u64)
@@ -401,7 +464,7 @@ impl LevelFileNumIterator {
             files,
             icmp,
             index,
-            value_buf: Vec::with_capacity(FILE_META_LENGTH)
+            value_buf: Vec::with_capacity(FILE_META_LENGTH),
         }
     }
 

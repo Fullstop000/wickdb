@@ -16,17 +16,17 @@
 // found in the LICENSE file.
 
 use super::arena::*;
+use crate::iterator::Iterator;
 use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
+use crate::util::status::Result;
 use rand::random;
 use std::cmp::Ordering as CmpOrdering;
-use std::{mem, slice};
+use std::intrinsics::copy_nonoverlapping;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
-use std::intrinsics::copy_nonoverlapping;
-use crate::iterator::Iterator;
-use crate::util::status::Result;
 use std::sync::Arc;
+use std::{mem, slice};
 
 const BRANCHING: u32 = 4;
 pub const MAX_HEIGHT: usize = 12;
@@ -55,10 +55,14 @@ impl Node {
         let size = mem::size_of::<Node>() + height * mem::size_of::<AtomicPtr<Node>>();
         let ptr = arena.allocate_aligned(size);
         unsafe {
-            let (node_part, nexts_part) = slice::from_raw_parts_mut(ptr, size)
-                .split_at_mut(mem::size_of::<Node>());
+            let (node_part, nexts_part) =
+                slice::from_raw_parts_mut(ptr, size).split_at_mut(mem::size_of::<Node>());
             let node = node_part.as_mut_ptr() as *mut Node;
-            let nexts = Vec::from_raw_parts(nexts_part.as_mut_ptr() as *mut AtomicPtr<Node>, height, height);
+            let nexts = Vec::from_raw_parts(
+                nexts_part.as_mut_ptr() as *mut AtomicPtr<Node>,
+                height,
+                height,
+            );
             (*node).key = key;
             (*node).next_nodes = nexts.into_boxed_slice();
             node
@@ -122,7 +126,8 @@ impl Skiplist {
         if !node.is_null() {
             unsafe {
                 assert_ne!(
-                    (&(*node)).key().compare(&key), CmpOrdering::Equal,
+                    (&(*node)).key().compare(&key),
+                    CmpOrdering::Equal,
                     "[skiplist] duplicate insertion [key={:?}] is not allowed",
                     key
                 );
@@ -139,9 +144,15 @@ impl Skiplist {
         }
         // allocate the key
         let k = self.arena.allocate(key.size());
-        unsafe { copy_nonoverlapping(key.as_ptr(), k, key.size()); }
+        unsafe {
+            copy_nonoverlapping(key.as_ptr(), k, key.size());
+        }
         // allocate the node
-        let new_node = Node::new(Slice::new(k as *const u8, key.size()), height, self.arena.as_ref());
+        let new_node = Node::new(
+            Slice::new(k as *const u8, key.size()),
+            height,
+            self.arena.as_ref(),
+        );
         unsafe {
             for i in 1..=height {
                 (*new_node).set_next(i, (*(prev[i - 1])).get_next(i));
@@ -192,10 +203,10 @@ impl Skiplist {
             unsafe {
                 let next = (*node).get_next(level);
                 if next.is_null()
-                    || self.comparator.compare(
-                    &((*next).key()).as_slice(),
-                    key.as_slice(),
-                    ) != CmpOrdering::Less
+                    || self
+                        .comparator
+                        .compare(&((*next).key()).as_slice(), key.as_slice())
+                        != CmpOrdering::Less
                 {
                     // next is nullptr or next.key >= key
                     if level == 1 {
@@ -347,15 +358,15 @@ fn rand_height() -> usize {
 mod tests {
     use super::*;
     use crate::iterator::Iterator;
-    use crate::util::comparator::BytewiseComparator;
-    use std::{ptr, thread};
-    use std::cmp::Ordering as CmpOrdering;
     use crate::util::coding::{decode_fixed_64, put_fixed_64};
+    use crate::util::comparator::BytewiseComparator;
     use crate::util::hash::hash as do_hash;
     use rand::Rng;
     use rand::RngCore;
+    use std::cmp::Ordering as CmpOrdering;
     use std::sync::atomic::AtomicBool;
     use std::sync::{Condvar, Mutex};
+    use std::{ptr, thread};
 
     fn new_test_skl() -> Skiplist {
         Skiplist::new(
@@ -372,8 +383,8 @@ mod tests {
         // just use MAX_HEIGHT as capacity because it's the largest value that node.height can have
         let mut prev_nodes = vec![skl.head; MAX_HEIGHT];
         let mut max_height = 1;
-        for (key,  height) in nodes.drain(..) {
-            let n = Node::new(key,  height, skl.arena.as_mut());
+        for (key, height) in nodes.drain(..) {
+            let n = Node::new(key, height, skl.arena.as_mut());
             for (h, prev_node) in prev_nodes[0..height].iter().enumerate() {
                 unsafe {
                     (**prev_node).set_next(h + 1, n);
@@ -414,11 +425,7 @@ mod tests {
         assert_eq!(true, skl.key_is_less_than_or_equal(&key, ptr::null_mut()));
 
         for (node_key, expected) in tests {
-            let node = Node::new(
-                Slice::from(node_key.as_slice()),
-                1,
-                skl.arena.as_ref(),
-            );
+            let node = Node::new(Slice::from(node_key.as_slice()), 1, skl.arena.as_ref());
             assert_eq!(expected, skl.key_is_less_than_or_equal(&key, node))
         }
     }
@@ -515,13 +522,7 @@ mod tests {
 
     #[test]
     fn test_insert() {
-        let inputs = vec![
-            "key1",
-            "key3",
-            "key5",
-            "key7",
-            "key9",
-        ];
+        let inputs = vec!["key1", "key3", "key5", "key7", "key9"];
         let skl = new_test_skl();
         for key in inputs.clone().drain(..) {
             skl.insert(Slice::from(key));
@@ -556,23 +557,12 @@ mod tests {
     #[test]
     fn test_basic() {
         let skl = new_test_skl();
-        let inputs = vec![
-            "key1",
-            "key11",
-            "key13",
-            "key3",
-            "key5",
-            "key7",
-            "key9",
-        ];
+        let inputs = vec!["key1", "key11", "key13", "key3", "key5", "key7", "key9"];
         for key in inputs.clone().drain(..) {
             skl.insert(Slice::from(key))
         }
         let mut skl_iterator = SkiplistIterator::new(&skl);
-        assert_eq!(
-            ptr::null_mut(),
-            skl_iterator.node,
-        );
+        assert_eq!(ptr::null_mut(), skl_iterator.node,);
 
         skl_iterator.seek_to_first();
         assert_eq!("key1", skl_iterator.key().as_str());
@@ -587,10 +577,7 @@ mod tests {
         skl_iterator.seek_to_first();
         skl_iterator.next();
         skl_iterator.prev();
-        assert_eq!(
-            inputs[0],
-            skl_iterator.key().as_str()
-        );
+        assert_eq!(inputs[0], skl_iterator.key().as_str());
         skl_iterator.seek_to_first();
         skl_iterator.seek_to_last();
         assert_eq!(inputs[inputs.len() - 1], skl_iterator.key().as_str());
@@ -602,7 +589,7 @@ mod tests {
 
     // Per-key generation
     struct State {
-        generation: [AtomicUsize; K]
+        generation: [AtomicUsize; K],
     }
 
     impl State {
@@ -616,9 +603,7 @@ mod tests {
             for i in 0..K {
                 generation[i] = AtomicUsize::new(0)
             }
-            Self {
-                generation
-            }
+            Self { generation }
         }
 
         fn set(&self, k: usize, v: usize) {
@@ -649,7 +634,7 @@ mod tests {
         let mut bytes = vec![];
         put_fixed_64(&mut bytes, k);
         put_fixed_64(&mut bytes, g);
-        do_hash(bytes.as_slice(),0) as u64
+        do_hash(bytes.as_slice(), 0) as u64
     }
 
     // Format of key:
@@ -714,7 +699,7 @@ mod tests {
             let arena = BlockArena::new();
             Self {
                 current: State::new(),
-                list: Skiplist::new(Arc::new(U64Comparator{}), Box::new(arena)),
+                list: Skiplist::new(Arc::new(U64Comparator {}), Box::new(arena)),
             }
         }
 
@@ -753,19 +738,28 @@ mod tests {
                 // Verify that everything in [pos,current) was not present in
                 // initial_state
                 while pos < current {
-                    assert!(pos <= current,  "should not go backwards. pos: {}, current: {}", pos, current);
-                    assert!(gen(pos) == 0 || gen(pos) > initial_state.get(key(pos) as usize) as u64,
-                            "key: {}; gen: {}; initgetn: {}", key(pos),gen(pos), initial_state.get(key(pos) as usize));
+                    assert!(
+                        pos <= current,
+                        "should not go backwards. pos: {}, current: {}",
+                        pos,
+                        current
+                    );
+                    assert!(
+                        gen(pos) == 0 || gen(pos) > initial_state.get(key(pos) as usize) as u64,
+                        "key: {}; gen: {}; initgetn: {}",
+                        key(pos),
+                        gen(pos),
+                        initial_state.get(key(pos) as usize)
+                    );
                     // Advance to next key in the valid key space
                     if key(pos) < key(current) {
                         pos = make_key(key(pos) + 1, 0);
                     } else {
                         pos = make_key(key(pos), gen(pos) + 1);
                     }
-
                 }
                 if !iter.valid() {
-                    break
+                    break;
                 }
                 // To next or seek to random position
                 if rand::thread_rng().next_u64() % 2 == 0 {
@@ -782,8 +776,6 @@ mod tests {
                 }
             }
         }
-
-
     }
 
     #[test]

@@ -16,29 +16,31 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
 use crate::db::format::{InternalKey, InternalKeyComparator};
-use crate::version::version_edit::{VersionEdit, FileMetaData};
-use crate::version::{Version, FILE_META_LENGTH, LevelFileNumIterator};
-use crate::version::version_set::VersionSet;
-use std::sync::Arc;
-use crate::util::comparator::Comparator;
-use std::cmp::Ordering as CmpOrdering;
-use std::rc::Rc;
+use crate::iterator::{
+    ConcatenateIterator, DerivedIterFactory, EmptyIterator, Iterator, MergingIterator,
+};
 use crate::options::{Options, ReadOptions};
 use crate::sstable::table::TableBuilder;
-use crate::iterator::{Iterator, ConcatenateIterator, DerivedIterFactory, EmptyIterator, MergingIterator};
 use crate::status::Result;
-use crate::util::slice::Slice;
-use std::cell::RefCell;
 use crate::table_cache::TableCache;
-use crate::util::status::{WickErr, Status};
 use crate::util::coding::decode_fixed_64;
+use crate::util::comparator::Comparator;
+use crate::util::slice::Slice;
+use crate::util::status::{Status, WickErr};
+use crate::version::version_edit::{FileMetaData, VersionEdit};
+use crate::version::version_set::VersionSet;
+use crate::version::{LevelFileNumIterator, Version, FILE_META_LENGTH};
+use std::cell::RefCell;
+use std::cmp::Ordering as CmpOrdering;
+use std::rc::Rc;
+use std::sync::Arc;
 
 /// Information for a manual compaction
 pub struct ManualCompaction {
     pub level: usize,
     pub done: bool,
     pub begin: Option<Rc<InternalKey>>, // None means beginning of key range
-    pub end: Option<Rc<InternalKey>>, // None means end of key range
+    pub end: Option<Rc<InternalKey>>,   // None means end of key range
 }
 
 /// A helper enum describing relations between the indexes of `inputs` in `Compaction`
@@ -59,7 +61,7 @@ pub struct Compaction {
     // level n and level n + 1
     // This field should be accessed via CompactionInputRelation
     // and the files of level n and level n + 1 are all sorted
-    pub inputs: [Vec<Arc<FileMetaData>>;2],
+    pub inputs: [Vec<Arc<FileMetaData>>; 2],
 
     // State used to check for number of overlapping grandparent files
     // (parent == level n + 1, grandparent == level n + 2
@@ -123,8 +125,12 @@ impl Compaction {
     /// Returns the minimal range that covers all entries in `self.inputs[0]`
     pub fn base_range(&self, icmp: &InternalKeyComparator) -> (Rc<InternalKey>, Rc<InternalKey>) {
         let files = &self.inputs[CompactionInputsRelation::Source as usize];
-        assert!(!files.is_empty(), "[compaction] the input[0] shouldn't be empty when trying to get covered range");
-        if self.level == 0 { // level 0 files are possible to overlaps with each other
+        assert!(
+            !files.is_empty(),
+            "[compaction] the input[0] shouldn't be empty when trying to get covered range"
+        );
+        if self.level == 0 {
+            // level 0 files are possible to overlaps with each other
             let mut smallest = files.first().unwrap().smallest.clone();
             let mut largest = files.last().unwrap().largest.clone();
             for f in files.iter().skip(1) {
@@ -136,8 +142,12 @@ impl Compaction {
                 }
             }
             (smallest, largest)
-        } else { // no overlapping in level > 0 and file is ordered by smallest key
-            (files.first().unwrap().smallest.clone(), files.last().unwrap().largest.clone())
+        } else {
+            // no overlapping in level > 0 and file is ordered by smallest key
+            (
+                files.first().unwrap().smallest.clone(),
+                files.last().unwrap().largest.clone(),
+            )
         }
     }
 
@@ -161,9 +171,10 @@ impl Compaction {
     /// Is this a trivial compaction that can be implemented by just
     /// moving a single input file to the next level (no merging or splitting)
     pub fn is_trivial_move(&self) -> bool {
-        self.inputs[CompactionInputsRelation::Source as usize].len() == 1 &&
-            self.inputs[CompactionInputsRelation::Parent as usize].len() == 0 &&
-            VersionSet::total_file_size(self.grand_parents.as_slice()) <= self.options.max_grandparent_overlap_bytes()
+        self.inputs[CompactionInputsRelation::Source as usize].len() == 1
+            && self.inputs[CompactionInputsRelation::Parent as usize].len() == 0
+            && VersionSet::total_file_size(self.grand_parents.as_slice())
+                <= self.options.max_grandparent_overlap_bytes()
     }
 
     /// Create an iterator that reads over all the compaction input tables with merged order.
@@ -175,10 +186,14 @@ impl Compaction {
     /// Entry format:
     ///     key: internal key
     ///     value: value of user key
-    pub fn new_input_iterator(&self,icmp: Arc<InternalKeyComparator>, table_cache: Arc<TableCache>) -> impl Iterator{
+    pub fn new_input_iterator(
+        &self,
+        icmp: Arc<InternalKeyComparator>,
+        table_cache: Arc<TableCache>,
+    ) -> impl Iterator {
         let read_options = Rc::new(ReadOptions {
             verify_checksums: self.options.paranoid_checks,
-            fill_cache : false,
+            fill_cache: false,
             snapshot: None,
         });
         // Level-0 files have to be merged together so we generate a merging iterator includes iterators for each level 0 file.
@@ -191,15 +206,26 @@ impl Compaction {
         let mut iter_list = Vec::with_capacity(space);
         for (i, input) in self.inputs.iter().enumerate() {
             if !input.is_empty() {
-                if self.level + i == 0 { // level0
+                if self.level + i == 0 {
+                    // level0
                     for file in self.inputs[CompactionInputsRelation::Source as usize].iter() {
                         // all the level0 tables are guaranteed being added into the table_cache via minor compaction
-                        iter_list.push(Rc::new(RefCell::new(table_cache.clone().new_iter(read_options.clone(), file.number, file.file_size))));
+                        iter_list.push(Rc::new(RefCell::new(table_cache.clone().new_iter(
+                            read_options.clone(),
+                            file.number,
+                            file.file_size,
+                        ))));
                     }
                 } else {
                     let origin = LevelFileNumIterator::new(icmp.clone(), self.inputs[i].clone());
-                    let factory = FileIterFactory { table_cache: table_cache.clone() };
-                    iter_list.push(Rc::new(RefCell::new(Box::new(ConcatenateIterator::new(read_options.clone(), Box::new(origin), Box::new(factory))))));
+                    let factory = FileIterFactory {
+                        table_cache: table_cache.clone(),
+                    };
+                    iter_list.push(Rc::new(RefCell::new(Box::new(ConcatenateIterator::new(
+                        read_options.clone(),
+                        Box::new(origin),
+                        Box::new(factory),
+                    )))));
                 }
             }
         }
@@ -211,8 +237,12 @@ impl Compaction {
     pub fn should_stop_before(&mut self, ikey: &Slice, icmp: Arc<InternalKeyComparator>) -> bool {
         // `seen_key` guarantees that we should continue checking for next `ikey`
         // no matter whether the first `ikey` overlaps with grand parents
-        while self.grand_parent_index < self.grand_parents.len() &&
-            icmp.compare(ikey.as_slice(), self.grand_parents[self.grand_parent_index].largest.data()) == CmpOrdering::Greater {
+        while self.grand_parent_index < self.grand_parents.len()
+            && icmp.compare(
+                ikey.as_slice(),
+                self.grand_parents[self.grand_parent_index].largest.data(),
+            ) == CmpOrdering::Greater
+        {
             if self.seen_key {
                 self.overlapped_bytes += self.grand_parents[self.grand_parent_index].file_size
             }
@@ -241,13 +271,14 @@ impl Compaction {
                 while self.level_ptrs[level] < files.len() {
                     let f = files[self.level_ptrs[level]].clone();
                     if ucmp.compare(ukey.as_slice(), f.largest.user_key()) != CmpOrdering::Greater {
-                        if ucmp.compare(ukey.as_slice(), f.smallest.user_key()) != CmpOrdering::Less {
+                        if ucmp.compare(ukey.as_slice(), f.smallest.user_key()) != CmpOrdering::Less
+                        {
                             return true;
                         }
-                        break
+                        break;
                     }
                     // Update current level ptr for a passed file directly since the input `ukey` should be sorted.
-                    self.level_ptrs[level]+=1;
+                    self.level_ptrs[level] += 1;
                 }
             }
         }
@@ -263,14 +294,15 @@ impl Compaction {
         }
         for output in self.outputs.drain(..) {
             self.edit.new_files.push((self.level + 1, Rc::new(output)))
-        };
+        }
     }
 
     /// Calculate the read bytes
     #[inline]
     pub fn bytes_read(&self) -> u64 {
-        self.inputs.iter().fold(0, |accumulate, files|
-            accumulate + files.iter().fold(0, |sum, file| sum + file.number ))
+        self.inputs.iter().fold(0, |accumulate, files| {
+            accumulate + files.iter().fold(0, |sum, file| sum + file.number)
+        })
     }
 
     /// Calculate the written bytes
@@ -287,7 +319,10 @@ struct FileIterFactory {
 impl DerivedIterFactory for FileIterFactory {
     fn produce(&self, options: Rc<ReadOptions>, value: &Slice) -> Result<Box<dyn Iterator>> {
         if value.size() != 2 * FILE_META_LENGTH {
-            Ok(EmptyIterator::new_with_err( WickErr::new(Status::Corruption, Some("file reader invoked with unexpected value"))))
+            Ok(EmptyIterator::new_with_err(WickErr::new(
+                Status::Corruption,
+                Some("file reader invoked with unexpected value"),
+            )))
         } else {
             let file_number = decode_fixed_64(value.as_slice());
             let file_size = decode_fixed_64(&value.as_slice()[8..]);
@@ -315,7 +350,7 @@ impl CompactionStats {
     /// Add new stats to self
     #[inline]
     pub fn accumulate(&mut self, micros: u64, bytes_read: u64, bytes_written: u64) {
-        self.micros+= micros;
+        self.micros += micros;
         self.bytes_read += bytes_read;
         self.bytes_written += bytes_written;
     }

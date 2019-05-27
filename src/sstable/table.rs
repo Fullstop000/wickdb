@@ -15,7 +15,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-use crate::iterator::{Iterator, DerivedIterFactory, ConcatenateIterator};
+use crate::db::format::ParsedInternalKey;
+use crate::iterator::{ConcatenateIterator, DerivedIterFactory, Iterator};
 use crate::options::{CompressionType, Options, ReadOptions};
 use crate::sstable::block::{Block, BlockBuilder};
 use crate::sstable::filter_block::{FilterBlockBuilder, FilterBlockReader};
@@ -28,7 +29,6 @@ use crate::util::slice::Slice;
 use crate::util::status::{Result, Status, WickErr};
 use std::cmp::Ordering;
 use std::rc::Rc;
-use crate::db::format::ParsedInternalKey;
 use std::sync::Arc;
 
 /// A `Table` is a sorted map from strings to strings.  Tables are
@@ -213,10 +213,15 @@ impl Table {
                     match ParsedInternalKey::decode_from(block_iter.value()) {
                         None => return Err(WickErr::new(Status::Corruption, None)),
                         Some(parsed_key) => {
-                            if self.options.comparator.compare(parsed_key.user_key.as_slice(), key) == Ordering::Equal {
-                                return Ok(Some(parsed_key))
+                            if self
+                                .options
+                                .comparator
+                                .compare(parsed_key.user_key.as_slice(), key)
+                                == Ordering::Equal
+                            {
+                                return Ok(Some(parsed_key));
                             }
-                        },
+                        }
                     }
                 }
                 block_iter.status()?;
@@ -233,7 +238,7 @@ pub struct TableIterFactory {
 impl DerivedIterFactory for TableIterFactory {
     fn produce(&self, options: Rc<ReadOptions>, value: &Slice) -> Result<Box<dyn Iterator>> {
         BlockHandle::decode_from(value.as_slice())
-            .and_then(|(handle,_)| self.table.block_reader(handle, options))
+            .and_then(|(handle, _)| self.table.block_reader(handle, options))
     }
 }
 
@@ -253,11 +258,7 @@ fn block_reader(
             cache.release(cache_handle);
             b
         } else {
-            let data = read_block(
-                file,
-                &data_block_handle,
-                read_options.verify_checksums,
-            )?;
+            let data = read_block(file, &data_block_handle, read_options.verify_checksums)?;
             let charge = data.len();
             let new_block = Block::new(data)?;
             let b = Arc::new(new_block);
@@ -267,11 +268,7 @@ fn block_reader(
             b
         }
     } else {
-        let data = read_block(
-            file,
-            &data_block_handle,
-            read_options.verify_checksums,
-        )?;
+        let data = read_block(file, &data_block_handle, read_options.verify_checksums)?;
         let b = Block::new(data)?;
         Arc::new(b)
     };
@@ -501,7 +498,10 @@ impl TableBuilder {
     #[inline]
     #[allow(unused_must_use)]
     pub fn close(&mut self) {
-        assert!(!self.closed, "[table builder] try to close a closed TableBuilder");
+        assert!(
+            !self.closed,
+            "[table builder] try to close a closed TableBuilder"
+        );
         self.closed = true;
         self.file.f_close().is_ok();
     }
@@ -676,7 +676,12 @@ pub fn read_block(file: &dyn File, handle: &BlockHandle, verify_checksum: bool) 
                 }
                 decompressed
             }
-            CompressionType::Unknown => return Err(WickErr::new(Status::Corruption, Some("bad block compression type")))
+            CompressionType::Unknown => {
+                return Err(WickErr::new(
+                    Status::Corruption,
+                    Some("bad block compression type"),
+                ))
+            }
         }
     };
     Ok(data)

@@ -11,14 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{mem, ptr};
-use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use std::{mem, ptr};
 
 const BLOCK_SIZE: usize = 4096;
 
 pub trait Arena {
-
     /// Return a pointer to a newly allocated memory block of 'chunk' bytes.
     fn allocate(&self, chunk: usize) -> *mut u8;
 
@@ -70,7 +69,8 @@ impl BlockArena {
             let ptr = new_block_ptr.add(size);
             self.ptr.store(ptr, Ordering::Release);
         };
-        self.bytes_remaining.store(BLOCK_SIZE - size, Ordering::Release);
+        self.bytes_remaining
+            .store(BLOCK_SIZE - size, Ordering::Release);
         new_block_ptr
     }
 
@@ -105,11 +105,7 @@ impl Arena for BlockArena {
     fn allocate_aligned(&self, chunk: usize) -> *mut u8 {
         assert!(chunk > 0);
         let ptr_size = mem::size_of::<usize>();
-        let align = if ptr_size > 8 {
-            ptr_size
-        } else {
-            8
-        };
+        let align = if ptr_size > 8 { ptr_size } else { 8 };
         // the align should be a pow(2)
         assert_eq!(align & (align - 1), 0);
 
@@ -133,7 +129,12 @@ impl Arena for BlockArena {
         } else {
             self.allocate_fallback(chunk)
         };
-        assert_eq!(result as usize & (align - 1), 0, "allocated memory should be aligned with {}", ptr_size);
+        assert_eq!(
+            result as usize & (align - 1),
+            0,
+            "allocated memory should be aligned with {}",
+            ptr_size
+        );
         result
     }
 
@@ -145,10 +146,10 @@ impl Arena for BlockArena {
 
 #[cfg(test)]
 mod tests {
-    use crate::mem::arena::{BlockArena, Arena, BLOCK_SIZE};
-    use std::sync::atomic::Ordering;
-    use std::ptr;
+    use crate::mem::arena::{Arena, BlockArena, BLOCK_SIZE};
     use rand::Rng;
+    use std::ptr;
+    use std::sync::atomic::Ordering;
 
     #[test]
     fn test_new_arena() {
@@ -181,7 +182,11 @@ mod tests {
             a.allocate_new_block(*size);
             expect_size += *size;
             assert_eq!(a.memory_used(), expect_size, "memory used should match");
-            assert_eq!(a.blocks.borrow().len(), i + 1, "number of blocks should match")
+            assert_eq!(
+                a.blocks.borrow().len(),
+                i + 1,
+                "number of blocks should match"
+            )
         }
     }
 
@@ -205,7 +210,7 @@ mod tests {
         for i in 0..n {
             let size = if i % (n / 10) == 0 {
                 if i == 0 {
-                    continue
+                    continue;
                 }
                 i
             } else {
@@ -228,7 +233,12 @@ mod tests {
             }
             allocated_size += size;
             allocated.push((ptr, size));
-            assert!(a.memory_used() >= allocated_size, "the memory used {} should be greater or equal to expecting allocated {}", a.memory_used(), allocated_size);
+            assert!(
+                a.memory_used() >= allocated_size,
+                "the memory used {} should be greater or equal to expecting allocated {}",
+                a.memory_used(),
+                allocated_size
+            );
         }
         for (ptr, size) in allocated.iter() {
             unsafe {

@@ -73,7 +73,7 @@ impl SnapshotList {
         if last_seq == seq {
             self.snapshots.back().unwrap().clone()
         } else {
-            let s = Arc::new(Snapshot{
+            let s = Arc::new(Snapshot {
                 sequence_number: seq,
             });
             self.snapshots.push_back(s.clone());
@@ -84,7 +84,7 @@ impl SnapshotList {
     /// Remove redundant snapshots
     #[inline]
     pub fn gc(&mut self) {
-        self.snapshots.retain(|s|Arc::strong_count(s) > 1)
+        self.snapshots.retain(|s| Arc::strong_count(s) > 1)
     }
 
     #[inline]

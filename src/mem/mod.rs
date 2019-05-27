@@ -18,22 +18,21 @@
 mod arena;
 mod skiplist;
 
+use crate::db::format::{InternalKeyComparator, LookupKey, ValueType};
 use crate::iterator::Iterator;
-use crate::db::format::{ValueType, LookupKey, InternalKeyComparator};
-use crate::util::status::{Result, WickErr};
-use crate::util::comparator::Comparator;
-use crate::mem::skiplist::{Skiplist, SkiplistIterator};
-use crate::util::varint::{VarintU32, MAX_VARINT_LEN_U32};
-use crate::util::slice::Slice;
 use crate::mem::arena::BlockArena;
-use crate::util::coding::{put_fixed_64, decode_fixed_64};
-use std::slice;
-use std::cmp::Ordering;
+use crate::mem::skiplist::{Skiplist, SkiplistIterator};
+use crate::util::coding::{decode_fixed_64, put_fixed_64};
+use crate::util::comparator::Comparator;
+use crate::util::slice::Slice;
 use crate::util::status::Status;
+use crate::util::status::{Result, WickErr};
+use crate::util::varint::{VarintU32, MAX_VARINT_LEN_U32};
+use std::cmp::Ordering;
+use std::slice;
 use std::sync::Arc;
 
 pub trait MemoryTable {
-
     /// Returns an estimate of the number of bytes of data in use by this
     /// data structure. It is safe to call when MemTable is being modified.
     fn approximate_memory_usage(&self) -> usize;
@@ -106,20 +105,15 @@ impl Comparator for KeyComparator {
 /// In-memory write buffer
 pub struct MemTable {
     cmp: Arc<KeyComparator>,
-    table: Skiplist
+    table: Skiplist,
 }
 
 impl MemTable {
     pub fn new(cmp: Arc<InternalKeyComparator>) -> Self {
         let arena = BlockArena::new();
-        let kcmp = Arc::new(KeyComparator {
-            cmp,
-        });
+        let kcmp = Arc::new(KeyComparator { cmp });
         let table = Skiplist::new(kcmp.clone(), Box::new(arena));
-        Self {
-            cmp: kcmp,
-            table,
-        }
+        Self { cmp: kcmp, table }
     }
 }
 
@@ -160,15 +154,20 @@ impl MemoryTable for MemTable {
         if iter.valid() {
             let internal_key = iter.key();
             // only check the user key here
-            match self.cmp.cmp.user_comparator.compare(Slice::new(internal_key.as_ptr(), internal_key.size() - 8).as_slice(), key.user_key().as_slice()) {
+            match self.cmp.cmp.user_comparator.compare(
+                Slice::new(internal_key.as_ptr(), internal_key.size() - 8).as_slice(),
+                key.user_key().as_slice(),
+            ) {
                 Ordering::Equal => {
-                    let tag = decode_fixed_64(&internal_key.as_slice()[internal_key.size()-8..]);
+                    let tag = decode_fixed_64(&internal_key.as_slice()[internal_key.size() - 8..]);
                     match ValueType::from(tag & 0xff as u64) {
                         ValueType::Value => return Some(Ok(iter.value())),
-                        ValueType::Deletion => return Some(Err(WickErr::new(Status::NotFound, None))),
-                        ValueType::Unknown => {/* fallback to None*/},
+                        ValueType::Deletion => {
+                            return Some(Err(WickErr::new(Status::NotFound, None)))
+                        }
+                        ValueType::Unknown => { /* fallback to None*/ }
                     }
-                },
+                }
                 _ => return None,
             }
         }
@@ -234,7 +233,7 @@ impl<'a> Iterator for MemTableIterator<'a> {
                     Some((len, n)) => {
                         let val_start = val_ptr.add(n);
                         return Slice::new(val_start, len as usize);
-                    },
+                    }
                     None => return Slice::default(),
                 }
             }
@@ -262,4 +261,3 @@ fn extract_varint_encoded_slice(origin: Slice) -> Slice {
         None => Slice::default(),
     }
 }
-

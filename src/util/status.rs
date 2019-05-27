@@ -18,8 +18,8 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::mem;
-use std::result;
 use std::rc::Rc;
+use std::result;
 
 #[derive(Debug, Clone)]
 pub enum Status {

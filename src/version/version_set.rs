@@ -15,25 +15,25 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use hashbrown::HashSet;
-use crate::version::version_edit::{FileMetaData, VersionEdit};
-use crate::version::Version;
-use crate::storage::{Storage, do_write_string_to_file};
-use std::rc::Rc;
-use crate::options::Options;
-use crate::db::format::{InternalKeyComparator, InternalKey};
-use crate::record::writer::Writer;
-use crate::util::comparator::{BytewiseComparator, Comparator};
-use crate::util::status::{Result, WickErr};
-use crate::util::slice::Slice;
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
-use std::cmp::Ordering as CmpOrdering;
 use crate::compaction::{Compaction, CompactionStats};
 use crate::db::filename::{generate_filename, FileType};
-use std::collections::vec_deque::VecDeque;
-use crate::snapshot::{SnapshotList, Snapshot};
+use crate::db::format::{InternalKey, InternalKeyComparator};
+use crate::options::Options;
+use crate::record::writer::Writer;
+use crate::snapshot::{Snapshot, SnapshotList};
 use crate::sstable::table::TableBuilder;
+use crate::storage::{do_write_string_to_file, Storage};
+use crate::util::comparator::{BytewiseComparator, Comparator};
+use crate::util::slice::Slice;
+use crate::util::status::{Result, WickErr};
+use crate::version::version_edit::{FileMetaData, VersionEdit};
+use crate::version::Version;
+use hashbrown::HashSet;
+use std::cmp::Ordering as CmpOrdering;
+use std::collections::vec_deque::VecDeque;
+use std::rc::Rc;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 struct LevelState {
     // set of new deleted files
@@ -47,12 +47,11 @@ struct LevelState {
 pub struct VersionBuilder {
     // file changes for every level
     levels: Vec<LevelState>,
-    base: Version
+    base: Version,
 }
 
 impl VersionBuilder {
-
-    pub fn new(base: Version) -> Self{
+    pub fn new(base: Version) -> Self {
         let max_levels = base.options.max_levels as usize;
         let mut levels = Vec::with_capacity(max_levels);
         for _ in 0..max_levels {
@@ -61,10 +60,7 @@ impl VersionBuilder {
                 added_files: vec![],
             })
         }
-        Self {
-            levels,
-            base,
-        }
+        Self { levels, base }
     }
 
     /// Add the given VersionEdit for later applying
@@ -72,7 +68,7 @@ impl VersionBuilder {
     /// same as `apply` in C++ implementation
     pub fn accumulate(&mut self, edit: &VersionEdit, vset: &mut VersionSet) {
         // update compcation pointers
-        for (level, key) in edit.compaction_pointers.iter(){
+        for (level, key) in edit.compaction_pointers.iter() {
             vset.compaction_pointer[*level] = key.clone();
         }
         // delete files
@@ -98,7 +94,9 @@ impl VersionBuilder {
             if allowed_seeks < 100 {
                 allowed_seeks = 100 // the min seeks allowed
             }
-            new_file.allowed_seeks.store(allowed_seeks, Ordering::Release);
+            new_file
+                .allowed_seeks
+                .store(allowed_seeks, Ordering::Release);
             self.levels[*level].deleted_files.remove(&new_file.number);
             self.levels[*level].added_files.push(new_file.clone());
         }
@@ -108,9 +106,17 @@ impl VersionBuilder {
     /// same as `save_to` in C++ implementation
     pub fn apply_to_new(&mut self) -> Version {
         // TODO: config this to the option
-        let icmp = Arc::new(InternalKeyComparator::new(Box::new(BytewiseComparator::new())));
+        let icmp = Arc::new(InternalKeyComparator::new(Box::new(
+            BytewiseComparator::new(),
+        )));
         let mut v = Version::new(self.base.options.clone(), icmp.clone());
-        for (level, (mut base_files, delta)) in self.base.files.drain(..).zip(self.levels.drain(..)).enumerate() {
+        for (level, (mut base_files, delta)) in self
+            .base
+            .files
+            .drain(..)
+            .zip(self.levels.drain(..))
+            .enumerate()
+        {
             for file in base_files.drain(..) {
                 // filter the deleted files
                 if !delta.deleted_files.contains(&file.number) {
@@ -119,7 +125,7 @@ impl VersionBuilder {
             }
             if level == 0 {
                 // sort by file number
-                v.files[level].sort_by(|a, b|{
+                v.files[level].sort_by(|a, b| {
                     if a.largest != b.largest {
                         return icmp.compare(a.largest.data(), b.largest.data());
                     }
@@ -130,9 +136,7 @@ impl VersionBuilder {
                 })
             } else {
                 // sort by smallest key
-                v.files[level].sort_by(|a, b| {
-                    icmp.compare(a.smallest.data(), b.smallest.data())
-                })
+                v.files[level].sort_by(|a, b| icmp.compare(a.smallest.data(), b.smallest.data()))
             }
         }
         v
@@ -177,7 +181,6 @@ pub struct VersionSet {
 unsafe impl Send for VersionSet {}
 
 impl VersionSet {
-
     /// Returns the number of files in a certain level
     #[inline]
     pub fn level_files_count(&self, level: usize) -> usize {
@@ -212,7 +215,7 @@ impl VersionSet {
 
     /// Mutate `next_file_number` by the input `new`
     #[inline]
-    pub fn set_next_file_number(&mut self, new: u64){
+    pub fn set_next_file_number(&mut self, new: u64) {
         self.next_file_number = new;
     }
 
@@ -254,7 +257,6 @@ impl VersionSet {
         self.snapshots.snapshot(self.last_sequence)
     }
 
-
     /// Apply `edit` to the current version to form a new descriptor that
     /// is both saved to persistent state and installed as the new
     /// current version.
@@ -293,8 +295,12 @@ impl VersionSet {
         // Initialize new manifest file if necessary by creating a temporary file that contains a snapshot of the current version.
         let mut new_manifest_file = String::new();
         if self.manifest_writer.is_none() {
-            new_manifest_file = generate_filename(self.db_name.as_str(), FileType::Manifest,self.manifest_file_number);
-//            edit.set_next_file(self.next_file_number);
+            new_manifest_file = generate_filename(
+                self.db_name.as_str(),
+                FileType::Manifest,
+                self.manifest_file_number,
+            );
+            //            edit.set_next_file(self.next_file_number);
             let f = self.env.create(new_manifest_file.as_str())?;
             let mut writer = Writer::new(f);
             match self.write_snapshot(&mut writer) {
@@ -316,7 +322,11 @@ impl VersionSet {
                             // If we just created a MANIFEST file, install it by writing a
                             // new CURRENT file that points to it.
                             if !new_manifest_file.is_empty() {
-                                match Self::update_current(self.env.clone(), self.db_name.as_str(), self.manifest_file_number) {
+                                match Self::update_current(
+                                    self.env.clone(),
+                                    self.db_name.as_str(),
+                                    self.manifest_file_number,
+                                ) {
                                     Ok(()) => {}
                                     Err(_) => {
                                         self.manifest_writer = None;
@@ -328,10 +338,10 @@ impl VersionSet {
                             self.versions.push_front(Arc::new(v));
                             self.log_number = edit.log_number.unwrap();
                             self.prev_log_number = edit.prev_log_number.unwrap();
-                        },
+                        }
                         // omit the sync error
                         Err(e) => {
-                            info!("MANIFEST write: {:?}",e);
+                            info!("MANIFEST write: {:?}", e);
                             self.manifest_writer = None;
                             return self.env.remove(new_manifest_file.as_str());
                         }
@@ -349,11 +359,16 @@ impl VersionSet {
     /// Return a compaction object for compacting the range `[begin,end]` in
     /// the specified level.  Returns `None` if there is nothing in that
     /// level that overlaps the specified range
-    pub fn compact_range(&mut self, level: usize, begin: Option<Rc<InternalKey>>, end: Option<Rc<InternalKey>>) -> Option<Compaction> {
+    pub fn compact_range(
+        &mut self,
+        level: usize,
+        begin: Option<Rc<InternalKey>>,
+        end: Option<Rc<InternalKey>>,
+    ) -> Option<Compaction> {
         let version = self.current();
-        let mut overlapping_inputs =  version.get_overlapping_inputs(level, begin, end);
+        let mut overlapping_inputs = version.get_overlapping_inputs(level, begin, end);
         if overlapping_inputs.is_empty() {
-            return None
+            return None;
         }
         // Avoid compacting too much in one shot in case the range is large.
         // But we cannot do this for level-0 since level-0 files can overlap
@@ -364,13 +379,13 @@ impl VersionSet {
             for (i, file) in overlapping_inputs.iter().enumerate() {
                 total += file.file_size;
                 if total >= version.options.max_file_size {
-                    overlapping_inputs.truncate(i+1);
-                    break
+                    overlapping_inputs.truncate(i + 1);
+                    break;
                 }
             }
         }
         let mut c = Compaction::new(self.options.clone(), level);
-        c.input_version= Some(version.clone());
+        c.input_version = Some(version.clone());
         c.inputs[0] = overlapping_inputs;
         Some(self.setup_other_inputs(c))
     }
@@ -396,13 +411,21 @@ impl VersionSet {
         let mut compaction = {
             if size_compaction {
                 let level = current.compaction_level;
-                assert!(level + 1 < self.options.max_levels as usize,
-                        "[compaction] target compaction level {} should be less Lmax {} - 1", level, self.options.max_levels as usize);
+                assert!(
+                    level + 1 < self.options.max_levels as usize,
+                    "[compaction] target compaction level {} should be less Lmax {} - 1",
+                    level,
+                    self.options.max_levels as usize
+                );
                 let mut compaction = Compaction::new(self.options.clone(), level);
                 // Pick the first file that comes after compact_pointer[level]
                 for file in current.files[level].iter() {
-                    if self.compaction_pointer[level].is_empty() ||
-                        self.icmp.compare(file.largest.data(), self.compaction_pointer[level].data()) == CmpOrdering::Greater {
+                    if self.compaction_pointer[level].is_empty()
+                        || self
+                            .icmp
+                            .compare(file.largest.data(), self.compaction_pointer[level].data())
+                            == CmpOrdering::Greater
+                    {
                         compaction.inputs[0].push(file.clone());
                         break;
                     }
@@ -430,7 +453,8 @@ impl VersionSet {
             // Note that the next call will discard the file we placed in
             // inputs[0] earlier and replace it with an overlapping set
             // which will include the picked file.
-            compaction.inputs[0] = current.get_overlapping_inputs(compaction.level, Some(smallest), Some(largest));
+            compaction.inputs[0] =
+                current.get_overlapping_inputs(compaction.level, Some(smallest), Some(largest));
             assert!(!compaction.inputs[0].is_empty());
         }
 
@@ -452,7 +476,7 @@ impl VersionSet {
     /// Calculate the total size of given files
     #[inline]
     pub fn total_file_size(files: &[Arc<FileMetaData>]) -> u64 {
-        files.iter().fold(0, |accum, file| accum + file.file_size )
+        files.iter().fold(0, |accum, file| accum + file.file_size)
     }
 
     /// Create new table builder and physical file for current output in Compaction
@@ -475,21 +499,28 @@ impl VersionSet {
 
     // Create snapshot of current version and persistent to manifest file.
     // Only be called when initializing a new db
-    fn write_snapshot(&self, writer: &mut Writer) -> Result<()>{
+    fn write_snapshot(&self, writer: &mut Writer) -> Result<()> {
         let mut edit = VersionEdit::new(self.options.max_levels);
         // Save metadata
         edit.set_comparator_name(String::from(self.icmp.user_comparator.name()));
         // Save compaction pointers
         for level in 0..self.options.max_levels as usize {
             if !self.compaction_pointer[level].is_empty() {
-                edit.compaction_pointers.push((level, self.compaction_pointer[level].clone()));
+                edit.compaction_pointers
+                    .push((level, self.compaction_pointer[level].clone()));
             }
         }
 
         // Save files
         for level in 0..self.options.max_levels as usize {
             for file in self.current().files[level].iter() {
-                edit.add_file(level, file.number, file.file_size, file.smallest.clone(), file.largest.clone());
+                edit.add_file(
+                    level,
+                    file.number,
+                    file.file_size,
+                    file.smallest.clone(),
+                    file.largest.clone(),
+                );
             }
         }
 
@@ -507,8 +538,12 @@ impl VersionSet {
         let mut c = self.add_boundary_inputs(c);
         let current = &self.current();
         // re-calculate the range
-        let (smallest,mut largest) = c.base_range(&self.icmp);
-        c.inputs[0] = current.get_overlapping_inputs(c.level + 1, Some(smallest.clone()), Some(largest.clone()));
+        let (smallest, mut largest) = c.base_range(&self.icmp);
+        c.inputs[0] = current.get_overlapping_inputs(
+            c.level + 1,
+            Some(smallest.clone()),
+            Some(largest.clone()),
+        );
         let (mut all_smallest, mut all_largest) = c.total_range(&self.icmp);
 
         // See if we can grow the number of inputs in "level" without
@@ -516,25 +551,41 @@ impl VersionSet {
         if !c.inputs[0].is_empty() {
             // re-count the L(n) inputs
             // We fill the compaction 'holes' left by `add_boundary_inputs` here
-            let mut expanded0 = current.get_overlapping_inputs(c.level, Some(all_smallest.clone()), Some(all_largest.clone()));
+            let mut expanded0 = current.get_overlapping_inputs(
+                c.level,
+                Some(all_smallest.clone()),
+                Some(all_largest.clone()),
+            );
             // add boundary for expanded L(n) inputs
             self.add_boundary_inputs_for_compact_files(c.level, &mut expanded0);
             let expanded0_size = Self::total_file_size(expanded0.as_slice());
             let inputs0_size = Self::total_file_size(c.inputs[0].as_slice());
             let inputs1_size = Self::total_file_size(c.inputs[1].as_slice());
-            if expanded0.len() > c.inputs[0].len() && inputs1_size + expanded0_size <= self.options.expanded_compaction_byte_size_limit() {
+            if expanded0.len() > c.inputs[0].len()
+                && inputs1_size + expanded0_size
+                    <= self.options.expanded_compaction_byte_size_limit()
+            {
                 let (new_smallest, new_largest) = c.base_range(&self.icmp);
                 // TODO: use a more sufficient way to checking expanding in L(n+1) ?
-                let expanded1 = current.get_overlapping_inputs(c.level + 1, Some(new_smallest.clone()), Some(new_largest.clone()));
+                let expanded1 = current.get_overlapping_inputs(
+                    c.level + 1,
+                    Some(new_smallest.clone()),
+                    Some(new_largest.clone()),
+                );
                 // the L(n+1) compacting files shouldn't be expanded
                 if expanded1.len() == c.inputs[1].len() {
                     let expanded1_size = Self::total_file_size(expanded1.as_slice());
-                    info!("Expanding@{} {}+{} ({}+{} bytes) to {}+{} ({}+{} bytes)",
+                    info!(
+                        "Expanding@{} {}+{} ({}+{} bytes) to {}+{} ({}+{} bytes)",
                         c.level,
-                        c.inputs[0].len(), c.inputs[1].len(),
-                        inputs0_size, inputs1_size,
-                        expanded0.len(), expanded1.len(),
-                        expanded0_size, expanded1_size,
+                        c.inputs[0].len(),
+                        c.inputs[1].len(),
+                        inputs0_size,
+                        inputs1_size,
+                        expanded0.len(),
+                        expanded1.len(),
+                        expanded0_size,
+                        expanded1_size,
                     );
                     largest = new_largest;
                     c.inputs[0] = expanded0;
@@ -549,7 +600,8 @@ impl VersionSet {
         // Compute the set of grandparent files that overlap this compaction
         // (parent == level+1; grandparent == level+2)
         if c.level + 2 < self.options.max_levels as usize {
-            c.grand_parents = current.get_overlapping_inputs(c.level + 2, Some(all_smallest), Some(all_largest));
+            c.grand_parents =
+                current.get_overlapping_inputs(c.level + 2, Some(all_smallest), Some(all_largest));
         }
         // Update the place where we will do the next compaction for this level.
         // We update this immediately instead of waiting for the VersionEdit
@@ -570,7 +622,11 @@ impl VersionSet {
     // This guarantees that all InternalKey with same user key should be compacted. Otherwise, we might encounter a
     // snapshot reading issue because the older key remains in a lower level when the newest key is at higher level
     // after compaction.
-    fn add_boundary_inputs_for_compact_files(&self, level: usize, files_to_compact: &mut Vec<Arc<FileMetaData>>) {
+    fn add_boundary_inputs_for_compact_files(
+        &self,
+        level: usize,
+        files_to_compact: &mut Vec<Arc<FileMetaData>>,
+    ) {
         if !files_to_compact.is_empty() {
             // find the largest key in files to compact by internal comparator
             // TODO: could pass an `Option<&InternalKey>` as the largest to avoid searching here
@@ -591,7 +647,7 @@ impl VersionSet {
                         files_to_compact.push(file.clone());
                         largest_key = &file.largest;
                     }
-                    None => break
+                    None => break,
                 }
                 smallest_boundary_file = self.find_smallest_boundary_file(level, &largest_key);
             }
@@ -600,18 +656,25 @@ impl VersionSet {
 
     // Iterate all the files in level until find the file whose smallest key has same user key
     // and greater sequence number ( actually smaller )
-    fn find_smallest_boundary_file(&self, level: usize, largest_key: &InternalKey) -> Option<Arc<FileMetaData>> {
+    fn find_smallest_boundary_file(
+        &self,
+        level: usize,
+        largest_key: &InternalKey,
+    ) -> Option<Arc<FileMetaData>> {
         let ucmp = &self.icmp.user_comparator;
         let current = self.current().clone();
         let level_files = &current.files[level];
         let mut smallest_boundary_file: Option<Arc<FileMetaData>> = None;
         for f in level_files.iter() {
             if self.icmp.compare(f.smallest.data(), largest_key.data()) == CmpOrdering::Greater
-                && ucmp.compare(f.smallest.user_key(), largest_key.user_key()) == CmpOrdering::Equal {
+                && ucmp.compare(f.smallest.user_key(), largest_key.user_key()) == CmpOrdering::Equal
+            {
                 match &smallest_boundary_file {
                     None => smallest_boundary_file = Some(f.clone()),
                     Some(f) => {
-                        if self.icmp.compare(f.smallest.data(), f.smallest.data()) == CmpOrdering::Less {
+                        if self.icmp.compare(f.smallest.data(), f.smallest.data())
+                            == CmpOrdering::Less
+                        {
                             smallest_boundary_file = Some(f.clone());
                         }
                     }
@@ -623,17 +686,19 @@ impl VersionSet {
 
     // Update the CURRENT file to point to new MANIFEST file
     fn update_current(env: Arc<dyn Storage>, dbname: &str, manifest_file_num: u64) -> Result<()> {
-       // Remove leading "dbname/" and add newline to manifest file nam
-       let mut manifest = generate_filename(dbname, FileType::Manifest, manifest_file_num);
-       manifest.drain(0..dbname.len() + 1);
-      // write into tmp first then rename it as CURRENT
-       let tmp = generate_filename(dbname, FileType::Temp, manifest_file_num);
-       let result =  do_write_string_to_file(env.clone(), manifest, tmp.as_str(), true);
-       match &result {
-           Ok(()) => env.rename(tmp.as_str(), generate_filename(dbname, FileType::Current, 0).as_str())?,
-           Err(_) => env.remove(tmp.as_str())?
-       }
-       result
+        // Remove leading "dbname/" and add newline to manifest file nam
+        let mut manifest = generate_filename(dbname, FileType::Manifest, manifest_file_num);
+        manifest.drain(0..dbname.len() + 1);
+        // write into tmp first then rename it as CURRENT
+        let tmp = generate_filename(dbname, FileType::Temp, manifest_file_num);
+        let result = do_write_string_to_file(env.clone(), manifest, tmp.as_str(), true);
+        match &result {
+            Ok(()) => env.rename(
+                tmp.as_str(),
+                generate_filename(dbname, FileType::Current, 0).as_str(),
+            )?,
+            Err(_) => env.remove(tmp.as_str())?,
+        }
+        result
     }
-
 }

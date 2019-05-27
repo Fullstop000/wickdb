@@ -16,15 +16,18 @@
 // found in the LICENSE file.
 
 use crate::db::format::InternalKey;
-use hashbrown::HashSet;
-use crate::util::varint::{VarintU32, VarintU64};
-use crate::version::version_edit::Tag::{Comparator, LogNumber, PrevLogNumber, NextFileNumber, LastSequence, CompactPointer, DeletedFile, NewFile, Unknown};
-use crate::util::status::{Result, WickErr, Status};
 use crate::util::slice::Slice;
+use crate::util::status::{Result, Status, WickErr};
+use crate::util::varint::{VarintU32, VarintU64};
+use crate::version::version_edit::Tag::{
+    CompactPointer, Comparator, DeletedFile, LastSequence, LogNumber, NewFile, NextFileNumber,
+    PrevLogNumber, Unknown,
+};
+use hashbrown::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::mem;
-use std::sync::atomic::AtomicUsize;
 use std::rc::Rc;
+use std::sync::atomic::AtomicUsize;
 
 // Tags for the VersionEdit disk format.
 // Tag 8 is no longer used.
@@ -38,7 +41,7 @@ enum Tag {
     NewFile = 7,
     // 8 was used for large value refs
     PrevLogNumber = 9,
-    Unknown // unknown tag
+    Unknown, // unknown tag
 }
 
 impl From<u32> for Tag {
@@ -132,7 +135,7 @@ impl VersionEdit {
     pub fn clear(&mut self) {
         self.comparator_name = None;
         self.log_number = None;
-        self.prev_log_number =  None;
+        self.prev_log_number = None;
         self.next_file_number = None;
         self.last_sequence = None;
         self.deleted_files.clear();
@@ -141,14 +144,24 @@ impl VersionEdit {
     }
 
     /// Add the specified file at the specified number
-    pub fn add_file(&mut self, level: usize, file_number: u64, file_size: u64, smallest: Rc<InternalKey>, largest: Rc<InternalKey>) {
-        self.new_files.push((level, Rc::new(FileMetaData {
-            allowed_seeks: AtomicUsize::new(0),
-            file_size,
-            number: file_number,
-            smallest,
-            largest
-        })))
+    pub fn add_file(
+        &mut self,
+        level: usize,
+        file_number: u64,
+        file_size: u64,
+        smallest: Rc<InternalKey>,
+        largest: Rc<InternalKey>,
+    ) {
+        self.new_files.push((
+            level,
+            Rc::new(FileMetaData {
+                allowed_seeks: AtomicUsize::new(0),
+                file_size,
+                number: file_number,
+                smallest,
+                largest,
+            }),
+        ))
     }
 
     /// Delete the specified file from the specified level
@@ -243,11 +256,11 @@ impl VersionEdit {
                 match Tag::from(tag) {
                     Comparator => {
                         // decode comparator name
-                        if let Some(cmp) = VarintU32::get_varint_prefixed_slice(&mut s){
+                        if let Some(cmp) = VarintU32::get_varint_prefixed_slice(&mut s) {
                             self.comparator_name = Some(String::from(cmp.as_str()))
                         } else {
                             msg.push_str("comparator name");
-                            break
+                            break;
                         }
                     }
                     LogNumber => {
@@ -256,7 +269,7 @@ impl VersionEdit {
                             self.log_number = Some(log_num);
                         } else {
                             msg.push_str("log number");
-                            break
+                            break;
                         }
                     }
                     NextFileNumber => {
@@ -265,7 +278,7 @@ impl VersionEdit {
                             self.next_file_number = Some(next_file_num);
                         } else {
                             msg.push_str("previous log number");
-                            break
+                            break;
                         }
                     }
                     LastSequence => {
@@ -274,19 +287,20 @@ impl VersionEdit {
                             self.last_sequence = Some(last_seq);
                         } else {
                             msg.push_str("last sequence number");
-                            break
+                            break;
                         }
                     }
                     CompactPointer => {
                         // decode compact pointer
                         if let Some(level) = get_level(self.max_levels, &mut s) {
                             if let Some(key) = get_internal_key(&mut s) {
-                                self.compaction_pointers.push((level as usize, Rc::new(key)));
+                                self.compaction_pointers
+                                    .push((level as usize, Rc::new(key)));
                                 continue;
                             }
                         }
                         msg.push_str("compaction pointer");
-                        break
+                        break;
                     }
                     DeletedFile => {
                         if let Some(level) = get_level(self.max_levels, &mut s) {
@@ -296,7 +310,7 @@ impl VersionEdit {
                             }
                         }
                         msg.push_str("deleted file");
-                        break
+                        break;
                     }
                     NewFile => {
                         if let Some(level) = get_level(self.max_levels, &mut s) {
@@ -304,13 +318,16 @@ impl VersionEdit {
                                 if let Some(file_size) = VarintU64::drain_read(&mut s) {
                                     if let Some(smallest) = get_internal_key(&mut s) {
                                         if let Some(largest) = get_internal_key(&mut s) {
-                                            self.new_files.push((level as usize, Rc::new(FileMetaData {
-                                                allowed_seeks: AtomicUsize::new(0),
-                                                file_size,
-                                                number,
-                                                smallest: Rc::new(smallest),
-                                                largest: Rc::new(largest)
-                                            })));
+                                            self.new_files.push((
+                                                level as usize,
+                                                Rc::new(FileMetaData {
+                                                    allowed_seeks: AtomicUsize::new(0),
+                                                    file_size,
+                                                    number,
+                                                    smallest: Rc::new(smallest),
+                                                    largest: Rc::new(largest),
+                                                }),
+                                            ));
                                             continue;
                                         }
                                     }
@@ -318,7 +335,7 @@ impl VersionEdit {
                             }
                         }
                         msg.push_str("new-file entry");
-                        break
+                        break;
                     }
                     PrevLogNumber => {
                         // decode pre log number
@@ -326,24 +343,24 @@ impl VersionEdit {
                             self.prev_log_number = Some(pre_ln);
                         } else {
                             msg.push_str("previous log number");
-                            break
+                            break;
                         }
                     }
                     Unknown => {
                         msg.push_str("unknown tag");
-                        break
+                        break;
                     }
                 }
             } else if !src.is_empty() {
                 msg.push_str("invalid tag");
             } else {
-                break
+                break;
             }
         }
         if !msg.is_empty() {
             let mut m = "VersionEdit: ".to_owned();
             m.push_str(msg.as_str());
-            let s : &'static str= Box::leak(m.into_boxed_str());
+            let s: &'static str = Box::leak(m.into_boxed_str());
             return Err(WickErr::new(Status::Corruption, Some(s)));
         }
         Ok(())
@@ -374,7 +391,7 @@ impl Debug for VersionEdit {
         for (level, file_num) in self.deleted_files.iter() {
             write!(f, "\n  DeleteFile: {} {}", level, file_num)?;
         }
-        for (level,  meta) in self.new_files.iter() {
+        for (level, meta) in self.new_files.iter() {
             write!(
                 f,
                 "\n  AddFile: {} {} {} {:?}..{:?}",
@@ -396,8 +413,8 @@ fn get_internal_key(mut src: &mut Slice) -> Option<InternalKey> {
 fn get_level(max_levels: u8, src: &mut Slice) -> Option<u32> {
     match VarintU32::drain_read(src) {
         Some(l) => {
-            if l<= max_levels as u32 {
-                return Some(l)
+            if l <= max_levels as u32 {
+                return Some(l);
             }
             None
         }
@@ -407,9 +424,9 @@ fn get_level(max_levels: u8, src: &mut Slice) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use crate::version::version_edit::VersionEdit;
     use crate::db::format::{InternalKey, ValueType};
     use crate::util::slice::Slice;
+    use crate::version::version_edit::VersionEdit;
     use std::rc::Rc;
 
     fn assert_encode_decode(edit: &VersionEdit) {
@@ -424,15 +441,30 @@ mod tests {
 
     #[test]
     fn test_encode_decode() {
-        let k_big = 1u64<<50;
+        let k_big = 1u64 << 50;
         let mut edit = VersionEdit::new(7);
         for i in 0..4 {
             assert_encode_decode(&edit);
-            edit.add_file(3, k_big + 300 + i, k_big + 400 + i,
-                Rc::new(InternalKey::new(&Slice::from("foo"), k_big + 500 + i, ValueType::Value)),
-                Rc::new(InternalKey::new(&Slice::from("zoo"), k_big + 700 + i, ValueType::Deletion)));
+            edit.add_file(
+                3,
+                k_big + 300 + i,
+                k_big + 400 + i,
+                Rc::new(InternalKey::new(
+                    &Slice::from("foo"),
+                    k_big + 500 + i,
+                    ValueType::Value,
+                )),
+                Rc::new(InternalKey::new(
+                    &Slice::from("zoo"),
+                    k_big + 700 + i,
+                    ValueType::Deletion,
+                )),
+            );
             edit.delete_file(4, k_big + 700 + i);
-            edit.add_compaction_pointer(i as usize, InternalKey::new(&Slice::from("x"), k_big + 900 + i, ValueType::Value));
+            edit.add_compaction_pointer(
+                i as usize,
+                InternalKey::new(&Slice::from("x"), k_big + 900 + i, ValueType::Value),
+            );
         }
         edit.set_comparator_name("foo".to_owned());
         edit.set_log_number(k_big + 100);

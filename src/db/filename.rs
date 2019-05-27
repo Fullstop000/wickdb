@@ -15,8 +15,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::path::{Path, MAIN_SEPARATOR};
 use std::ffi::OsStr;
+use std::path::{Path, MAIN_SEPARATOR};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum FileType {

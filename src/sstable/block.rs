@@ -19,7 +19,7 @@ use crate::iterator::Iterator;
 use crate::util::coding::{decode_fixed_32, put_fixed_32};
 use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
-use crate::util::status::{Status, WickErr, Result};
+use crate::util::status::{Result, Status, WickErr};
 use crate::util::varint::VarintU32;
 use std::cmp::{min, Ordering};
 use std::rc::Rc;
@@ -131,12 +131,7 @@ pub struct BlockIterator {
 }
 
 impl BlockIterator {
-    pub fn new(
-        cmp: Rc<Comparator>,
-        data: Rc<Vec<u8>>,
-        restarts: u32,
-        restarts_len: u32,
-    ) -> Self {
+    pub fn new(cmp: Rc<Comparator>, data: Rc<Vec<u8>>, restarts: u32, restarts_len: u32) -> Self {
         // should be 0
         Self {
             cmp,

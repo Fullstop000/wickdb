@@ -18,10 +18,10 @@
 use crate::cache::{Cache, Handle as CacheHandle, HandleRef};
 use hashbrown::hash_map::HashMap;
 use std::cell::RefCell;
-use std::ptr;
 use std::mem;
+use std::ptr;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering, AtomicUsize};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use crate::util::hash::hash;
@@ -40,7 +40,7 @@ pub struct SharedLRUCache<T: 'static + Clone> {
     last_id: AtomicU64,
 }
 
-impl<T: 'static + Clone > SharedLRUCache<T> {
+impl<T: 'static + Clone> SharedLRUCache<T> {
     pub fn new(cap: usize) -> Self {
         let per_shard = (cap + NUM_SHARD - 1) / NUM_SHARD;
         let mut shards = vec![];
@@ -129,7 +129,7 @@ impl<T: Clone> CacheHandle<T> for LRUHandle<T> {
     fn get_value(&self) -> Option<T> {
         match &self.value {
             Some(v) => Some(v.clone()),
-            None => None
+            None => None,
         }
     }
 }
@@ -211,8 +211,7 @@ pub struct LRUCache<T: Clone> {
     usage: AtomicUsize,
 }
 
-struct MutexFields<T: Clone>
-{
+struct MutexFields<T: Clone> {
     /// Dummy head of LRU list.
     /// lru.prev is newest entry, lru.next is oldest entry.
     /// Entries have refs==1 and in_cache==true.
@@ -261,16 +260,13 @@ impl<T: 'static + Clone> LRUCache<T> {
     }
 
     // Increment ref for a LRUHandle
-    fn inc_ref(
-        in_use: *mut LRUHandle<T>,
-        n: &Rc<LRUHandle<T>>,
-    ) -> Rc<LRUHandle<T>> {
+    fn inc_ref(in_use: *mut LRUHandle<T>, n: &Rc<LRUHandle<T>>) -> Rc<LRUHandle<T>> {
         if Rc::strong_count(n) == 1 {
             // The strong count is 1 means the 'n' is only in the 'table' so move to the 'in_use' list
             let p = Rc::into_raw(n.clone()) as *mut LRUHandle<T>; // incre to 2
             Self::lru_remove(p);
             Self::lru_append(in_use, p);
-            unsafe { Rc::from_raw(p)}
+            unsafe { Rc::from_raw(p) }
         } else {
             n.clone()
         }
@@ -323,7 +319,7 @@ impl<T: 'static + Clone> Cache<T> for LRUCache<T> {
         if self.capacity > 0 {
             let p = Rc::into_raw(r.clone()) as *mut LRUHandle<T>;
             Self::lru_append(mutex_data.in_use, p);
-            mem::drop(unsafe { Rc::from_raw(p)});
+            mem::drop(unsafe { Rc::from_raw(p) });
             self.usage.fetch_add(charge, Ordering::SeqCst);
             if let Some(old) = mutex_data.table.insert(key, r.clone()) {
                 self.usage.fetch_sub(old.charge, Ordering::SeqCst);
@@ -339,7 +335,9 @@ impl<T: 'static + Clone> Cache<T> for LRUCache<T> {
         }
         // evict unused lru entries
         unsafe {
-            while self.usage.load(Ordering::Acquire) > self.capacity && (*(*mutex_data).lru).next != mutex_data.lru {
+            while self.usage.load(Ordering::Acquire) > self.capacity
+                && (*(*mutex_data).lru).next != mutex_data.lru
+            {
                 let old = (*(&mutex_data).lru).next;
                 if let Some(n) = mutex_data.table.remove(&(*old).key[..]) {
                     assert_eq!(

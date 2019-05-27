@@ -1,12 +1,12 @@
-use std::rc::{Weak, Rc};
 use std::cell::RefCell;
+use std::rc::{Rc, Weak};
 
 pub type NodePtr<T> = Rc<RefCell<Node<T>>>;
 #[derive(Debug)]
 pub struct Node<T> {
     pub data: T,
     pub prev: Option<Weak<RefCell<Node<T>>>>,
-    pub next: Option<Rc<RefCell<Node<T>>>>
+    pub next: Option<Rc<RefCell<Node<T>>>>,
 }
 impl<T> Node<T> {
     pub fn new(data: T) -> Self {
@@ -27,10 +27,10 @@ impl<T> Node<T> {
                     None => true,
                     Some(next) => {
                         next.borrow_mut().prev = None;
-                        false  // unable to drop node because it's hold by the list as head
+                        false // unable to drop node because it's hold by the list as head
                     }
                 }
-            },
+            }
             Some(prev) => {
                 if let Some(rc_ptr) = prev.upgrade() {
                     // prev.next = self.next
@@ -68,9 +68,7 @@ pub struct DoubleLinkedList<T> {
 
 impl<T> DoubleLinkedList<T> {
     pub fn new() -> Self {
-        Self {
-            head: None
-        }
+        Self { head: None }
     }
 
     #[inline]
@@ -85,7 +83,7 @@ impl<T> DoubleLinkedList<T> {
         n.prev = {
             match &self.head {
                 Some(head) => head.borrow().prev.clone(),
-                None => None
+                None => None,
             }
         };
         let ptr = Rc::new(RefCell::new(n));
@@ -107,14 +105,13 @@ impl<T> DoubleLinkedList<T> {
     #[inline]
     pub fn pop_front(&mut self) {
         match &self.head {
-            None => {},
+            None => {}
             Some(head) => {
                 let next = head.borrow_mut().next.clone();
                 head.borrow_mut().next = None;
                 self.head = next
             }
         }
-
     }
 }
 
@@ -132,7 +129,7 @@ mod tests {
                     len += 1;
                     current = ptr.borrow().next.clone();
                 }
-                None => break
+                None => break,
             }
         }
         len
@@ -160,7 +157,7 @@ mod tests {
             values.push(inner.borrow().value().clone());
             current = inner.borrow().next.clone();
         }
-        assert_eq!(vec![3,2,1,0], values);
+        assert_eq!(vec![3, 2, 1, 0], values);
 
         // tail to head run
         values.clear();
@@ -172,7 +169,7 @@ mod tests {
             values.push(inner.borrow().value().clone());
             other_current = inner.borrow().prev.clone();
         }
-        assert_eq!(vec![0,1,2,3], values);
+        assert_eq!(vec![0, 1, 2, 3], values);
     }
 
     #[test]
@@ -195,7 +192,17 @@ mod tests {
         assert!(n3.borrow_mut().try_unlink());
         assert_eq!(2, list_len(&list));
         // prev should be updated
-        assert_eq!(3, *(n2.borrow().prev.clone().expect("").upgrade().expect("").borrow().value()));
+        assert_eq!(
+            3,
+            *(n2.borrow()
+                .prev
+                .clone()
+                .expect("")
+                .upgrade()
+                .expect("")
+                .borrow()
+                .value())
+        );
         // next should be undated
         assert_eq!(1, *(n4.borrow().next.clone().expect("").borrow().value()));
 

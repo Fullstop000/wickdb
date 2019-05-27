@@ -91,12 +91,12 @@ macro_rules! impl_varint {
                 match Self::read(origin) {
                     Some((len, n)) => {
                         if len as usize + n > src.size() {
-                            return None
+                            return None;
                         }
                         let res = Slice::from(&origin[n..len as usize + n]);
                         src.remove_prefix(len as usize + n);
                         Some(res)
-                    },
+                    }
                     None => None,
                 }
             }
@@ -135,7 +135,7 @@ macro_rules! impl_varint {
                     Some((v, n)) => {
                         src.remove_prefix(n);
                         Some(v)
-                    },
+                    }
                     None => None,
                 }
             }
@@ -238,11 +238,7 @@ mod tests {
     #[test]
     fn test_put_and_get_prefixed_slice() {
         let mut encoded = vec![];
-        let tests: Vec<Vec<u8>> = vec![
-            vec![1],
-            vec![1,2,3,4,5],
-            vec![0;100],
-        ];
+        let tests: Vec<Vec<u8>> = vec![vec![1], vec![1, 2, 3, 4, 5], vec![0; 100]];
         for input in tests.clone().drain(..) {
             VarintU64::put_varint_prefixed_slice(&mut encoded, input.as_slice());
         }
