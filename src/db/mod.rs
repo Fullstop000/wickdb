@@ -18,18 +18,16 @@ use crate::batch::WriteBatch;
 use crate::options::{ReadOptions, WriteOptions, Options};
 use crate::util::slice::Slice;
 use crate::util::status::{Result, WickErr, Status};
-use crate::snapshot::{Snapshot, SnapshotList};
-use std::cell::RefCell;
+use crate::snapshot::Snapshot;
 use std::path::MAIN_SEPARATOR;
 use crate::storage::Storage;
 use std::rc::Rc;
-use crate::db::format::{InternalKeyComparator, InternalFilterPolicy, LookupKey, InternalKey, ParsedInternalKey, ValueType};
+use crate::db::format::{InternalKeyComparator, LookupKey, InternalKey, ParsedInternalKey, ValueType};
 use crate::table_cache::TableCache;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Condvar, MutexGuard};
 use crate::mem::{MemTable, MemoryTable};
 use crate::version::version_set::VersionSet;
-use hashbrown::HashSet;
 use crate::record::writer::Writer;
 use std::thread;
 use std::time::{Duration, SystemTime};
@@ -39,14 +37,10 @@ use crossbeam_channel::{Receiver, Sender};
 use crossbeam_utils::sync::ShardedLock;
 use crate::db::filename::{generate_filename, FileType, parse_filename};
 use std::collections::vec_deque::VecDeque;
-use std::sync::atomic::AtomicUsize;
-use crate::compaction::{ManualCompaction, CompactionInputsRelation, CompactionStats, Compaction};
+use crate::compaction::{ManualCompaction, CompactionInputsRelation, Compaction};
 use crate::iterator::Iterator;
 use crate::version::version_edit::{FileMetaData, VersionEdit};
 use crate::sstable::table::TableBuilder;
-use crate::util::collection::NodePtr;
-use crate::version::{Version, SeekStats};
-use std::thread::JoinHandle;
 
 /// A `DB` is a persistent ordered map from keys to values.
 /// A `DB` is safe for concurrent access from multiple threads without

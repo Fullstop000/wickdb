@@ -23,7 +23,6 @@ use std::rc::Rc;
 use std::cmp::Ordering;
 use crate::util::comparator::Comparator;
 use std::sync::Arc;
-use std::collections::hash_map::Iter;
 use std::cell::RefCell;
 
 /// A common trait for iterating all the key/value entries.

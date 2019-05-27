@@ -20,13 +20,12 @@ use std::rc::Rc;
 use crate::options::{Options, ReadOptions};
 use crate::cache::{Cache, HandleRef};
 use crate::sstable::table::{Table, new_table_iterator};
-use std::cell::RefCell;
 use crate::cache::lru::SharedLRUCache;
 use crate::util::status::Result;
 use crate::util::varint::VarintU64;
 use crate::db::filename::{generate_filename, FileType};
 use crate::util::slice::Slice;
-use crate::iterator::{Iterator, EmptyIterator, IterWithCleanup, ConcatenateIterator};
+use crate::iterator::{Iterator, EmptyIterator, IterWithCleanup};
 use crate::db::format::ParsedInternalKey;
 use std::sync::Arc;
 

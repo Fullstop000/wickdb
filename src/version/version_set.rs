@@ -18,28 +18,22 @@
 use hashbrown::HashSet;
 use crate::version::version_edit::{FileMetaData, VersionEdit};
 use crate::version::Version;
-use std::cell::RefCell;
-use crate::storage::{Storage, File, do_write_string_to_file};
+use crate::storage::{Storage, do_write_string_to_file};
 use std::rc::Rc;
 use crate::options::Options;
-use crate::table_cache::TableCache;
 use crate::db::format::{InternalKeyComparator, InternalKey};
 use crate::record::writer::Writer;
 use crate::util::comparator::{BytewiseComparator, Comparator};
-use crate::util::collection::{DoubleLinkedList, Node, NodePtr};
 use crate::util::status::{Result, WickErr};
 use crate::util::slice::Slice;
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::cmp::Ordering as CmpOrdering;
-use std::mem;
 use crate::compaction::{Compaction, CompactionStats};
 use crate::db::filename::{generate_filename, FileType};
 use std::collections::vec_deque::VecDeque;
 use crate::snapshot::{SnapshotList, Snapshot};
 use crate::sstable::table::TableBuilder;
-use crate::mem::{MemTable, MemoryTable};
-use std::time::SystemTime;
 
 struct LevelState {
     // set of new deleted files

@@ -16,9 +16,7 @@
 // found in the LICENSE file.
 
 use crate::mem::{MemTable, MemoryTable};
-use std::rc::Rc;
 use crate::db::format::ValueType;
-use std::cell::RefCell;
 use crate::util::slice::Slice;
 use crate::util::status::{Result, WickErr, Status};
 use crate::util::coding::{encode_fixed_64, decode_fixed_64};
@@ -216,9 +214,7 @@ mod tests {
     use crate::mem::{MemTable, MemoryTable};
     use crate::db::format::{InternalKeyComparator, ParsedInternalKey, ValueType};
     use crate::util::comparator::BytewiseComparator;
-    use std::rc::Rc;
     use std::sync::Arc;
-    use std::cell::RefCell;
 
     fn print_contents(batch: &WriteBatch) -> String {
         let mem = MemTable::new(Arc::new(InternalKeyComparator::new(Box::new(BytewiseComparator::new()))));

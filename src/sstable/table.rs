@@ -15,20 +15,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-use crate::iterator::{EmptyIterator, Iterator, DerivedIterFactory, ConcatenateIterator};
+use crate::iterator::{Iterator, DerivedIterFactory, ConcatenateIterator};
 use crate::options::{CompressionType, Options, ReadOptions};
 use crate::sstable::block::{Block, BlockBuilder};
 use crate::sstable::filter_block::{FilterBlockBuilder, FilterBlockReader};
 use crate::sstable::{BlockHandle, Footer, BLOCK_TRAILER_SIZE, FOOTER_ENCODED_LENGTH};
 use crate::storage::File;
-use crate::util::byte::compare;
 use crate::util::coding::{decode_fixed_32, put_fixed_32, put_fixed_64};
 use crate::util::comparator::Comparator;
 use crate::util::crc32::{extend, unmask, value};
 use crate::util::slice::Slice;
 use crate::util::status::{Result, Status, WickErr};
 use std::cmp::Ordering;
-use std::mem;
 use std::rc::Rc;
 use crate::db::format::ParsedInternalKey;
 use std::sync::Arc;

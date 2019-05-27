@@ -23,7 +23,6 @@ use crate::cache::lru::SharedLRUCache;
 use crate::options::CompressionType::{NoCompression, SnappyCompression, Unknown};
 use crate::snapshot::Snapshot;
 use crate::sstable::block::Block;
-use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use crate::storage::Storage;

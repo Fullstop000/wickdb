@@ -17,11 +17,9 @@
 
 use crate::db::format::{InternalKey, InternalKeyComparator};
 use crate::version::version_edit::{VersionEdit, FileMetaData};
-use crate::util::collection::NodePtr;
 use crate::version::{Version, FILE_META_LENGTH, LevelFileNumIterator};
 use crate::version::version_set::VersionSet;
 use std::sync::Arc;
-use std::sync::atomic::{Ordering, AtomicU64};
 use crate::util::comparator::Comparator;
 use std::cmp::Ordering as CmpOrdering;
 use std::rc::Rc;
@@ -34,7 +32,6 @@ use std::cell::RefCell;
 use crate::table_cache::TableCache;
 use crate::util::status::{WickErr, Status};
 use crate::util::coding::decode_fixed_64;
-use crate::storage::File;
 
 /// Information for a manual compaction
 pub struct ManualCompaction {

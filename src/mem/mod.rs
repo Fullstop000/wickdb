@@ -21,7 +21,6 @@ mod skiplist;
 use crate::iterator::Iterator;
 use crate::db::format::{ValueType, LookupKey, InternalKeyComparator};
 use crate::util::status::{Result, WickErr};
-use std::rc::Rc;
 use crate::util::comparator::Comparator;
 use crate::mem::skiplist::{Skiplist, SkiplistIterator};
 use crate::util::varint::{VarintU32, MAX_VARINT_LEN_U32};

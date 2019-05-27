@@ -16,11 +16,7 @@
 // found in the LICENSE file.
 
 use std::path::{Path, MAIN_SEPARATOR};
-
 use std::ffi::OsStr;
-use crate::storage::Storage;
-use std::sync::Arc;
-use crate::status::Result;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum FileType {

@@ -13,7 +13,6 @@
 
 use std::{mem, ptr};
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
-use std::sync::Mutex;
 use std::cell::RefCell;
 
 const BLOCK_SIZE: usize = 4096;
