@@ -142,3 +142,5 @@ impl Writer {
         Ok(())
     }
 }
+
+unsafe impl Send for Writer {}

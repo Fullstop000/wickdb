@@ -501,6 +501,7 @@ impl TableBuilder {
 
     /// Mark this builder as closed
     #[inline]
+    #[allow(unused_must_use)]
     pub fn close(&mut self) {
         assert!(!self.closed, "[table builder] try to close a closed TableBuilder");
         self.closed = true;

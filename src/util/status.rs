@@ -19,6 +19,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::mem;
 use std::result;
+use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 pub enum Status {
@@ -30,6 +31,7 @@ pub enum Status {
     IOError,
 
     Unexpected,
+    Default, // used for default
 }
 
 impl Status {
@@ -42,6 +44,7 @@ impl Status {
             Status::CompressionError => "CompressionError",
             Status::IOError => "IOError",
             Status::Unexpected => "UnexpectedError",
+            _ => "",
         }
     }
 }
@@ -50,7 +53,7 @@ impl Status {
 pub struct WickErr {
     t: Status,
     msg: Option<&'static str>,
-    raw: Option<Box<dyn Error>>,
+    raw: Option<Rc<Box<dyn Error>>>,
 }
 
 impl WickErr {
@@ -62,12 +65,12 @@ impl WickErr {
         Self {
             t,
             msg,
-            raw: Some(raw),
+            raw: Some(Rc::new(raw)),
         }
     }
 
     #[inline]
-    pub fn take_raw(&mut self) -> Option<Box<dyn Error>> {
+    pub fn take_raw(&mut self) -> Option<Rc<Box<dyn Error>>> {
         mem::replace(&mut self.raw, None)
     }
 
@@ -76,6 +79,9 @@ impl WickErr {
         self.t.clone()
     }
 }
+
+unsafe impl Send for WickErr {}
+unsafe impl Sync for WickErr {}
 
 pub type Result<T> = result::Result<T, WickErr>;
 
@@ -88,6 +94,27 @@ macro_rules! w_io_result {
         }
     };
 }
+
+impl Clone for WickErr {
+    fn clone(&self) -> Self {
+        Self {
+            t: self.t.clone(),
+            msg: self.msg.clone(),
+            raw: self.raw.clone(),
+        }
+    }
+}
+
+impl Default for WickErr {
+    fn default() -> Self {
+        Self {
+            t: Status::Default,
+            msg: None,
+            raw: None,
+        }
+    }
+}
+
 impl Display for WickErr {
     fn fmt(&self, f: &mut Formatter) -> ::std::fmt::Result {
         match self.msg {

@@ -180,6 +180,8 @@ pub struct VersionSet {
     compaction_pointer: Vec<Rc<InternalKey>>,
 }
 
+unsafe impl Send for VersionSet {}
+
 impl VersionSet {
 
     /// Returns the number of files in a certain level

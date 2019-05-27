@@ -124,6 +124,9 @@ impl MemTable {
     }
 }
 
+unsafe impl Send for MemTable {}
+unsafe impl Sync for MemTable {}
+
 impl MemoryTable for MemTable {
     fn approximate_memory_usage(&self) -> usize {
         self.table.arena.memory_used()

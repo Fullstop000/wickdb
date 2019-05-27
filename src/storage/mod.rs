@@ -98,7 +98,8 @@ pub trait File {
                 Err(mut e) => {
                     match e.status() {
                         Status::IOError => {
-                            if let Some(raw) = e.take_raw() {
+                            if let Some(r) = e.take_raw() {
+                                let raw = Rc::try_unwrap(r).unwrap();
                                 // DANGER: the raw error must be a io::Error otherwise we got UB
                                 #[allow(clippy::cast_ptr_alignment)]
                                 let raw_ptr = Box::into_raw(raw) as *mut io::Error;

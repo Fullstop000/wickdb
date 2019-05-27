@@ -26,7 +26,7 @@ use std::rc::Rc;
 use crate::db::format::{InternalKeyComparator, InternalFilterPolicy, LookupKey, InternalKey, ParsedInternalKey, ValueType};
 use crate::table_cache::TableCache;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, Condvar, MutexGuard};
 use crate::mem::{MemTable, MemoryTable};
 use crate::version::version_set::VersionSet;
 use hashbrown::HashSet;
@@ -36,6 +36,7 @@ use std::time::{Duration, SystemTime};
 use std::mem;
 use std::cmp::Ordering as CmpOrdering;
 use crossbeam_channel::{Receiver, Sender};
+use crossbeam_utils::sync::ShardedLock;
 use crate::db::filename::{generate_filename, FileType, parse_filename};
 use std::collections::vec_deque::VecDeque;
 use std::sync::atomic::AtomicUsize;
@@ -44,7 +45,8 @@ use crate::iterator::Iterator;
 use crate::version::version_edit::{FileMetaData, VersionEdit};
 use crate::sstable::table::TableBuilder;
 use crate::util::collection::NodePtr;
-use crate::version::Version;
+use crate::version::{Version, SeekStats};
+use std::thread::JoinHandle;
 
 /// A `DB` is a persistent ordered map from keys to values.
 /// A `DB` is safe for concurrent access from multiple threads without
@@ -53,60 +55,227 @@ pub trait DB {
     /// `put` sets the value for the given key. It overwrites any previous value
     /// for that key; a DB is not a multi-map.
     fn put(
-        &mut self,
-        write_opt: Option<WriteOptions>,
+        &self,
+        write_opt: WriteOptions,
         key: Slice,
         value: Slice,
     ) -> Result<()>;
 
     /// `get` gets the value for the given key. It returns `Status::NotFound` if the DB
     /// does not contain the key.
-    fn get(&self, read_opt: Option<ReadOptions>, key: Slice) -> Result<Slice>;
+    fn get(&self, read_opt: ReadOptions, key: Slice) -> Result<Slice>;
 
     /// `delete` deletes the value for the given key. It returns `Status::NotFound` if
     /// the DB does not contain the key.
-    fn delete(&mut self, write_opt: Option<WriteOptions>, key: Slice) -> Result<()>;
+    fn delete(&self, write_opt: WriteOptions, key: Slice) -> Result<()>;
 
     /// `apply` applies the operations contained in the `WriteBatch` to the DB atomically.
-    fn apply(&mut self, write_opt: Option<WriteOptions>, batch: WriteBatch) -> Result<()>;
+    fn apply(&self, write_opt: WriteOptions, batch: WriteBatch) -> Result<()>;
 
     /// `close` closes the DB.
-    fn close(&mut self) -> Result<()>;
+    fn close(&self) -> Result<()>;
 
-    fn get_snapshot(&mut self) -> Snapshot;
-
+    fn get_snapshot(&self) -> Snapshot;
 }
 
-// TODO: make this thread safe
-pub struct DBImpl {
+
+/// The wrapper of `DBImpl` for concurrency control.
+/// `WickDB` is thread safe and is able to be shared by `clone()` in different threads.
+pub struct WickDB {
+    inner: Arc<DBImpl>,
+}
+
+impl WickDB {
+    pub fn get_snapshot(&self) -> Arc<Snapshot> {
+        self.inner.get_snapshot()
+    }
+    pub fn get(&self, options: ReadOptions, key: Slice) -> Result<Option<Slice>> {
+        self.inner.get(options, key)
+    }
+
+    pub fn put(&self, options: WriteOptions, key: Slice, value: Slice) -> Result<()> {
+        let mut batch = WriteBatch::new();
+        batch.put(key.as_slice(), value.as_slice());
+        self.write(options, batch)
+    }
+
+    pub fn write(&self, options: WriteOptions,  batch: WriteBatch) -> Result<()> {
+        self.inner.schedule_batch_and_wait(options, batch)
+    }
+
+    // The thread take batches from the queue and apples them into memtable and WAL.
+    //
+    // Steps:
+    // 1. Grouping the batches in the queue into a big enough batch
+    // 2. Make sure there is enough space in the memtable. This might trigger a minor compaction
+    //    or even several major compaction.
+    // 3. Write into WAL (.log file)
+    // 4. Write into Memtable
+    // 5. Update sequence of version set
+    fn process_batch(&self) {
+        let db = self.inner.clone();
+        thread::spawn(move || {
+            loop {
+                let mut queue = db.batch_queue.lock().unwrap();
+                while queue.is_empty() {
+                    queue = db.process_batch_sem.wait(queue).unwrap();
+                }
+                let first = queue.pop_front().unwrap();
+                let mut size = first.batch.approximate_size();
+
+                // Allow the group to grow up to a maximum size, but if the
+                // original write is small, limit the growth so we do not slow
+                // down the small write too much
+                let mut max_size =  1 << 20;
+                if size <= 128 << 10 {
+                    max_size = size + 128 << 10
+                }
+                let mut signals = vec![];
+                signals.push(first.signal.clone());
+                let mut grouped = first;
+
+                // Group several batches from queue
+                while !queue.is_empty() {
+                    let current = queue.pop_front().unwrap();
+                    if current.options.sync && !grouped.options.sync {
+                        // Do not include a sync write into a batch handled by a non-sync write.
+                        break
+                    }
+                    size += current.batch.approximate_size();
+                    if size > max_size {
+                        // Do not make batch too big
+                        break
+                    }
+                    grouped.batch.append(current.batch);
+                    signals.push(current.signal.clone());
+                }
+
+                match db.make_room_for_write(false) {
+                    Ok(mut versions) => {
+                        let mut last_seq = versions.get_last_sequence();
+                        grouped.batch.set_sequence(last_seq + 1);
+                        last_seq += grouped.batch.count() as u64;
+                        let mut writer = db.record_writer.lock().unwrap();
+                        let mut status = writer.add_record(&Slice::from(grouped.batch.data()));
+                        let mut sync_err = false;
+                        if status.is_ok() {
+                            if grouped.options.sync {
+                                status = writer.sync();
+                                if status.is_err() {
+                                    sync_err = true;
+                                }
+                            }
+                        }
+                        if status.is_ok() {
+                            let memtable = db.mem.read().unwrap();
+                            status = grouped.batch.insert_into(&*memtable);
+                        }
+
+                        for signal in signals.iter() {
+                            if let Err(e) = signal.send(status.clone()) {
+                                error!(
+                                    "[process batch] Fail sending finshing signal to waiting batch: {}", e
+                                )
+                            }
+                        }
+                        if let Err(e) = status {
+                            if sync_err {
+                                // The state of the log file is indeterminate: the log record we
+                                // just added may or may not show up when the DB is re-opened.
+                                // So we force the DB into a mode where all future writes fail.
+                                db.record_bg_error(e.clone());
+                            }
+                        }
+                        versions.set_last_sequence(last_seq);
+                    }
+                    Err(e) => {
+                        for signal in signals.iter() {
+                            if let Err(e) = signal.send(Err(e.clone())) {
+                                error!(
+                                    "[process batch] Fail sending finishing signal to waiting batch: {}", e
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // Process a compaction work when receiving the signal.
+    // The compaction might run recursively since we produce new table files.
+    fn process_compaction(&self) {
+        let db = self.inner.clone();
+        thread::spawn(move || {
+            loop {
+                match db.do_compaction.1.recv() {
+                    Ok(()) => {
+                        if db.is_shutting_down.load(Ordering::Acquire) {
+                            // No more background work when shutting down
+                            break
+                        } else if db.bg_error.read().unwrap().is_some() {
+                            // Non more background work after a background error
+                        } else {
+                            db.background_compaction();
+                        }
+                        db.background_compaction_scheduled.store(false, Ordering::Release);
+
+                        // Previous compaction may have produced too many files in a level,
+                        // so reschedule another compaction if needed
+                        db.maybe_schedule_compaction();
+                        db.background_work_finished_signal.notify_all();
+                    }
+                    Err(_e) => {
+                        break
+                    }
+                }
+            }
+        });
+    }
+}
+
+impl Clone for WickDB {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+struct DBImpl {
     env: Arc<dyn Storage>,
     internal_comparator: Arc<InternalKeyComparator>,
-//    internal_filter_policy: InternalFilterPolicy,
     options: Arc<Options>,
-    // actually is the dirname of db
+    // The physical path of wickdb
     db_name: String,
 
-    record_writer: Writer,
+    /*
+     * Fields for write batch scheduling
+     */
+    batch_queue: Mutex<VecDeque<BatchTask>>,
+    process_batch_sem: Condvar,
 
-    batch_scheduler: BatchScheduler,
+    record_writer: Mutex<Writer>,
+
     // the table cache
     table_cache: Arc<TableCache>,
 
+    // The version set
     versions: Mutex<VersionSet>,
 
     // signal of compaction finished
-    background_work_finished_signal: (Sender<()>, Receiver<()>),
+    background_work_finished_signal: Condvar,
     // whether we have a compaction running
     background_compaction_scheduled: AtomicBool,
+    // signal of schedule a compaction
     do_compaction: (Sender<()>, Receiver<()>),
     // iff should schedule a manual compaction, temporarily just for test
-    manual_compaction: Option<ManualCompaction>,
-    // a controlled mutex
-    mutex: Mutex<()>,
-    // file number of current .log file
-    log_file_num: u64,
-    mem: MemTable,
-    im_mem: Mutex<Option<MemTable>>,// iff the memtable is compacted
+    manual_compaction: Option<Mutex<ManualCompaction>>,
+    // Though Memtable is thread safe with multiple readers and single writers and
+    // all relative methods are using immutable borrowing,
+    // we still need to mutate the field `mem` and `im_mem` in few situations.
+    mem: ShardedLock<MemTable>,
+    im_mem: ShardedLock<Option<MemTable>>,// iff the memtable is compacted
     // Have we encountered a background error in paranoid mode
     bg_error: RwLock<Option<WickErr>>,
     // Whether the db is closing
@@ -114,23 +283,10 @@ pub struct DBImpl {
 
 }
 
-struct BatchScheduler {
-    batch_queue: VecDeque<BatchTask>,
-    size: AtomicUsize,
-}
+unsafe impl Sync for DBImpl {}
+unsafe impl Send for DBImpl {}
 
-impl BatchScheduler {
-    fn schedule_and_wait(&mut self, options: WriteOptions, batch: WriteBatch) -> Result<()> {
-        let (send, recv) = crossbeam_channel::bounded(0);
-        let task = BatchTask::new(batch, send, options);
-        self.batch_queue.push_back(task);
-        match recv.recv() {
-            Ok(m) => m,
-            Err(e) => Err(WickErr::new_from_raw(Status::Unexpected, None, Box::new(e))),
-        }
-    }
-}
-
+// A wrapper struct for scheduling `WriteBatch`
 struct BatchTask {
     batch: WriteBatch,
     signal: Sender<Result<()>>,
@@ -149,18 +305,18 @@ impl BatchTask {
 
 impl DBImpl {
 
-    pub fn get_snapshot(&mut self) -> Arc<Snapshot> {
+    fn get_snapshot(&self) -> Arc<Snapshot> {
         self.versions.lock().unwrap().new_snapshot()
     }
 
-    pub fn get(&self, options: ReadOptions, key: Slice) -> Result<Option<Slice>> {
+    fn get(&self, options: ReadOptions, key: Slice) -> Result<Option<Slice>> {
         let snapshot = match &options.snapshot {
             Some(snapshot) => snapshot.sequence(),
             None => self.versions.lock().unwrap().get_last_sequence(),
         };
         let lookup_key = LookupKey::new(key.as_slice(), snapshot);
         // search the memtable
-        if let Some(result) = self.mem.get(&lookup_key) {
+        if let Some(result) = self.mem.read().unwrap().get(&lookup_key) {
             match result {
                 Ok(value) => return Ok(Some(value)),
                 // mem.get only returns Err() when get an Deletion of the key
@@ -168,7 +324,7 @@ impl DBImpl {
             }
         }
         // search the immutable memtable
-        if let Some(im_mem) = &*self.im_mem.lock().unwrap() {
+        if let Some(im_mem) = self.im_mem.read().unwrap().as_ref() {
             if let Some(result) = im_mem.get(&lookup_key) {
                 match result {
                     Ok(value) => return Ok(Some(value)),
@@ -182,11 +338,6 @@ impl DBImpl {
             self.maybe_schedule_compaction()
         }
         Ok(value)
-    }
-
-    pub fn write(&mut self, options: WriteOptions,  batch: WriteBatch) -> Result<()> {
-        self.make_room_for_write(batch.is_empty())?;
-        self.batch_scheduler.schedule_and_wait(options, batch)
     }
 
     // Delete any unneeded files and stale in-memory entries.
@@ -225,13 +376,30 @@ impl DBImpl {
         }
     }
 
-    fn make_room_for_write(&mut self, mut force: bool) -> Result<()> {
-        let mutex = self.mutex.lock().unwrap();
+    // Schedule the WriteBatch and wait for the result from the receiver.
+    // This function wakes up the thread in `process_batch`.
+    fn schedule_batch_and_wait(&self, options: WriteOptions, batch: WriteBatch) -> Result<()> {
+        if batch.is_empty() {
+            return Ok(());
+        }
+        let (send, recv) = crossbeam_channel::bounded(0);
+        let task = BatchTask::new(batch, send, options);
+        self.batch_queue.lock().unwrap().push_back(task);
+        self.process_batch_sem.notify_all();
+        match recv.recv() {
+            Ok(m) => m,
+            Err(e) => Err(WickErr::new_from_raw(Status::Unexpected, None, Box::new(e))),
+        }
+    }
+
+    // Make sure there is enough space in memtable.
+    // This method acquires the mutex of VersionSet and deliver it to the caller.
+    fn make_room_for_write(&self, mut force: bool) -> Result<MutexGuard<VersionSet>> {
         let mut allow_delay = !force;
         let mut versions = self.versions.lock().unwrap();
         loop {
             if let Some(e) = {
-                self.bg_error.get_mut().unwrap().take()
+                self.bg_error.write().unwrap().take()
             } {
                 return Err(e)
             } else if allow_delay && versions.level_files_count(0) >= self.options.l0_slowdown_writes_threshold {
@@ -243,29 +411,34 @@ impl DBImpl {
                 // case it is sharing the same core as the writer.
                 thread::sleep(Duration::from_micros(1000));
                 allow_delay = false; // do not delay a single write more than once
-            } else if !force && self.mem.approximate_memory_usage() <= self.options.write_buffer_size {
+            } else if !force && self.mem.read().unwrap().approximate_memory_usage() <= self.options.write_buffer_size {
                 // There is room in current memtable
                 break;
-            } else if self.im_mem.lock().unwrap().is_some() {
+            } else if self.im_mem.read().unwrap().is_some() {
                 info!("Current memtable full; waiting...");
-                let _ = self.background_work_finished_signal.1.recv();
+                versions = self.background_work_finished_signal.wait(versions).unwrap();
             } else if versions.level_files_count(0) >= self.options.l0_stop_writes_threshold {
                 info!("Too many L0 files; waiting...");
-                let _ = self.background_work_finished_signal.1.recv();
+                versions = self.background_work_finished_signal.wait(versions).unwrap();
             } else {
                 // there must be no prev log
                 let new_log_num = versions.get_next_file_number();
                 let log_file = self.env.create(generate_filename(self.db_name.as_str(),FileType::Log, new_log_num).as_str())?;
-                self.versions.set_next_file_number(new_log_num + 1);
-                self.record_writer = Writer::new(log_file);
+                versions.set_next_file_number(new_log_num + 1);
+                {
+                    let mut log_writer = self.record_writer.lock().unwrap();
+                    *log_writer = Writer::new(log_file);
+                }
                 // rotate the mem to immutable mem
-                let memtable = mem::replace(&mut self.mem, MemTable::new(self.internal_comparator.clone()));
-                self.im_mem = Mutex::new(Some(memtable));
+                let mut mem = self.mem.write().unwrap();
+                let memtable = mem::replace(&mut *mem, MemTable::new(self.internal_comparator.clone()));
+                let mut im_mem = self.im_mem.write().unwrap();
+                *im_mem = Some(memtable);
                 force = false; // do not force another compaction if have room
                 self.maybe_schedule_compaction();
             }
         }
-        Ok(())
+        Ok(versions)
     }
 
     // Compact immutable memory table to level0 files
@@ -273,8 +446,41 @@ impl DBImpl {
         let mut versions = self.versions.lock().unwrap();
         let base = versions.current();
         let mut edit = VersionEdit::new(self.options.max_levels);
-        let mut im_mem = self.im_mem.lock().unwrap();
-        match self.write_level0_table(im_mem.as_ref().unwrap(), &mut edit, Some(base)) {
+        let mut im_mem = self.im_mem.write().unwrap();
+        // Persistent given memtable into a single level file.
+        match {
+            let now = SystemTime::now();
+            let mut meta = FileMetaData::default();
+            meta.number = versions.inc_next_file_number();
+            versions.pending_outputs.insert(meta.number);
+            let mem_iter = im_mem.as_ref().unwrap().new_iterator();
+            info!(
+                "Level-0 table #{} : started",
+                meta.number
+            );
+            let build_result = self.build_table(mem_iter, &mut meta);
+            info!(
+                "Level-0 table #{} : {} bytes [{:?}]",
+                meta.number, meta.file_size, &build_result
+            );
+            versions.pending_outputs.remove(&meta.number);
+            let mut level = 0;
+
+            // If `file_size` is zero, the file has been deleted and
+            // should not be added to the manifest
+            if build_result.is_ok() && meta.file_size > 0 {
+                let smallest_ukey = Slice::from(meta.smallest.user_key());
+                let largest_ukey = Slice::from(meta.largest.user_key());
+                level = base.pick_level_for_memtable_output(&smallest_ukey, &largest_ukey);
+                edit.add_file(level, meta.number, meta.file_size, meta.smallest.clone(), meta.largest.clone());
+            }
+            versions.compaction_stats[level].accumulate(
+                now.elapsed().unwrap().as_micros() as u64,
+                0,
+                meta.file_size,
+            );
+            build_result
+        } {
             Ok(()) => {
                 if self.is_shutting_down.load(Ordering::Acquire) {
                     self.record_bg_error(WickErr::new(Status::IOError, Some("Deleting DB during memtable compaction")))
@@ -298,49 +504,9 @@ impl DBImpl {
         }
     }
 
-    // Persistent given memtable into a single level file.
-    // If `base` is not `None`, we might choose a proper level for the generated
-    // file other we add it to the level0
-    fn write_level0_table(&self, mem: &MemTable, edit: &mut VersionEdit, base: Option<Arc<Version>>) -> Result<()> {
-        let mut versions = self.versions.lock().unwrap();
-        let now = SystemTime::now();
-        let mut meta = FileMetaData::default();
-        meta.number = versions.inc_next_file_number();
-        versions.pending_outputs.insert(meta.number);
-        let mem_iter = mem.new_iterator();
-        info!(
-            "Level-0 table #{} : started",
-            meta.number
-        );
-        let build_result = self.build_table(mem_iter, &mut meta);
-        info!(
-            "Level-0 table #{} : {} bytes [{:?}]",
-            meta.number, meta.file_size, &build_result
-        );
-        versions.pending_outputs.remove(&meta.number);
-        let mut level = 0;
-
-        // Note that if file_size is zero, the file has been deleted and
-        // should not be added to the manifest
-        if build_result.is_ok() && meta.file_size > 0 {
-            let smallest_ukey = Slice::from(meta.smallest.user_key());
-            let largest_ukey = Slice::from(meta.largest.user_key());
-            if let Some(v) = base {
-                level = v.pick_level_for_memtable_output(&smallest_ukey, &largest_ukey);
-            }
-            edit.add_file(level, meta.number, meta.file_size, meta.smallest.clone(), meta.largest.clone());
-        }
-        versions.compaction_stats[level].accumulate(
-            now.elapsed().unwrap().as_micros() as u64,
-            0,
-            meta.file_size,
-        );
-        build_result
-    }
-
     // The complete compaction process
     fn background_compaction(&self) {
-        if self.im_mem.lock().unwrap().is_some() {
+        if self.im_mem.read().unwrap().is_some() {
             // minor compaction
             self.compact_mem_table();
         } else {
@@ -410,8 +576,6 @@ impl DBImpl {
                                 compaction.oldest_snapshot_alive = snapshots.oldest().sequence();
                             }
                         }
-                        // TODO: reactor below as scheduling an compaction work
-                        // TODO: release versions mutex here
                         self.delete_obsolete_files(self.do_compaction(&mut compaction));
                     }
                     if !self.is_shutting_down.load(Ordering::Acquire) {
@@ -445,7 +609,7 @@ impl DBImpl {
         // Iterate every key
         while input_iter.valid() && !self.is_shutting_down.load(Ordering::Acquire) {
             // Prioritize immutable compaction work
-            if self.im_mem.lock().unwrap().is_some() {
+            if self.im_mem.read().unwrap().is_some() {
                 let imm_start = SystemTime::now();
                 self.compact_mem_table();
                 mem_compaction_duration = imm_start.elapsed().unwrap().as_micros() as u64;
@@ -499,7 +663,7 @@ impl DBImpl {
                         }
                         // Keep updating the largest
                         c.outputs[last].largest = Rc::new(InternalKey::decoded_from(ikey.as_slice()));
-                        c.builder.as_mut().unwrap().add(ikey.as_slice(), input_iter.value().as_slice()).is_ok();
+                        let _ = c.builder.as_mut().unwrap().add(ikey.as_slice(), input_iter.value().as_slice());
                         let builder = c.builder.as_ref().unwrap();
                         // Rotate a new output file if the current one is big enough
                         if builder.file_size() >= self.options.max_file_size {
@@ -574,7 +738,7 @@ impl DBImpl {
             mem::drop(old);
             let mut x = self.bg_error.write().unwrap();
             *x = Some(e);
-            self.background_work_finished_signal.0.send(()).expect("Sender panic");
+            self.background_work_finished_signal.notify_all();
         }
     }
 
@@ -590,12 +754,15 @@ impl DBImpl {
             // DB is being shutting down
         } else if self.bg_error.read().unwrap().is_some() {
             // Got err
-        } else if self.im_mem.lock().unwrap().is_none() && self.manual_compaction.is_none() && !self.versions.lock().unwrap().needs_compaction() {
+        } else if self.im_mem.read().unwrap().is_none() && self.manual_compaction.is_none() && !self.versions.lock().unwrap().needs_compaction() {
             // No work needs to be done
         } else {
             self.background_compaction_scheduled.store(true, Ordering::Release);
-
-            // TODO: schedule a compaction
+            if let Err(e) = self.do_compaction.0.send(()) {
+                error!(
+                    "[schedule compaction] Fail sending signal to compaction channel: {}", e
+                )
+            }
         }
     }
 
@@ -678,4 +845,3 @@ impl DBImpl {
         status
     }
 }
-

@@ -28,7 +28,7 @@ be thread-safe otherwise we have to spilt it into several thread-safe types.
   - [x] Storage (aka Env)
   - [ ] DB
 - [x] Compaction implementation
-- [ ] Scheduling
+- [x] Scheduling
 - [ ] Solid test cases
 - [ ] Benchmark
 

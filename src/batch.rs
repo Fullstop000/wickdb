@@ -23,6 +23,7 @@ use crate::util::slice::Slice;
 use crate::util::status::{Result, WickErr, Status};
 use crate::util::coding::{encode_fixed_64, decode_fixed_64};
 use crate::util::varint::VarintU32;
+use std::sync::Arc;
 
 const HEADER_SIZE: usize = 12;
 
@@ -76,6 +77,11 @@ impl WriteBatch {
         }
     }
 
+    #[inline]
+    pub fn data(&self) -> &[u8] {
+        self.contents.as_slice()
+    }
+
     /// Stores the mapping "key -> value" in the database
     pub fn put(&mut self, key: &[u8], value: &[u8]) {
         self.count +=1;
@@ -95,6 +101,7 @@ impl WriteBatch {
     }
 
     /// The size of the database changes caused by this batch.
+    #[inline]
     pub fn approximate_size(&self) -> usize {
         self.contents.len()
     }
@@ -108,6 +115,7 @@ impl WriteBatch {
     }
 
     /// Clears all updates buffered in this batch
+    #[inline]
     pub fn clear(&mut self) {
         self.contents.clear();
         self.contents.resize(HEADER_SIZE, 0);
@@ -115,21 +123,13 @@ impl WriteBatch {
     }
 
     /// Insert all the records in the batch into the given `MemTable`
-    pub fn insert_into(&self, mem: Rc<RefCell<MemTable>>) -> Result<()> {
-        let mut handler = MemTableInserter {
-            seq: self.sequence(),
-            memtable: mem,
-        };
-        self.iterate(&mut handler)
-    }
-
-    /// Iterates every entry in the batch and calls the given BatchHandler
-    pub fn iterate(&self, handler: &mut BatchHandler) ->Result<()> {
+    pub fn insert_into(&self, mem: &MemTable) ->Result<()> {
         if self.contents.len() < HEADER_SIZE {
             return Err(WickErr::new(Status::Corruption, Some("[batch] malformed WriteBatch (too small)")));
         }
         let mut s = Slice::from(&self.contents.as_slice()[HEADER_SIZE..]);
         let mut found = 0;
+        let mut seq = self.sequence();
         while !s.is_empty() {
             found += 1;
             let tag = s[0];
@@ -138,7 +138,8 @@ impl WriteBatch {
                 ValueType::Value => {
                     if let Some(key) = VarintU32::get_varint_prefixed_slice(&mut s) {
                         if let Some(value) = VarintU32::get_varint_prefixed_slice(&mut s) {
-                            handler.put(key.as_slice(), value.as_slice());
+                            mem.add(seq, ValueType::Value, key.as_slice(), value.as_slice());
+                            seq += 1;
                             continue;
                         }
                     }
@@ -146,7 +147,8 @@ impl WriteBatch {
                 }
                 ValueType::Deletion => {
                     if let Some(key) = VarintU32::get_varint_prefixed_slice(&mut s) {
-                        handler.delete(key.as_slice());
+                        mem.add(seq, ValueType::Deletion, key.as_slice(), "".as_bytes());
+                        seq += 1;
                         continue;
                     }
                     return Err(WickErr::new(Status::Corruption, Some("[batch] bad WriteBatch delete")))
@@ -184,11 +186,11 @@ impl WriteBatch {
 
 pub struct MemTableInserter {
     seq: u64,
-    memtable: Rc<RefCell<MemTable>>,
+    memtable: Arc<MemTable>,
 }
 
 impl MemTableInserter {
-    pub fn new(mem: Rc<RefCell<MemTable>>) -> Self {
+    pub fn new(mem: Arc<MemTable>) -> Self {
         Self {
             seq: 0,
             memtable: mem,
@@ -198,12 +200,12 @@ impl MemTableInserter {
 
 impl BatchHandler for MemTableInserter {
     fn put(&mut self, key: &[u8], value: &[u8]) {
-        self.memtable.borrow_mut().add(self.seq, ValueType::Value, key, value);
+        self.memtable.add(self.seq, ValueType::Value, key, value);
         self.seq += 1;
     }
 
     fn delete(&mut self, key: &[u8]) {
-        self.memtable.borrow_mut().add(self.seq, ValueType::Deletion, key, "".as_bytes());
+        self.memtable.add(self.seq, ValueType::Deletion, key, "".as_bytes());
         self.seq += 1;
     }
 }
@@ -219,10 +221,9 @@ mod tests {
     use std::cell::RefCell;
 
     fn print_contents(batch: &WriteBatch) -> String {
-        let mem =Rc::new(RefCell::new(MemTable::new(Arc::new(InternalKeyComparator::new(Box::new(BytewiseComparator::new()))))));
-        let result = batch.insert_into(mem.clone());
-        let borrowed = mem.borrow();
-        let mut iter = borrowed.new_iterator();
+        let mem = MemTable::new(Arc::new(InternalKeyComparator::new(Box::new(BytewiseComparator::new()))));
+        let result = batch.insert_into(&mem);
+        let mut iter = mem.new_iterator();
         iter.as_mut().seek_to_first();
         let mut s = String::new();
         let mut count = 0;
