@@ -21,11 +21,11 @@ use crate::iterator::{
 };
 use crate::options::{Options, ReadOptions};
 use crate::sstable::table::TableBuilder;
-use crate::status::Result;
 use crate::table_cache::TableCache;
 use crate::util::coding::decode_fixed_64;
 use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
+use crate::util::status::Result;
 use crate::util::status::{Status, WickErr};
 use crate::version::version_edit::{FileMetaData, VersionEdit};
 use crate::version::version_set::VersionSet;

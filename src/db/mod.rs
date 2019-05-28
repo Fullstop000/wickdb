@@ -15,7 +15,7 @@ pub mod filename;
 pub mod format;
 
 use crate::batch::WriteBatch;
-use crate::compaction::{Compaction, CompactionInputsRelation, ManualCompaction};
+use crate::compaction::{Compaction, CompactionInputsRelation};
 use crate::db::filename::{generate_filename, parse_filename, FileType};
 use crate::db::format::{
     InternalKey, InternalKeyComparator, LookupKey, ParsedInternalKey, ValueType,
@@ -26,7 +26,7 @@ use crate::options::{Options, ReadOptions, WriteOptions};
 use crate::record::writer::Writer;
 use crate::snapshot::Snapshot;
 use crate::sstable::table::TableBuilder;
-use crate::storage::Storage;
+use crate::storage::{File, Storage};
 use crate::table_cache::TableCache;
 use crate::util::slice::Slice;
 use crate::util::status::{Result, Status, WickErr};
@@ -66,7 +66,7 @@ pub trait DB {
     /// `close` closes the DB.
     fn close(&self) -> Result<()>;
 
-    fn get_snapshot(&self) -> Snapshot;
+    fn get_snapshot(&self) -> Arc<Snapshot>;
 }
 
 /// The wrapper of `DBImpl` for concurrency control.
@@ -79,6 +79,7 @@ impl WickDB {
     pub fn get_snapshot(&self) -> Arc<Snapshot> {
         self.inner.get_snapshot()
     }
+
     pub fn get(&self, options: ReadOptions, key: Slice) -> Result<Option<Slice>> {
         self.inner.get(options, key)
     }
@@ -91,6 +92,12 @@ impl WickDB {
 
     pub fn write(&self, options: WriteOptions, batch: WriteBatch) -> Result<()> {
         self.inner.schedule_batch_and_wait(options, batch)
+    }
+
+    pub fn delete(&self, options: WriteOptions, key: Slice) -> Result<()> {
+        let mut batch = WriteBatch::new();
+        batch.delete(key.as_slice());
+        self.write(options, batch)
     }
 
     // The thread take batches from the queue and apples them into memtable and WAL.
@@ -145,7 +152,8 @@ impl WickDB {
                         let mut last_seq = versions.get_last_sequence();
                         grouped.batch.set_sequence(last_seq + 1);
                         last_seq += u64::from(grouped.batch.count());
-                        let mut writer = db.record_writer.lock().unwrap();
+                        // must initialize the WAL writer after `make_room_for_write`
+                        let writer = versions.record_writer.as_mut().unwrap();
                         let mut status = writer.add_record(&Slice::from(grouped.batch.data()));
                         let mut sync_err = false;
                         if status.is_ok() && grouped.options.sync {
@@ -230,14 +238,13 @@ struct DBImpl {
     options: Arc<Options>,
     // The physical path of wickdb
     db_name: String,
+    db_lock: Option<Mutex<Box<dyn File>>>,
 
     /*
      * Fields for write batch scheduling
      */
     batch_queue: Mutex<VecDeque<BatchTask>>,
     process_batch_sem: Condvar,
-
-    record_writer: Mutex<Writer>,
 
     // the table cache
     table_cache: Arc<TableCache>,
@@ -251,8 +258,6 @@ struct DBImpl {
     background_compaction_scheduled: AtomicBool,
     // signal of schedule a compaction
     do_compaction: (Sender<()>, Receiver<()>),
-    // iff should schedule a manual compaction, temporarily just for test
-    manual_compaction: Option<Mutex<ManualCompaction>>,
     // Though Memtable is thread safe with multiple readers and single writers and
     // all relative methods are using immutable borrowing,
     // we still need to mutate the field `mem` and `im_mem` in few situations.
@@ -284,7 +289,43 @@ impl BatchTask {
     }
 }
 
+impl Drop for DBImpl {
+    #[allow(unused_must_use)]
+    fn drop(&mut self) {
+        self.is_shutting_down.store(true, Ordering::Release);
+        if let Some(lock) = self.db_lock.as_ref() {
+            lock.lock().unwrap().f_unlock();
+        }
+    }
+}
+
 impl DBImpl {
+    fn new(options: Options, db_name: String) -> Self {
+        let o = Arc::new(options);
+        let icmp = Arc::new(InternalKeyComparator::new(o.comparator.clone()));
+        Self {
+            env: o.env.clone(),
+            internal_comparator: icmp.clone(),
+            options: o.clone(),
+            db_name: db_name.clone(),
+            db_lock: None,
+            batch_queue: Mutex::new(VecDeque::new()),
+            process_batch_sem: Condvar::new(),
+            table_cache: Arc::new(TableCache::new(
+                db_name.clone(),
+                o.clone(),
+                o.table_cache_size(),
+            )),
+            versions: Mutex::new(VersionSet::new(db_name.clone(), o.clone())),
+            background_work_finished_signal: Condvar::new(),
+            background_compaction_scheduled: AtomicBool::new(false),
+            do_compaction: crossbeam_channel::unbounded(),
+            mem: ShardedLock::new(MemTable::new(icmp)),
+            im_mem: ShardedLock::new(None),
+            bg_error: RwLock::new(None),
+            is_shutting_down: AtomicBool::new(false),
+        }
+    }
     fn get_snapshot(&self) -> Arc<Snapshot> {
         self.versions.lock().unwrap().new_snapshot()
     }
@@ -416,10 +457,7 @@ impl DBImpl {
                     generate_filename(self.db_name.as_str(), FileType::Log, new_log_num).as_str(),
                 )?;
                 versions.set_next_file_number(new_log_num + 1);
-                {
-                    let mut log_writer = self.record_writer.lock().unwrap();
-                    *log_writer = Writer::new(log_file);
-                }
+                versions.record_writer = Some(Writer::new(log_file));
                 // rotate the mem to immutable mem
                 let mut mem = self.mem.write().unwrap();
                 let memtable =
@@ -511,44 +549,48 @@ impl DBImpl {
             let mut is_manual = false;
             let mut versions = self.versions.lock().unwrap();
             if let Some(mut compaction) = {
-                match &self.manual_compaction {
+                match versions.manual_compaction.take() {
                     // manul compaction
-                    Some(m) => {
-                        let mut manual = m.lock().unwrap();
-                        let compaction = versions.compact_range(
-                            manual.level,
-                            manual.begin.clone(),
-                            manual.end.clone(),
-                        );
-                        manual.done = compaction.is_none();
-                        let begin = if let Some(begin) = &manual.begin {
-                            format!("{:?}", begin)
+                    Some(mut manual) => {
+                        if manual.done {
+                            versions.pick_compaction()
                         } else {
-                            "(begin)".to_owned()
-                        };
-                        let end = if let Some(end) = &manual.end {
-                            format!("{:?}", end)
-                        } else {
-                            "(end)".to_owned()
-                        };
-                        let stop = if let Some(c) = &compaction {
-                            format!(
-                                "{:?}",
-                                c.inputs[CompactionInputsRelation::Source as usize]
-                                    .last()
-                                    .unwrap()
-                                    .largest
-                                    .clone()
-                            )
-                        } else {
-                            "(end)".to_owned()
-                        };
-                        info!(
-                            "Manual compaction at level-{} from {} .. {}; will stop at {}",
-                            manual.level, begin, end, stop
-                        );
-                        is_manual = true;
-                        compaction
+                            let compaction = versions.compact_range(
+                                manual.level,
+                                manual.begin.clone(),
+                                manual.end.clone(),
+                            );
+                            manual.done = compaction.is_none();
+                            let begin = if let Some(begin) = &manual.begin {
+                                format!("{:?}", begin)
+                            } else {
+                                "(begin)".to_owned()
+                            };
+                            let end = if let Some(end) = &manual.end {
+                                format!("{:?}", end)
+                            } else {
+                                "(end)".to_owned()
+                            };
+                            let stop = if let Some(c) = &compaction {
+                                format!(
+                                    "{:?}",
+                                    c.inputs[CompactionInputsRelation::Source as usize]
+                                        .last()
+                                        .unwrap()
+                                        .largest
+                                        .clone()
+                                )
+                            } else {
+                                "(end)".to_owned()
+                            };
+                            info!(
+                                "Manual compaction at level-{} from {} .. {}; will stop at {}",
+                                manual.level, begin, end, stop
+                            );
+                            is_manual = true;
+                            versions.manual_compaction = Some(manual);
+                            compaction
+                        }
                     }
                     None => versions.pick_compaction(),
                 }
@@ -603,6 +645,9 @@ impl DBImpl {
                     if let Some(e) = self.bg_error.read().unwrap().as_ref() {
                         info!("Compaction error: {:?}", e)
                     }
+                }
+                if is_manual {
+                    versions.manual_compaction.as_mut().unwrap().done = true;
                 }
             }
         }
@@ -786,7 +831,6 @@ impl DBImpl {
         || self.bg_error.read().unwrap().is_some()
             // Got err
         ||  (self.im_mem.read().unwrap().is_none()
-            && self.manual_compaction.is_none()
             && !self.versions.lock().unwrap().needs_compaction())
         {
             // No work needs to be done

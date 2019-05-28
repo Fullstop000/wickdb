@@ -20,11 +20,15 @@ use crate::filter::FilterPolicy;
 use crate::util::comparator::{BytewiseComparator, Comparator};
 
 use crate::cache::lru::SharedLRUCache;
+use crate::db::filename::generate_filename;
+use crate::logger::Logger;
 use crate::options::CompressionType::{NoCompression, SnappyCompression, Unknown};
 use crate::snapshot::Snapshot;
 use crate::sstable::block::Block;
 use crate::storage::file::FileStorage;
 use crate::storage::Storage;
+use crate::LevelFilter;
+use crate::Log;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -55,7 +59,7 @@ pub struct Options {
     /// REQUIRES: The client must ensure that the comparator supplied
     /// here has the same name and orders keys *exactly* the same as the
     /// comparator provided to previous open calls on the same DB.
-    pub comparator: Rc<dyn Comparator>,
+    pub comparator: Arc<dyn Comparator>,
 
     /// If true, the database will be created if it is missing.
     pub create_if_missing: bool,
@@ -117,6 +121,9 @@ pub struct Options {
     /// If null, we will automatically create and use an 8MB internal cache.
     pub block_cache: Option<Arc<dyn Cache<Arc<Block>>>>,
 
+    /// Number of sstables that remains out of table cache
+    pub non_table_cache_files: usize,
+
     /// Approximate size of user data packed per block.  Note that the
     /// block size specified here corresponds to uncompressed data.  The
     /// actual size of the unit read from disk may be smaller if
@@ -150,6 +157,12 @@ pub struct Options {
     /// Many applications will benefit from passing the result of
     /// NewBloomFilterPolicy() here.
     pub filter_policy: Option<Rc<dyn FilterPolicy>>,
+
+    /// The underlying logger default to a `LOG` file
+    pub logger: Option<Box<dyn Log>>,
+
+    /// The maximum log level
+    pub logger_level: LevelFilter,
 }
 
 impl Options {
@@ -179,12 +192,46 @@ impl Options {
         }
         result
     }
+
+    /// Reserve `non_table_cache_files` files or so for other uses and give the rest to TableCache
+    pub fn table_cache_size(&self) -> usize {
+        self.max_open_files - self.non_table_cache_files
+    }
+
+    /// Make Options become valid
+    pub fn sanitize(&mut self, db_name: String) {
+        self.max_open_files =
+            Self::clip_range(self.max_open_files, 64 + self.non_table_cache_files, 50000);
+        self.write_buffer_size = Self::clip_range(self.write_buffer_size, 64 << 10, 1 << 30);
+        self.max_file_size = Self::clip_range(self.max_file_size, 1 << 20, 1 << 30);
+        self.block_size = Self::clip_range(self.block_size, 1 << 10, 4 << 20);
+
+        if self.logger.is_none() {
+            if let Ok(f) = self.env.create(&db_name) {
+                self.logger = Some(Box::new(Logger::new(f, self.logger_level)))
+            }
+        }
+        if self.block_cache.is_none() {
+            self.block_cache = Some(Arc::new(SharedLRUCache::new(8 << 20)))
+        }
+    }
+
+    fn clip_range<N: PartialOrd + Eq + Copy>(n: N, min: N, max: N) -> N {
+        let mut r = n;
+        if n > max {
+            r = max
+        }
+        if n < min {
+            r = min
+        }
+        r
+    }
 }
 
 impl Default for Options {
     fn default() -> Self {
         Options {
-            comparator: Rc::new(BytewiseComparator::new()),
+            comparator: Arc::new(BytewiseComparator::new()),
             create_if_missing: false,
             error_if_exists: false,
             paranoid_checks: false,
@@ -197,12 +244,15 @@ impl Default for Options {
             write_buffer_size: 4 * 1024 * 1024, // 4MB
             max_open_files: 500,
             block_cache: Some(Arc::new(SharedLRUCache::new(8 << 20))),
+            non_table_cache_files: 10,
             block_size: 4 * 1024, // 4KB
             block_restart_interval: 16,
             max_file_size: 2 * 1024 * 1024, // 2MB
             compression: SnappyCompression,
             reuse_logs: true,
             filter_policy: None,
+            logger: None,
+            logger_level: LevelFilter::Info,
         }
     }
 }

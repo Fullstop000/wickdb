@@ -23,6 +23,7 @@ use crate::util::status::{Result, Status, WickErr};
 use crate::util::varint::VarintU32;
 use std::cmp::{min, Ordering};
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// `Block` is consist of one or more key/value entries and a block trailer.
 /// Block entry shares key prefix with its preceding key until a `restart`
@@ -73,7 +74,7 @@ impl Block {
     }
 
     /// Create a BlockIterator for current block.
-    pub fn iter(&self, cmp: Rc<dyn Comparator>) -> Box<dyn Iterator> {
+    pub fn iter(&self, cmp: Arc<dyn Comparator>) -> Box<dyn Iterator> {
         let num_restarts = Self::restarts_len(self.data.as_slice());
         Box::new(BlockIterator::new(
             cmp,
@@ -104,7 +105,7 @@ unsafe impl Sync for Block {}
 
 /// Iterator for every entry in the block
 pub struct BlockIterator {
-    cmp: Rc<dyn Comparator>,
+    cmp: Arc<dyn Comparator>,
 
     err: Option<WickErr>,
     // underlying block data
@@ -131,7 +132,7 @@ pub struct BlockIterator {
 }
 
 impl BlockIterator {
-    pub fn new(cmp: Rc<Comparator>, data: Rc<Vec<u8>>, restarts: u32, restarts_len: u32) -> Self {
+    pub fn new(cmp: Arc<Comparator>, data: Rc<Vec<u8>>, restarts: u32, restarts_len: u32) -> Self {
         // should be 0
         Self {
             cmp,
@@ -325,7 +326,7 @@ impl Iterator for BlockIterator {
 /// immediately following the corresponding key.
 pub struct BlockBuilder {
     block_restart_interval: usize,
-    cmp: Rc<dyn Comparator>,
+    cmp: Arc<dyn Comparator>,
     // destination buffer
     buffer: Vec<u8>,
     // restart points
@@ -337,7 +338,7 @@ pub struct BlockBuilder {
 }
 
 impl BlockBuilder {
-    pub fn new(block_restart_interval: usize, cmp: Rc<dyn Comparator>) -> Self {
+    pub fn new(block_restart_interval: usize, cmp: Arc<dyn Comparator>) -> Self {
         assert!(
             block_restart_interval >= 1,
             "[block builder] invalid 'block_restart_interval' {} ",

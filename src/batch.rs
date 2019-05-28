@@ -202,7 +202,7 @@ mod tests {
     use std::sync::Arc;
 
     fn print_contents(batch: &WriteBatch) -> String {
-        let mem = MemTable::new(Arc::new(InternalKeyComparator::new(Box::new(
+        let mem = MemTable::new(Arc::new(InternalKeyComparator::new(Arc::new(
             BytewiseComparator::new(),
         ))));
         let result = batch.insert_into(&mem);

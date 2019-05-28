@@ -293,7 +293,7 @@ pub fn new_table_iterator(table: Arc<Table>, options: Rc<ReadOptions>) -> Box<dy
 /// caller to close the file after calling `Finish()`.
 pub struct TableBuilder {
     options: Arc<Options>,
-    cmp: Rc<dyn Comparator>,
+    cmp: Arc<dyn Comparator>,
     // underlying sst file
     file: Box<dyn File>,
     // the written data length

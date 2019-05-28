@@ -23,6 +23,7 @@ use crate::util::varint::VarintU32;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Error, Formatter};
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// The max key sequence number. The value is 2^56 - 1 because the seq number
 /// only takes 56 bits when is serialized to `InternalKey`
@@ -254,11 +255,11 @@ impl LookupKey {
 ///    decreasing type (though sequence# should be enough to disambiguate)
 pub struct InternalKeyComparator {
     /// The comparator defined in `Options`
-    pub user_comparator: Box<dyn Comparator>,
+    pub user_comparator: Arc<dyn Comparator>,
 }
 
 impl InternalKeyComparator {
-    pub fn new(ucmp: Box<dyn Comparator>) -> Self {
+    pub fn new(ucmp: Arc<dyn Comparator>) -> Self {
         InternalKeyComparator {
             user_comparator: ucmp,
         }

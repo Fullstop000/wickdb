@@ -15,7 +15,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use crate::compaction::{Compaction, CompactionStats};
+use crate::compaction::{Compaction, CompactionStats, ManualCompaction};
 use crate::db::filename::{generate_filename, FileType};
 use crate::db::format::{InternalKey, InternalKeyComparator};
 use crate::options::Options;
@@ -25,7 +25,7 @@ use crate::sstable::table::TableBuilder;
 use crate::storage::{do_write_string_to_file, Storage};
 use crate::util::comparator::{BytewiseComparator, Comparator};
 use crate::util::slice::Slice;
-use crate::util::status::{Result, WickErr};
+use crate::util::status::Result;
 use crate::version::version_edit::{FileMetaData, VersionEdit};
 use crate::version::Version;
 use hashbrown::HashSet;
@@ -106,7 +106,7 @@ impl VersionBuilder {
     /// same as `save_to` in C++ implementation
     pub fn apply_to_new(&mut self) -> Version {
         // TODO: config this to the option
-        let icmp = Arc::new(InternalKeyComparator::new(Box::new(
+        let icmp = Arc::new(InternalKeyComparator::new(Arc::new(
             BytewiseComparator::new(),
         )));
         let mut v = Version::new(self.base.options.clone(), icmp.clone());
@@ -151,10 +151,11 @@ pub struct VersionSet {
     pub compaction_stats: Vec<CompactionStats>,
     // Set of table files to protect from deletion because they are part of ongoing compaction
     pub pending_outputs: HashSet<u64>,
-    // Background error
-    pub bg_error: Option<WickErr>,
+    // iff should schedule a manual compaction, temporarily just for test
+    pub manual_compaction: Option<ManualCompaction>,
+    // WAL writer
+    pub record_writer: Option<Writer>,
 
-    env: Arc<dyn Storage>,
     // db path
     db_name: String,
     options: Arc<Options>,
@@ -181,6 +182,26 @@ pub struct VersionSet {
 unsafe impl Send for VersionSet {}
 
 impl VersionSet {
+    pub fn new(db_name: String, options: Arc<Options>) -> Self {
+        Self {
+            snapshots: SnapshotList::new(),
+            compaction_stats: vec![],
+            pending_outputs: HashSet::new(),
+            manual_compaction: None,
+            db_name,
+            record_writer: None,
+            options: options.clone(),
+            icmp: Arc::new(InternalKeyComparator::new(options.comparator.clone())),
+            next_file_number: 0,
+            last_sequence: 0,
+            log_number: 0,
+            prev_log_number: 0,
+            manifest_file_number: 0,
+            manifest_writer: None,
+            versions: VecDeque::new(),
+            compaction_pointer: vec![],
+        }
+    }
     /// Returns the number of files in a certain level
     #[inline]
     pub fn level_files_count(&self, level: usize) -> usize {
@@ -203,8 +224,12 @@ impl VersionSet {
     /// Whether the current version needs to be compacted
     #[inline]
     pub fn needs_compaction(&self) -> bool {
-        let current = self.current();
-        current.compaction_score > 1.0 || current.file_to_compact.read().unwrap().is_some()
+        if self.manual_compaction.is_some() {
+            true
+        } else {
+            let current = self.current();
+            current.compaction_score > 1.0 || current.file_to_compact.read().unwrap().is_some()
+        }
     }
 
     /// Returns the next file number
@@ -301,12 +326,12 @@ impl VersionSet {
                 self.manifest_file_number,
             );
             //            edit.set_next_file(self.next_file_number);
-            let f = self.env.create(new_manifest_file.as_str())?;
+            let f = self.options.env.create(new_manifest_file.as_str())?;
             let mut writer = Writer::new(f);
             match self.write_snapshot(&mut writer) {
                 Ok(()) => self.manifest_writer = Some(writer),
                 Err(_) => {
-                    return self.env.remove(new_manifest_file.as_str());
+                    return self.options.env.remove(new_manifest_file.as_str());
                 }
             }
         }
@@ -323,14 +348,14 @@ impl VersionSet {
                             // new CURRENT file that points to it.
                             if !new_manifest_file.is_empty() {
                                 match Self::update_current(
-                                    self.env.clone(),
+                                    self.options.env.clone(),
                                     self.db_name.as_str(),
                                     self.manifest_file_number,
                                 ) {
                                     Ok(()) => {}
                                     Err(_) => {
                                         self.manifest_writer = None;
-                                        return self.env.remove(new_manifest_file.as_str());
+                                        return self.options.env.remove(new_manifest_file.as_str());
                                     }
                                 }
                             }
@@ -343,13 +368,13 @@ impl VersionSet {
                         Err(e) => {
                             info!("MANIFEST write: {:?}", e);
                             self.manifest_writer = None;
-                            return self.env.remove(new_manifest_file.as_str());
+                            return self.options.env.remove(new_manifest_file.as_str());
                         }
                     }
                 }
                 Err(_) => {
                     self.manifest_writer = None;
-                    return self.env.remove(new_manifest_file.as_str());
+                    return self.options.env.remove(new_manifest_file.as_str());
                 }
             }
         }
@@ -487,7 +512,7 @@ impl VersionSet {
         let mut output = FileMetaData::default();
         output.number = file_number;
         let file_name = generate_filename(self.db_name.as_str(), FileType::Table, file_number);
-        let file = self.env.create(file_name.as_str())?;
+        let file = self.options.env.create(file_name.as_str())?;
         compact.builder = Some(TableBuilder::new(file, self.options.clone()));
         Ok(())
     }
