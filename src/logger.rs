@@ -44,12 +44,12 @@ impl Log for Logger {
             self.file
                 .lock()
                 .unwrap()
-                .f_write(format!("[{}] : {} \n", record.level(), record.args()).as_bytes());
+                .write(format!("[{}] : {} \n", record.level(), record.args()).as_bytes());
         }
     }
 
     #[allow(unused_must_use)]
     fn flush(&self) {
-        self.file.lock().unwrap().f_flush();
+        self.file.lock().unwrap().flush();
     }
 }

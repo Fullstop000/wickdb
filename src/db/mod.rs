@@ -294,7 +294,7 @@ impl Drop for DBImpl {
     fn drop(&mut self) {
         self.is_shutting_down.store(true, Ordering::Release);
         if let Some(lock) = self.db_lock.as_ref() {
-            lock.lock().unwrap().f_unlock();
+            lock.lock().unwrap().unlock();
         }
     }
 }

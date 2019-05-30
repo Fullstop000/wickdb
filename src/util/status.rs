@@ -85,6 +85,7 @@ unsafe impl Sync for WickErr {}
 
 pub type Result<T> = result::Result<T, WickErr>;
 
+// Convert `IOResult` to standard `Result` used in wickdb
 #[macro_export]
 macro_rules! w_io_result {
     ($result:expr) => {

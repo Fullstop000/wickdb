@@ -58,17 +58,18 @@ pub trait Storage: Send + Sync {
 
 /// A file abstraction for IO operations
 pub trait File {
-    fn f_write(&mut self, buf: &[u8]) -> Result<usize>;
-    fn f_flush(&mut self) -> Result<()>;
-    fn f_close(&mut self) -> Result<()>;
-    fn f_seek(&mut self, pos: SeekFrom) -> Result<u64>;
-    fn f_read(&mut self, buf: &mut [u8]) -> Result<usize>;
+    fn write(&mut self, buf: &[u8]) -> Result<usize>;
+    fn flush(&mut self) -> Result<()>;
+    fn close(&mut self) -> Result<()>;
+    fn seek(&mut self, pos: SeekFrom) -> Result<u64>;
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize>;
+    fn read_all(&mut self, buf: &mut Vec<u8>) -> Result<usize>;
 
     /// Locks the file for exclusive usage, blocking if the file is currently
     /// locked.
-    fn f_lock(&self) -> Result<()>;
+    fn lock(&self) -> Result<()>;
 
-    fn f_unlock(&self) -> Result<()>;
+    fn unlock(&self) -> Result<()>;
 
     /// Reads bytes from an offset in this source into a buffer, returning how
     /// many bytes were read.
@@ -78,7 +79,7 @@ pub trait File {
     ///
     /// See [`Read::read()`](https://doc.rust-lang.org/std/io/trait.Read.html#tymethod.read)
     /// for details.
-    fn f_read_at(&self, buf: &mut [u8], offset: u64) -> Result<usize>;
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> Result<usize>;
 
     /// Reads the exact number of bytes required to fill `buf` from an `offset`.
     ///
@@ -88,7 +89,7 @@ pub trait File {
     /// for details.
     fn read_exact_at(&self, mut buf: &mut [u8], mut offset: u64) -> Result<()> {
         while !buf.is_empty() {
-            match self.f_read_at(buf, offset) {
+            match self.read_at(buf, offset) {
                 Ok(0) => break,
                 Ok(n) => {
                     let tmp = buf;
@@ -133,11 +134,11 @@ pub fn do_write_string_to_file(
     should_sync: bool,
 ) -> Result<()> {
     let mut file = env.create(file_name)?;
-    file.f_write(data.as_bytes())?;
+    file.write(data.as_bytes())?;
     if should_sync {
-        file.f_flush()?;
+        file.flush()?;
     }
-    if file.f_close().is_err() {
+    if file.close().is_err() {
         env.remove(file_name)?;
     }
     Ok(())

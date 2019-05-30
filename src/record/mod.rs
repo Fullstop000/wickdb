@@ -113,20 +113,20 @@ mod tests {
     }
 
     impl File for StringFile {
-        fn f_write(&mut self, buf: &[u8]) -> Result<usize> {
+        fn write(&mut self, buf: &[u8]) -> Result<usize> {
             self.contents.borrow_mut().extend_from_slice(buf);
             Ok(buf.len())
         }
 
-        fn f_flush(&mut self) -> Result<()> {
+        fn flush(&mut self) -> Result<()> {
             Ok(())
         }
 
-        fn f_close(&mut self) -> Result<()> {
+        fn close(&mut self) -> Result<()> {
             unimplemented!()
         }
 
-        fn f_seek(&mut self, pos: SeekFrom) -> Result<u64> {
+        fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
             match pos {
                 SeekFrom::Start(p) => {
                     if p > (self.contents.borrow().len() - 1) as u64 {
@@ -142,7 +142,7 @@ mod tests {
             }
         }
 
-        fn f_read(&mut self, buf: &mut [u8]) -> Result<usize> {
+        fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
             assert!(!self.returned_partial, "must not read() after eof/error");
             if self.force_err {
                 self.force_err = false;
@@ -160,15 +160,19 @@ mod tests {
             Ok(length)
         }
 
-        fn f_lock(&self) -> Result<()> {
+        fn read_all(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
             unimplemented!()
         }
 
-        fn f_unlock(&self) -> Result<()> {
+        fn lock(&self) -> Result<()> {
             unimplemented!()
         }
 
-        fn f_read_at(&self, _buf: &mut [u8], _offset: u64) -> Result<usize> {
+        fn unlock(&self) -> Result<()> {
+            unimplemented!()
+        }
+
+        fn read_at(&self, _buf: &mut [u8], _offset: u64) -> Result<usize> {
             unimplemented!()
         }
     }

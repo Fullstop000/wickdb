@@ -241,7 +241,7 @@ impl Reader {
                 self.clear_buf();
                 if !self.eof {
                     // try to read a block into the buf
-                    match self.file.borrow_mut().f_read(&mut self.buf) {
+                    match self.file.borrow_mut().read(&mut self.buf) {
                         Ok(read) => {
                             self.end_of_buffer_offset += read as u64; // update the end offset here
                             self.buf_length = read;
@@ -358,7 +358,7 @@ impl Reader {
             let res = self
                 .file
                 .borrow_mut()
-                .f_seek(SeekFrom::Start(block_start_location));
+                .seek(SeekFrom::Start(block_start_location));
             if res.is_err() {
                 self.report_drop(block_start_location, res.unwrap_err().description());
                 return false;

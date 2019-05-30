@@ -19,7 +19,7 @@ use crate::storage::{File, Storage};
 use crate::util::status::{Result, Status, WickErr};
 use fs2::FileExt;
 use std::fs::{create_dir_all, read_dir, remove_file, rename, File as SysFile};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write, BufReader};
 use std::path::{Path, PathBuf};
 
 pub struct FileStorage;
@@ -85,45 +85,49 @@ impl Storage for FileStorage {
 }
 
 impl File for SysFile {
-    fn f_write(&mut self, buf: &[u8]) -> Result<usize> {
-        w_io_result!(SysFile::write(self, buf))
+    fn write(&mut self, buf: &[u8]) -> Result<usize> {
+        w_io_result!(Write::write(self, buf))
     }
 
-    fn f_flush(&mut self) -> Result<()> {
-        w_io_result!(SysFile::flush(self))
+    fn flush(&mut self) -> Result<()> {
+        w_io_result!(Write::flush(self))
     }
 
-    fn f_close(&mut self) -> Result<()> {
+    fn close(&mut self) -> Result<()> {
         Ok(())
     }
 
-    fn f_seek(&mut self, pos: SeekFrom) -> Result<u64> {
-        let r = SysFile::seek(self, pos);
+    fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
+        w_io_result!(Seek::seek(self, pos))
+    }
+
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+        let mut reader = BufReader::new(self);
+        let r = reader.read(buf);
         w_io_result!(r)
     }
 
-    fn f_read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        let r = SysFile::read(self, buf);
+    fn read_all(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
+        let mut reader = BufReader::new(self);
+        let r = reader.read_to_end(buf);
         w_io_result!(r)
     }
 
-    fn f_lock(&self) -> Result<()> {
-        let r = SysFile::try_lock_exclusive(self);
-        w_io_result!(r)
+    fn lock(&self) -> Result<()> {
+        w_io_result!(SysFile::try_lock_exclusive(self))
     }
 
-    fn f_unlock(&self) -> Result<()> {
-        let r = SysFile::unlock(self);
-        w_io_result!(r)
+    fn unlock(&self) -> Result<()> {
+        w_io_result!(FileExt::unlock(self))
     }
 
     #[cfg(unix)]
-    fn f_read_at(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
         let r = std::os::unix::prelude::FileExt::read_at(self, buf, offset);
         w_io_result!(r)
     }
     #[cfg(windows)]
-    fn f_read_at(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
         let r = std::os::windows::prelude::FileExt::seek_read(buf, offset);
         w_io_result!(r)
     }

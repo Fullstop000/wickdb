@@ -67,7 +67,7 @@ impl Writer {
             if leftover < HEADER_SIZE {
                 if leftover != 0 {
                     // fill the rest of the block with zero
-                    self.dest.f_write(&[0; 6][..leftover])?;
+                    self.dest.write(&[0; 6][..leftover])?;
                 }
                 self.block_offset = 0; // use a new block
             };
@@ -105,7 +105,7 @@ impl Writer {
     /// Sync the underlying file
     #[inline]
     pub fn sync(&mut self) -> Result<()> {
-        self.dest.f_flush()
+        self.dest.flush()
     }
 
     // create formatted bytes and write into the file
@@ -134,9 +134,9 @@ impl Writer {
         encode_fixed_32(&mut buf, crc);
 
         // write the header and the data
-        self.dest.f_write(&buf)?;
-        self.dest.f_write(data)?;
-        self.dest.f_flush()?;
+        self.dest.write(&buf)?;
+        self.dest.write(data)?;
+        self.dest.flush()?;
         // update block_offset
         self.block_offset += HEADER_SIZE + size;
         Ok(())

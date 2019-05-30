@@ -412,7 +412,7 @@ impl TableBuilder {
                 &mut self.offset,
             )?;
             self.pending_index_entry = true;
-            if let Err(e) = self.file.f_flush() {
+            if let Err(e) = self.file.flush() {
                 return Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e)));
             }
             if let Some(fb) = &mut self.filter_block {
@@ -485,11 +485,11 @@ impl TableBuilder {
 
         // write footer
         let footer = Footer::new(meta_block_handle, index_block_handle).encoded();
-        self.file.f_write(footer.as_slice())?;
+        self.file.write(footer.as_slice())?;
         self.offset += footer.len() as u64;
         if sync {
-            self.file.f_flush()?;
-            self.file.f_close()?;
+            self.file.flush()?;
+            self.file.close()?;
         }
         Ok(())
     }
@@ -503,7 +503,7 @@ impl TableBuilder {
             "[table builder] try to close a closed TableBuilder"
         );
         self.closed = true;
-        self.file.f_close().is_ok();
+        self.file.close().is_ok();
     }
 
     /// Returns the number of key/value added so far.
@@ -563,13 +563,13 @@ impl TableBuilder {
         handle.set_offset(self.offset);
         handle.set_size(data.len() as u64);
         // write block data
-        self.file.f_write(data)?;
+        self.file.write(data)?;
         // write trailer
         let mut trailer = vec![0u8; BLOCK_TRAILER_SIZE];
         trailer[0] = compression as u8;
         let crc = extend(value(data), &[compression as u8]);
         put_fixed_32(&mut trailer, crc);
-        self.file.f_write(trailer.as_slice())?;
+        self.file.write(trailer.as_slice())?;
         self.offset += (data.len() + BLOCK_TRAILER_SIZE) as u64;
         Ok(())
     }
@@ -613,7 +613,7 @@ fn write_raw_block(
     offset: &mut u64,
 ) -> Result<()> {
     // write block data
-    file.f_write(data)?;
+    file.write(data)?;
     // update the block handle
     handle.set_offset(*offset);
     handle.set_size(data.len() as u64);
@@ -622,7 +622,7 @@ fn write_raw_block(
     trailer[0] = compression as u8;
     let crc = extend(value(data), &[compression as u8]);
     put_fixed_32(&mut trailer, crc);
-    file.f_write(trailer.as_slice())?;
+    file.write(trailer.as_slice())?;
     // update offset
     *offset += (data.len() + BLOCK_TRAILER_SIZE) as u64;
     Ok(())
