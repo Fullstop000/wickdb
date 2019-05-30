@@ -265,9 +265,10 @@ mod tests {
             if !self.reading {
                 self.reading = true
             };
-            match self.reader.read_record() {
-                None => String::from(EOF),
-                Some(r) => unsafe { String::from_utf8_unchecked(r) },
+            let mut buf = vec![];
+            match self.reader.read_record(&mut buf) {
+                false => String::from(EOF),
+                true => unsafe { String::from_utf8_unchecked(buf) },
             }
         }
 
@@ -341,7 +342,8 @@ mod tests {
                 true,
                 size + offset_past_end,
             );
-            assert_eq!(None, reader.read_record());
+            let mut buf = vec![];
+            assert!(!reader.read_record(&mut buf));
         }
 
         // ensure that every records after the initial_offset matches
@@ -359,8 +361,9 @@ mod tests {
                 initial_offset,
             );
             assert!(expected_record_index < INITIAL_OFFSET_LAST_RECORD_OFFSETS.len());
+            let mut record = vec![];
             while expected_record_index < INITIAL_OFFSET_LAST_RECORD_OFFSETS.len() {
-                let record = reader.read_record().expect("read_record() should work");
+                assert!(reader.read_record(&mut record), "read_record() should work");
                 assert_eq!(
                     record.len(),
                     INITIAL_OFFSET_RECORD_SIZES[expected_record_index],

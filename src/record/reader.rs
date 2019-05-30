@@ -106,19 +106,19 @@ impl Reader {
         }
     }
 
-    /// Read the next complete record and returns a Vec for it.
-    pub fn read_record(&mut self) -> Option<Vec<u8>> {
+    /// Read the next complete record into given `buf`.
+    /// Returns true if read successfully, false if we hit end of the input.
+    pub fn read_record(&mut self, buf: &mut Vec<u8>) -> bool {
         if self.last_record_offset < self.initial_offset && !self.skip_to_initial_block() {
-            return None;
+            return false;
         }
         // indicates that a record has been spilt into fragments
         let mut in_fragmented_record = false;
         // Record offset of the logical record that we're reading
         let mut prospective_record_offset = 0;
-        let mut result: Vec<u8> = vec![];
         loop {
             match self.read_physical_record() {
-                Ok(record) => {
+                Ok(mut record) => {
                     if self.resyncing {
                         match record.t {
                             RecordType::Middle => continue,
@@ -139,27 +139,28 @@ impl Reader {
                         RecordType::Full => {
                             if in_fragmented_record {
                                 self.report_drop(
-                                    result.len() as u64,
+                                    buf.len() as u64,
                                     "partial record without end(1) for reading a new Full record",
                                 );
                             }
                             // update record offset
-                            prospective_record_offset = physical_record_offset;
-                            self.last_record_offset = prospective_record_offset;
-                            return Some(record.data);
+                            self.last_record_offset = physical_record_offset;
+                            buf.clear();
+                            buf.append(&mut record.data);
+                            return true;
                         }
                         RecordType::First => {
                             if in_fragmented_record {
                                 self.report_drop(
-                                    result.len() as u64,
+                                    buf.len() as u64,
                                     "partial record without end(2) for reading a new First record",
                                 );
                             }
                             prospective_record_offset = physical_record_offset;
 
                             // clean the potential corruption
-                            result.clear();
-                            result.extend(record.data);
+                            buf.clear();
+                            buf.append(&mut record.data);
                             in_fragmented_record = true;
                         }
                         RecordType::Middle => {
@@ -174,7 +175,7 @@ impl Reader {
                                 );
                             // continue reading until find a new first or full record
                             } else {
-                                result.extend(record.data);
+                                buf.append(&mut record.data);
                             }
                         }
                         RecordType::Last => {
@@ -189,10 +190,10 @@ impl Reader {
                                 );
                             // continue reading until find a new first or full record
                             } else {
-                                result.extend(record.data);
+                                buf.extend(record.data);
                                 // notice that we update the last_record_offset after we get the Last part but not the First
                                 self.last_record_offset = prospective_record_offset;
-                                return Some(result);
+                                return true;
                             }
                         }
                         RecordType::Zero => {
@@ -208,18 +209,18 @@ impl Reader {
                                 // physical record but before completing the next
                                 // one; don't treat it as a corruption,
                                 // just ignore the entire logical record.
-                                result.clear();
+                                buf.clear();
                             }
-                            return None;
+                            return false;
                         }
                         ReaderError::BadRecord => {
                             if in_fragmented_record {
                                 self.report_drop(
-                                    result.len() as u64,
+                                    buf.len() as u64,
                                     "bad record read in middle of record",
                                 );
                                 in_fragmented_record = false;
-                                result.clear();
+                                buf.clear();
                             }
                         }
                     }
