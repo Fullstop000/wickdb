@@ -24,6 +24,7 @@ use std::io::SeekFrom;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::fs::Metadata;
 
 /// `Storage` is a namespace for files.
 ///
@@ -64,11 +65,11 @@ pub trait File {
     fn seek(&mut self, pos: SeekFrom) -> Result<u64>;
     fn read(&mut self, buf: &mut [u8]) -> Result<usize>;
     fn read_all(&mut self, buf: &mut Vec<u8>) -> Result<usize>;
+    fn metadata(&self) -> Result<Metadata>;
 
     /// Locks the file for exclusive usage, blocking if the file is currently
     /// locked.
     fn lock(&self) -> Result<()>;
-
     fn unlock(&self) -> Result<()>;
 
     /// Reads bytes from an offset in this source into a buffer, returning how

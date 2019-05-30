@@ -73,6 +73,7 @@ mod tests {
     use std::cmp::min;
     use std::io::SeekFrom;
     use std::rc::Rc;
+    use std::fs::Metadata;
 
     // Construct a string of the specified length made out of the supplied
     // partial string.
@@ -165,6 +166,10 @@ mod tests {
             unimplemented!()
         }
 
+        fn metadata(&self) -> Result<Metadata> {
+            unimplemented!()
+        }
+
         fn lock(&self) -> Result<()> {
             unimplemented!()
         }
@@ -178,23 +183,24 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
     struct ReportCollector {
-        dropped_bytes: u64,
-        message: String,
+        dropped_bytes: Rc<RefCell<u64>>,
+        message: Rc<RefCell<String>>,
     }
 
     impl Reporter for ReportCollector {
         fn corruption(&mut self, bytes: u64, reason: &str) {
-            self.dropped_bytes += bytes;
-            self.message.push_str(reason);
+            *self.dropped_bytes.borrow_mut() += bytes;
+            self.message.borrow_mut().push_str(reason);
         }
     }
 
     impl ReportCollector {
         pub fn new() -> Self {
             Self {
-                dropped_bytes: 0,
-                message: String::default(),
+                dropped_bytes: Rc::new(RefCell::new(0)),
+                message: Rc::new(RefCell::new(String::default())),
             }
         }
     }
@@ -203,7 +209,7 @@ mod tests {
     struct RecordTest {
         source: Rc<RefCell<Vec<u8>>>,
         read_source: StringFile,
-        reporter: Rc<RefCell<ReportCollector>>,
+        reporter: ReportCollector,
         reading: bool,
         reader: Reader,
         writer: Writer,
@@ -232,14 +238,13 @@ mod tests {
         pub fn new(reporter: ReportCollector) -> Self {
             let data = Rc::new(RefCell::new(vec![]));
             let f = StringFile::new(data.clone());
-            let r = Rc::new(RefCell::new(reporter));
             let writer = Writer::new(Box::new(f.clone()));
             Self {
                 source: data.clone(),
                 read_source: f.clone(),
-                reporter: r.clone(),
+                reporter: reporter.clone(),
                 reading: false,
-                reader: Reader::new(Box::new(f.clone()), Some(r), true, 0),
+                reader: Reader::new(Box::new(f.clone()), Some(Box::new(reporter.clone())), true, 0),
                 writer,
             }
         }
@@ -299,15 +304,15 @@ mod tests {
         }
 
         pub fn dropped_bytes(&self) -> u64 {
-            self.reporter.borrow().dropped_bytes
+            *self.reporter.dropped_bytes.borrow()
         }
 
         pub fn reported_msg(&self) -> String {
-            self.reporter.borrow().message.clone()
+            self.reporter.message.borrow().clone()
         }
 
         pub fn match_error(&self, msg: &str) -> bool {
-            match self.reporter.borrow().message.find(msg) {
+            match self.reporter.message.borrow().find(msg) {
                 Some(_) => true,
                 None => false,
             }
@@ -325,7 +330,7 @@ mod tests {
         pub fn start_reading_at(&mut self, initial_offset: u64) {
             self.reader = Reader::new(
                 Box::new(self.read_source.clone()),
-                Some(self.reporter.clone()),
+                Some(Box::new(self.reporter.clone())),
                 true,
                 initial_offset,
             )
@@ -338,7 +343,7 @@ mod tests {
             let size = self.written_bytes() as u64;
             let mut reader = Reader::new(
                 Box::new(self.read_source.clone()),
-                Some(self.reporter.clone()),
+                Some(Box::new(self.reporter.clone())),
                 true,
                 size + offset_past_end,
             );
@@ -356,7 +361,7 @@ mod tests {
             self.reading = true;
             let mut reader = Reader::new(
                 Box::new(self.read_source.clone()),
-                Some(self.reporter.clone()),
+                Some(Box::new(self.reporter.clone())),
                 true,
                 initial_offset,
             );

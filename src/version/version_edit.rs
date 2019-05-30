@@ -99,13 +99,13 @@ impl Default for FileMetaData {
 pub struct VersionEdit {
     max_levels: u8,
     // comparator name
-    comparator_name: Option<String>,
+    pub comparator_name: Option<String>,
     // file number of .log
     pub log_number: Option<u64>,
     pub prev_log_number: Option<u64>,
-    next_file_number: Option<u64>,
+    pub next_file_number: Option<u64>,
     // the last used sequence number
-    last_sequence: Option<u64>,
+    pub last_sequence: Option<u64>,
 
     // (level, InternalKey)
     pub compaction_pointers: Vec<(usize, Rc<InternalKey>)>,

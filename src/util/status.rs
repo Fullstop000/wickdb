@@ -50,6 +50,7 @@ impl Status {
 }
 
 #[derive(Debug)]
+// TODO: use String instead
 pub struct WickErr {
     t: Status,
     msg: Option<&'static str>,

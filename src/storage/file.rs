@@ -18,7 +18,7 @@
 use crate::storage::{File, Storage};
 use crate::util::status::{Result, Status, WickErr};
 use fs2::FileExt;
-use std::fs::{create_dir_all, read_dir, remove_file, rename, File as SysFile};
+use std::fs::{create_dir_all, read_dir, remove_file, rename, File as SysFile, Metadata};
 use std::io::{Read, Seek, SeekFrom, Write, BufReader};
 use std::path::{Path, PathBuf};
 
@@ -110,6 +110,11 @@ impl File for SysFile {
     fn read_all(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
         let mut reader = BufReader::new(self);
         let r = reader.read_to_end(buf);
+        w_io_result!(r)
+    }
+
+    fn metadata(&self) -> Result<Metadata> {
+        let r = SysFile::metadata(self);
         w_io_result!(r)
     }
 

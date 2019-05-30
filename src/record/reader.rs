@@ -20,10 +20,8 @@ use crate::record::{RecordType, BLOCK_SIZE, HEADER_SIZE, MAX_RECORD_TYPE};
 use crate::storage::File;
 use crate::util::coding::decode_fixed_32;
 use crate::util::crc32::{unmask, value};
-use std::cell::RefCell;
 use std::error::Error;
 use std::io::{SeekFrom};
-use std::rc::Rc;
 
 enum ReaderError {
     // * We have an internal reading file error
@@ -65,7 +63,7 @@ pub trait Reporter {
 pub struct Reader {
     // NOTICE: we probably mutate the underlying file in the FilePtr by calling `seek()` and this is not thread safe
     file: Box<dyn File>,
-    reporter: Option<Rc<RefCell<dyn Reporter>>>,
+    reporter: Option<Box<dyn Reporter>>,
     // iff check sum for the record
     checksum: bool,
     // Last Read() indicated EOF by returning < BLOCK_SIZE
@@ -88,7 +86,7 @@ pub struct Reader {
 impl Reader {
     pub fn new(
         file: Box<dyn File>,
-        reporter: Option<Rc<RefCell<dyn Reporter>>>,
+        reporter: Option<Box<dyn Reporter>>,
         checksum: bool,
         initial_offset: u64,
     ) -> Self {
@@ -326,14 +324,14 @@ impl Reader {
     }
 
     // report record dropping to the `reporter`
-    fn report_drop(&self, bytes: u64, reason: &str) {
-        if let Some(reporter) = &self.reporter {
+    fn report_drop(&mut self, bytes: u64, reason: &str) {
+        if let Some(reporter) = self.reporter.as_mut() {
             // make sure the bytes not overflows 'the initial_offset'
             // and a special case is that we got a read error when we first read a block
             if self.end_of_buffer_offset == 0
                 || self.end_of_buffer_offset - bytes >= self.initial_offset
             {
-                reporter.clone().borrow_mut().corruption(bytes, reason);
+                reporter.corruption(bytes, reason);
             }
         }
     }

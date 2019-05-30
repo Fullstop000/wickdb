@@ -300,6 +300,13 @@ impl Drop for DBImpl {
 }
 
 impl DBImpl {
+
+    // Create a DB instance
+    fn open_db(options: Options,  db_name: String) -> Result<DBImpl> {
+        let db = Self::new(options, db_name);
+        Ok(db)
+    }
+
     fn new(options: Options, db_name: String) -> Self {
         let o = Arc::new(options);
         let icmp = Arc::new(InternalKeyComparator::new(o.comparator.clone()));
@@ -359,6 +366,11 @@ impl DBImpl {
             self.maybe_schedule_compaction()
         }
         Ok(value)
+    }
+
+    // Recover DB from `db_name`
+    fn recover(&self) -> Result<()> {
+        Ok(())
     }
 
     // Delete any unneeded files and stale in-memory entries.

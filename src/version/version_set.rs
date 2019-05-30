@@ -16,16 +16,17 @@
 // found in the LICENSE file.
 
 use crate::compaction::{Compaction, CompactionStats, ManualCompaction};
-use crate::db::filename::{generate_filename, FileType};
+use crate::db::filename::{generate_filename, parse_filename, FileType};
 use crate::db::format::{InternalKey, InternalKeyComparator};
 use crate::options::Options;
 use crate::record::writer::Writer;
+use crate::record::reader::{Reader, Reporter};
 use crate::snapshot::{Snapshot, SnapshotList};
 use crate::sstable::table::TableBuilder;
 use crate::storage::{do_write_string_to_file, Storage};
 use crate::util::comparator::{BytewiseComparator, Comparator};
 use crate::util::slice::Slice;
-use crate::util::status::Result;
+use crate::util::status::{Status, WickErr, Result};
 use crate::version::version_edit::{FileMetaData, VersionEdit};
 use crate::version::Version;
 use hashbrown::HashSet;
@@ -34,6 +35,8 @@ use std::collections::vec_deque::VecDeque;
 use std::rc::Rc;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::cell::RefCell;
+use std::fs::Metadata;
 
 struct LevelState {
     // set of new deleted files
@@ -43,7 +46,6 @@ struct LevelState {
 }
 
 /// Summarizes the files added and deleted from a set of version edits.
-// TODO: implement singleton mode for this
 pub struct VersionBuilder {
     // file changes for every level
     levels: Vec<LevelState>,
@@ -517,6 +519,103 @@ impl VersionSet {
         Ok(())
     }
 
+    /// Recover the last saved Version from MANIFEST file.
+    /// Returns whether we need a new MANIFEST file for later usage.
+    pub fn recover(&mut self) -> Result<bool> {
+        let env = self.options.env.clone();
+        // Read "CURRENT" file, which contains a pointer to the current manifest file
+        let mut current = env.open(&generate_filename(self.db_name.as_str(), FileType::Current, 0))?;
+        let mut buf = vec![];
+        current.read_all(&mut buf)?;
+        let (current_manifest, file_name) = match String::from_utf8(buf) {
+            Ok(s) => {
+                if s.is_empty() || s.chars().last().unwrap() != '\n' {
+                    return Err(WickErr::new(Status::Corruption, Some("CURRENT file does not end with newline")));
+                }
+                let file_name = self.db_name.clone() + s.as_str();
+                (env.open(&file_name)?, file_name)
+            },
+            Err(e) => {
+                return Err(WickErr::new_from_raw(Status::Corruption, Some("Invalid CURRENT file content"), Box::new(e)));
+            }
+        };
+        let metadata = current_manifest.metadata();
+        let mut builder = VersionBuilder::new(Version::new(self.options.clone(), self.icmp.clone()));
+        let reporter = LogReporter::new();
+        let mut reader = Reader::new(current_manifest, Some(Box::new(reporter.clone())), true, 0);
+        let mut buf = vec![];
+
+        let mut next_file_number = 0;
+        let mut has_next_file_number = false;
+        let mut log_number = 0;
+        let mut has_log_number = false;
+        let mut prev_log_number = 0;
+        let mut has_prev_log_number = false;
+        let mut last_sequence = 0;
+        let mut has_last_sequence = false;
+        while reader.read_record(&mut buf) {
+            reporter.result()?;
+            let mut edit = VersionEdit::new(self.options.max_levels);
+            edit.decoded_from(&buf)?;
+            if let Some(ref cmp_name) = edit.comparator_name {
+                if cmp_name.as_str() != self.icmp.user_comparator.name() {
+                    return Err(WickErr::new(Status::InvalidArgument, Some(Box::leak((cmp_name.clone() + " does not match existing compactor").into_boxed_str()))));
+                }
+            }
+            builder.accumulate(&edit, self);
+            if let Some(n) = edit.next_file_number {
+                next_file_number = n;
+                has_next_file_number = true;
+            };
+            if let Some(n) = edit.log_number {
+                log_number = n;
+                has_log_number = true;
+            };
+            if let Some(n) = edit.prev_log_number {
+                prev_log_number = n;
+                has_prev_log_number = true;
+            };
+            if let Some(n) = edit.last_sequence {
+                last_sequence = n;
+                has_last_sequence = true;
+            }
+        }
+
+        if !has_next_file_number {
+            return Err(WickErr::new(Status::Corruption, Some("no meta-nextfile entry in manifest")));
+        }
+        if !has_log_number {
+            return Err(WickErr::new(Status::Corruption, Some("no meta-lognumber entry in manifest")));
+        }
+        if !has_last_sequence {
+            return Err(WickErr::new(Status::Corruption, Some("no last-sequence-number entry in manifest")));
+        }
+
+        if !has_prev_log_number {
+            prev_log_number = 0;
+        }
+
+        self.mark_file_number_used(prev_log_number);
+        self.mark_file_number_used(log_number);
+
+        let mut new_v = builder.apply_to_new();
+        new_v.finalize();
+        self.versions.push_front(Arc::new(new_v));
+        self.manifest_file_number = next_file_number;
+        self.next_file_number = next_file_number + 1;
+        self.last_sequence = last_sequence;
+        self.log_number = log_number;
+        self.prev_log_number = prev_log_number;
+        Ok(!self.should_reuse_manifest(&file_name, metadata))
+    }
+
+    /// Forward to `num + 1` as the next file number
+    pub fn mark_file_number_used(&mut self, num: u64) {
+        if self.next_file_number <= num {
+            self.next_file_number = num + 1
+        }
+    }
+
     // Remove all the old versions
     fn gc(&mut self) {
         self.versions.retain(|v| Arc::strong_count(v) > 1)
@@ -721,4 +820,79 @@ impl VersionSet {
         }
         result
     }
+
+    // See if we can reuse the existing MANIFEST file
+    fn should_reuse_manifest(&mut self, manifest_file: &str, metadata: Result<Metadata>) -> bool {
+        if !self.options.reuse_logs {
+            return false;
+        }
+        if let Some((file_type, file_number)) = parse_filename(manifest_file) {
+            if file_type != FileType::Manifest {
+                return false;
+            };
+            match metadata {
+                Ok(meta) => {
+                    // Make new compacted MANIFEST if old one is too big
+                    if meta.len() > self.options.max_file_size {
+                        return false;
+                    }
+                    match self.options.env.open(manifest_file) {
+                        Ok(f) => {
+                            info!(
+                                "Reusing MANIFEST {}", manifest_file
+                            );
+                            let writer = Writer::new(f);
+                            self.manifest_writer = Some(writer);
+                            self.manifest_file_number = file_number;
+                            true
+                        },
+                        Err(e) => {
+                            error!("Reuse MANIFEST {:?}", e);
+                            false
+                        }
+                    }
+                }
+                Err(_) => false,
+            }
+        } else {
+            false
+        }
+    }
 }
+
+#[derive(Clone)]
+struct LogReporter {
+    inner: Rc<RefCell<LogReporterInner>>
+}
+
+struct LogReporterInner {
+    ok: bool,
+    reason: String,
+}
+
+impl LogReporter {
+    fn new() -> Self {
+        Self {
+           inner: Rc::new(RefCell::new(LogReporterInner {
+               ok: false,
+               reason: "".to_owned(),
+           }))
+        }
+    }
+    fn result(&self) -> Result<()> {
+        let inner = self.inner.borrow();
+        let static_reasons: &'static str = Box::leak(Box::new(inner.reason.clone()));
+        match inner.ok {
+            true => Ok(()),
+            false => Err(WickErr::new(Status::Corruption, Some(static_reasons)))
+        }
+    }
+}
+
+impl Reporter for LogReporter {
+    fn corruption(&mut self, _bytes: u64, reason: &str) {
+        self.inner.borrow_mut().ok = false;
+        self.inner.borrow_mut().reason = reason.to_owned();
+    }
+}
+
