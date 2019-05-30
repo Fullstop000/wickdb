@@ -17,12 +17,12 @@
 
 use crate::record::reader::ReaderError::{BadRecord, EOF};
 use crate::record::{RecordType, BLOCK_SIZE, HEADER_SIZE, MAX_RECORD_TYPE};
-use crate::storage::FilePtr;
+use crate::storage::File;
 use crate::util::coding::decode_fixed_32;
 use crate::util::crc32::{unmask, value};
 use std::cell::RefCell;
 use std::error::Error;
-use std::io::SeekFrom;
+use std::io::{SeekFrom};
 use std::rc::Rc;
 
 enum ReaderError {
@@ -64,7 +64,7 @@ pub trait Reporter {
 /// The `Reader` always starts reading the records at `initial_offset` of the `file`.
 pub struct Reader {
     // NOTICE: we probably mutate the underlying file in the FilePtr by calling `seek()` and this is not thread safe
-    file: FilePtr,
+    file: Box<dyn File>,
     reporter: Option<Rc<RefCell<dyn Reporter>>>,
     // iff check sum for the record
     checksum: bool,
@@ -87,7 +87,7 @@ pub struct Reader {
 
 impl Reader {
     pub fn new(
-        file: FilePtr,
+        file: Box<dyn File>,
         reporter: Option<Rc<RefCell<dyn Reporter>>>,
         checksum: bool,
         initial_offset: u64,
@@ -241,7 +241,7 @@ impl Reader {
                 self.clear_buf();
                 if !self.eof {
                     // try to read a block into the buf
-                    match self.file.borrow_mut().read(&mut self.buf) {
+                    match self.file.read(&mut self.buf) {
                         Ok(read) => {
                             self.end_of_buffer_offset += read as u64; // update the end offset here
                             self.buf_length = read;
@@ -357,7 +357,6 @@ impl Reader {
         if block_start_location > 0 {
             let res = self
                 .file
-                .borrow_mut()
                 .seek(SeekFrom::Start(block_start_location));
             if res.is_err() {
                 self.report_drop(block_start_location, res.unwrap_err().description());

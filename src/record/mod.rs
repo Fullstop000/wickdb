@@ -16,7 +16,7 @@
 // found in the LICENSE file.
 
 /// The log file contents are a sequence of 32KB blocks. The only exception is that the tail of the file may contain a partial block.
-mod reader;
+pub mod reader;
 pub mod writer;
 
 /// The max size of a log block
@@ -96,9 +96,10 @@ mod tests {
         big_string(&num_to_string(i), r)
     }
 
+    #[derive(Clone)]
     struct StringFile {
         contents: Rc<RefCell<Vec<u8>>>,
-        force_err: bool,
+        force_err: Rc<RefCell<bool>>,
         returned_partial: bool,
     }
 
@@ -106,7 +107,7 @@ mod tests {
         pub fn new(data: Rc<RefCell<Vec<u8>>>) -> Self {
             Self {
                 contents: data,
-                force_err: false,
+                force_err: Rc::new(RefCell::new(false)),
                 returned_partial: false,
             }
         }
@@ -144,8 +145,8 @@ mod tests {
 
         fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
             assert!(!self.returned_partial, "must not read() after eof/error");
-            if self.force_err {
-                self.force_err = false;
+            if *self.force_err.borrow() {
+                *self.force_err.borrow_mut() = false;
                 self.returned_partial = true;
                 return Err(WickErr::new(Status::Corruption, Some("read error")));
             }
@@ -160,7 +161,7 @@ mod tests {
             Ok(length)
         }
 
-        fn read_all(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
+        fn read_all(&mut self, _buf: &mut Vec<u8>) -> Result<usize> {
             unimplemented!()
         }
 
@@ -201,7 +202,7 @@ mod tests {
     // `read_source`, `writer` and `reader` all share the `source`
     struct RecordTest {
         source: Rc<RefCell<Vec<u8>>>,
-        read_source: Rc<RefCell<StringFile>>,
+        read_source: StringFile,
         reporter: Rc<RefCell<ReportCollector>>,
         reading: bool,
         reader: Reader,
@@ -230,16 +231,15 @@ mod tests {
     impl RecordTest {
         pub fn new(reporter: ReportCollector) -> Self {
             let data = Rc::new(RefCell::new(vec![]));
-            let _f = StringFile::new(data.clone());
+            let f = StringFile::new(data.clone());
             let r = Rc::new(RefCell::new(reporter));
-            let writer = Writer::new(Box::new(StringFile::new(data.clone())));
-            let read_source = Rc::new(RefCell::new(StringFile::new(data.clone())));
+            let writer = Writer::new(Box::new(f.clone()));
             Self {
                 source: data.clone(),
-                read_source: read_source.clone(),
+                read_source: f.clone(),
                 reporter: r.clone(),
                 reading: false,
-                reader: Reader::new(read_source, Some(r), true, 0),
+                reader: Reader::new(Box::new(f.clone()), Some(r), true, 0),
                 writer,
             }
         }
@@ -294,7 +294,7 @@ mod tests {
         }
 
         pub fn force_error(&mut self) {
-            self.read_source.borrow_mut().force_err = true
+            *self.read_source.force_err.borrow_mut() = true
         }
 
         pub fn dropped_bytes(&self) -> u64 {
@@ -323,7 +323,7 @@ mod tests {
 
         pub fn start_reading_at(&mut self, initial_offset: u64) {
             self.reader = Reader::new(
-                self.read_source.clone(),
+                Box::new(self.read_source.clone()),
                 Some(self.reporter.clone()),
                 true,
                 initial_offset,
@@ -336,7 +336,7 @@ mod tests {
             self.reading = true;
             let size = self.written_bytes() as u64;
             let mut reader = Reader::new(
-                self.read_source.clone(),
+                Box::new(self.read_source.clone()),
                 Some(self.reporter.clone()),
                 true,
                 size + offset_past_end,
@@ -353,7 +353,7 @@ mod tests {
             self.write_initial_offset_log();
             self.reading = true;
             let mut reader = Reader::new(
-                self.read_source.clone(),
+                Box::new(self.read_source.clone()),
                 Some(self.reporter.clone()),
                 true,
                 initial_offset,
