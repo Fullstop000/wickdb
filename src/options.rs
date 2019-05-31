@@ -20,7 +20,6 @@ use crate::filter::FilterPolicy;
 use crate::util::comparator::{BytewiseComparator, Comparator};
 
 use crate::cache::lru::SharedLRUCache;
-use crate::db::filename::generate_filename;
 use crate::logger::Logger;
 use crate::options::CompressionType::{NoCompression, SnappyCompression, Unknown};
 use crate::snapshot::Snapshot;

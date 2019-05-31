@@ -22,7 +22,7 @@ use crate::util::slice::Slice;
 use crate::util::status::{Result, Status, WickErr};
 use crate::util::varint::VarintU32;
 
-const HEADER_SIZE: usize = 12;
+pub const HEADER_SIZE: usize = 12;
 
 /// `WriteBatch` holds a collection of updates to apply atomically to a DB.
 ///

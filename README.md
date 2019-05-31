@@ -12,7 +12,7 @@ be thread-safe otherwise we have to spilt it into several thread-safe types.
 
 ### Plan & Progress
 
-##### [ongoing]The basic shape of LevelDB
+##### The basic shape of LevelDB
 
 - [ ] Fundamental components
   - [x] Arena
@@ -26,7 +26,7 @@ be thread-safe otherwise we have to spilt it into several thread-safe types.
   - [x] VersionEdit
   - [x] VersionSet
   - [x] Storage (aka Env)
-  - [ ] DB
+  - [x] DB
 - [x] Compaction implementation
 - [x] Scheduling
 - [ ] Solid test cases

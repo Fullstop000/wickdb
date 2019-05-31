@@ -18,7 +18,6 @@
 pub mod file;
 
 use crate::util::status::{Result, Status, WickErr};
-use std::cell::RefCell;
 use std::io;
 use std::io::SeekFrom;
 use std::path::PathBuf;
@@ -124,8 +123,6 @@ pub trait File {
         }
     }
 }
-
-pub type FilePtr = Rc<RefCell<dyn File>>;
 
 /// Write given `data` into underlying `env` file and flush file iff `should_sync` is true
 pub fn do_write_string_to_file(

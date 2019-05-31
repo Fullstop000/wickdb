@@ -21,7 +21,7 @@ use crate::storage::File;
 use crate::util::coding::decode_fixed_32;
 use crate::util::crc32::{unmask, value};
 use std::error::Error;
-use std::io::{SeekFrom};
+use std::io::SeekFrom;
 
 enum ReaderError {
     // * We have an internal reading file error
@@ -102,6 +102,12 @@ impl Reader {
             initial_offset,
             resyncing: initial_offset > 0,
         }
+    }
+
+    /// Deliver the file's ownership
+    #[inline]
+    pub fn into_file(self) -> Box<dyn File> {
+        self.file
     }
 
     /// Read the next complete record into given `buf`.

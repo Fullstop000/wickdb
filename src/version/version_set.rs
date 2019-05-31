@@ -16,14 +16,16 @@
 // found in the LICENSE file.
 
 use crate::compaction::{Compaction, CompactionStats, ManualCompaction};
-use crate::db::filename::{generate_filename, parse_filename, FileType};
+use crate::db::filename::{generate_filename, parse_filename, update_current, FileType};
 use crate::db::format::{InternalKey, InternalKeyComparator};
+use crate::db::build_table;
+use crate::table_cache::TableCache;
+use crate::iterator::Iterator;
 use crate::options::Options;
 use crate::record::writer::Writer;
 use crate::record::reader::{Reader, Reporter};
 use crate::snapshot::{Snapshot, SnapshotList};
 use crate::sstable::table::TableBuilder;
-use crate::storage::{do_write_string_to_file, Storage};
 use crate::util::comparator::{BytewiseComparator, Comparator};
 use crate::util::slice::Slice;
 use crate::util::status::{Status, WickErr, Result};
@@ -37,6 +39,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::cell::RefCell;
 use std::fs::Metadata;
+use std::time::SystemTime;
 
 struct LevelState {
     // set of new deleted files
@@ -223,6 +226,12 @@ impl VersionSet {
         self.log_number
     }
 
+    /// Set current file number of .log file
+    #[inline]
+    pub fn set_log_number(&mut self, log_num: u64) {
+        self.log_number = log_num;
+    }
+
     /// Whether the current version needs to be compacted
     #[inline]
     pub fn needs_compaction(&self) -> bool {
@@ -349,7 +358,7 @@ impl VersionSet {
                             // If we just created a MANIFEST file, install it by writing a
                             // new CURRENT file that points to it.
                             if !new_manifest_file.is_empty() {
-                                match Self::update_current(
+                                match update_current(
                                     self.options.env.clone(),
                                     self.db_name.as_str(),
                                     self.manifest_file_number,
@@ -488,8 +497,45 @@ impl VersionSet {
         Some(self.setup_other_inputs(compaction))
     }
 
+    /// Persistent given memtable into a single level0 file.
+    pub fn write_level0_files<'a>(&mut self, db_name: &str, table_cache: Arc<TableCache>, mem_iter: Box<dyn Iterator + 'a>, edit: &mut VersionEdit) -> Result<()> {
+        let base = self.current();
+        let now = SystemTime::now();
+        let mut meta = FileMetaData::default();
+        meta.number = self.inc_next_file_number();
+        info!("Level-0 table #{} : started", meta.number);
+        let build_result = build_table(self.options.clone(), db_name, table_cache, mem_iter, &mut meta);
+        info!(
+            "Level-0 table #{} : {} bytes [{:?}]",
+            meta.number, meta.file_size, &build_result
+        );
+        let mut level = 0;
+
+        // If `file_size` is zero, the file has been deleted and
+        // should not be added to the manifest
+        if build_result.is_ok() && meta.file_size > 0 {
+            let smallest_ukey = Slice::from(meta.smallest.user_key());
+            let largest_ukey = Slice::from(meta.largest.user_key());
+            level = base.pick_level_for_memtable_output(&smallest_ukey, &largest_ukey);
+            edit.add_file(
+                level,
+                meta.number,
+                meta.file_size,
+                meta.smallest.clone(),
+                meta.largest.clone(),
+            );
+        }
+        self.compaction_stats[level].accumulate(
+            now.elapsed().unwrap().as_micros() as u64,
+            0,
+            meta.file_size,
+        );
+        build_result
+    }
+
     /// Add all living files in all versions into the `pending_outputs` to
     /// prevent them to be deleted
+    #[inline]
     pub fn lock_live_files(&mut self) {
         for version in self.versions.iter() {
             for files in version.files.iter() {
@@ -801,24 +847,6 @@ impl VersionSet {
             }
         }
         smallest_boundary_file
-    }
-
-    // Update the CURRENT file to point to new MANIFEST file
-    fn update_current(env: Arc<dyn Storage>, dbname: &str, manifest_file_num: u64) -> Result<()> {
-        // Remove leading "dbname/" and add newline to manifest file nam
-        let mut manifest = generate_filename(dbname, FileType::Manifest, manifest_file_num);
-        manifest.drain(0..=dbname.len());
-        // write into tmp first then rename it as CURRENT
-        let tmp = generate_filename(dbname, FileType::Temp, manifest_file_num);
-        let result = do_write_string_to_file(env.clone(), manifest, tmp.as_str(), true);
-        match &result {
-            Ok(()) => env.rename(
-                tmp.as_str(),
-                generate_filename(dbname, FileType::Current, 0).as_str(),
-            )?,
-            Err(_) => env.remove(tmp.as_str())?,
-        }
-        result
     }
 
     // See if we can reuse the existing MANIFEST file
