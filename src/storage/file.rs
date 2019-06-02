@@ -18,7 +18,7 @@
 use crate::storage::{File, Storage};
 use crate::util::status::{Result, Status, WickErr};
 use fs2::FileExt;
-use std::fs::{create_dir_all, read_dir, remove_file, rename, File as SysFile, Metadata};
+use std::fs::{create_dir_all, read_dir, remove_file, rename, File as SysFile, Metadata, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write, BufReader};
 use std::path::{Path, PathBuf};
 
@@ -26,14 +26,14 @@ pub struct FileStorage;
 
 impl Storage for FileStorage {
     fn create(&self, name: &str) -> Result<Box<dyn File>> {
-        match SysFile::create(name) {
+        match OpenOptions::new().write(true).read(true).create(true).truncate(true).open(name) {
             Ok(f) => Ok(Box::new(f)),
             Err(e) => Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e))),
         }
     }
 
     fn open(&self, name: &str) -> Result<Box<dyn File>> {
-        match SysFile::open(name) {
+        match OpenOptions::new().write(true).read(true).open(name) {
             Ok(f) => Ok(Box::new(f)),
             Err(e) => Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e))),
         }

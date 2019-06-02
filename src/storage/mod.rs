@@ -32,10 +32,11 @@ use std::fs::Metadata;
 ///
 /// `Storage` should be thread safe
 pub trait Storage: Send + Sync {
-    /// Create a file with given name
+
+    /// Create a file if it does not exist and will truncate it if it does.
     fn create(&self, name: &str) -> Result<Box<dyn File>>;
 
-    /// Open a file with given name
+    /// Open a file for writing and reading
     fn open(&self, name: &str) -> Result<Box<dyn File>>;
 
     /// Delete the named file
