@@ -16,7 +16,7 @@
 // found in the LICENSE file.
 
 use crate::record::reader::ReaderError::{BadRecord, EOF};
-use crate::record::{RecordType, BLOCK_SIZE, HEADER_SIZE, MAX_RECORD_TYPE};
+use crate::record::{RecordType, BLOCK_SIZE, HEADER_SIZE};
 use crate::storage::File;
 use crate::util::coding::decode_fixed_32;
 use crate::util::crc32::{unmask, value};
@@ -34,15 +34,6 @@ enum ReaderError {
     // * The record is a 0-length record (No drop is reported)
     // * The record is below constructor's initial_offset (No drop is reported)
     BadRecord,
-}
-
-impl ReaderError {
-    pub fn as_usize(&self) -> usize {
-        match self {
-            ReaderError::EOF => MAX_RECORD_TYPE + 1,
-            ReaderError::BadRecord => MAX_RECORD_TYPE + 2,
-        }
-    }
 }
 
 // represent a record

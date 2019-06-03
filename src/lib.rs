@@ -11,10 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// TODO: remove below when the implementation is stable
-#![allow(dead_code)]
 #![allow(clippy::unreadable_literal)]
-#![allow(clippy::new_ret_no_self)]
 #![allow(clippy::type_complexity)]
 // See https://github.com/rust-lang/rust-clippy/issues/1608
 #![allow(clippy::redundant_closure)]
@@ -60,3 +57,4 @@ pub use storage::{File, Storage};
 pub use util::comparator::Comparator;
 pub use util::slice::Slice;
 pub use util::status::{Result, Status, WickErr};
+pub use util::varint::*;

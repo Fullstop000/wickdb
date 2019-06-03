@@ -55,8 +55,6 @@ impl From<usize> for RecordType {
 /// ```
 pub const HEADER_SIZE: usize = 7;
 
-pub const MAX_RECORD_TYPE: usize = RecordType::Last as usize;
-
 #[cfg(test)]
 mod tests {
     use crate::record::reader::{Reader, Reporter};

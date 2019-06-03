@@ -160,27 +160,6 @@ impl Table {
         Ok(block.iter(self.options.comparator.clone()))
     }
 
-    /// Given a key, return an approximate byte offset in the file where
-    /// the data for that key begins (or would begin if the key were
-    /// present in the file).  The returned value is in terms of file
-    /// bytes, and so includes effects like compression of the underlying data.
-    /// E.g., the approximate offset of the last key in the table will
-    /// be close to the file length.
-    pub fn approximate_offset_of(&self, key: &[u8]) -> u64 {
-        let mut index_iter = self.index_block.iter(self.options.comparator.clone());
-        index_iter.seek(&Slice::from(key));
-        if index_iter.valid() {
-            let val = index_iter.value();
-            if let Ok((h, _)) = BlockHandle::decode_from(val.as_slice()) {
-                return h.offset;
-            }
-        }
-        if let Some(meta) = &self.meta_block_handle {
-            return meta.offset;
-        }
-        0
-    }
-
     /// Gets the first entry with the key equal or greater than target, then calls the 'callback'
     pub fn internal_get(
         &self,
@@ -230,6 +209,29 @@ impl Table {
         index_iter.status()?;
         Ok(None)
     }
+
+    /// Given a key, return an approximate byte offset in the file where
+    /// the data for that key begins (or would begin if the key were
+    /// present in the file).  The returned value is in terms of file
+    /// bytes, and so includes effects like compression of the underlying data.
+    /// E.g., the approximate offset of the last key in the table will
+    /// be close to the file length.
+    /// Temporary only used in tests.
+    #[allow(dead_code)]
+    pub(crate) fn approximate_offset_of(&self, key: &[u8]) -> u64 {
+        let mut index_iter = self.index_block.iter(self.options.comparator.clone());
+        index_iter.seek(&Slice::from(key));
+        if index_iter.valid() {
+            let val = index_iter.value();
+            if let Ok((h, _)) = BlockHandle::decode_from(val.as_slice()) {
+                return h.offset;
+            }
+        }
+        if let Some(meta) = &self.meta_block_handle {
+            return meta.offset;
+        }
+        0
+    }
 }
 
 pub struct TableIterFactory {
@@ -240,39 +242,6 @@ impl DerivedIterFactory for TableIterFactory {
         BlockHandle::decode_from(value.as_slice())
             .and_then(|(handle, _)| self.table.block_reader(handle, options))
     }
-}
-
-fn block_reader(
-    file: &dyn File,
-    cache_id: u64,
-    options: Rc<Options>,
-    data_block_handle: BlockHandle,
-    read_options: Rc<ReadOptions>,
-) -> Result<Box<dyn Iterator>> {
-    let block = if let Some(cache) = options.block_cache.clone() {
-        let mut cache_key_buffer = vec![0; 16];
-        put_fixed_64(&mut cache_key_buffer, cache_id);
-        put_fixed_64(&mut cache_key_buffer, data_block_handle.offset);
-        if let Some(cache_handle) = cache.look_up(&cache_key_buffer.as_slice()) {
-            let b = cache_handle.get_value().unwrap().clone();
-            cache.release(cache_handle);
-            b
-        } else {
-            let data = read_block(file, &data_block_handle, read_options.verify_checksums)?;
-            let charge = data.len();
-            let new_block = Block::new(data)?;
-            let b = Arc::new(new_block);
-            if read_options.fill_cache {
-                cache.insert(cache_key_buffer, b.clone(), charge, None);
-            }
-            b
-        }
-    } else {
-        let data = read_block(file, &data_block_handle, read_options.verify_checksums)?;
-        let b = Block::new(data)?;
-        Arc::new(b)
-    };
-    Ok(block.iter(options.comparator.clone()))
 }
 
 /// Create a new `ConcatenateIterator` as table iterator.
@@ -316,7 +285,6 @@ pub struct TableBuilder {
     pending_index_entry: bool,
     // handle for current block to add to index block
     pending_handle: BlockHandle,
-    err: Option<WickErr>,
 }
 
 impl TableBuilder {
@@ -348,7 +316,6 @@ impl TableBuilder {
             filter_block: fb,
             pending_index_entry: false,
             pending_handle: BlockHandle::new(0, 0),
-            err: None,
         }
     }
 

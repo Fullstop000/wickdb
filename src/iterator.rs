@@ -147,13 +147,13 @@ pub struct EmptyIterator {
 
 impl EmptyIterator {
     #[inline]
-    pub fn new() -> Box<dyn Iterator> {
-        Box::new(Self { err: None })
+    pub fn new() -> Self {
+        Self { err: None }
     }
 
     #[inline]
-    pub fn new_with_err(e: WickErr) -> Box<dyn Iterator> {
-        Box::new(Self { err: Some(e) })
+    pub fn new_with_err(e: WickErr) -> Self {
+        Self { err: Some(e) }
     }
 }
 
@@ -243,7 +243,7 @@ impl ConcatenateIterator {
                         self.prev_derived_value = Vec::from(v.as_slice());
                         self.set_derived(Some(derived));
                     }
-                    Err(e) => self.set_derived(Some(EmptyIterator::new_with_err(e))),
+                    Err(e) => self.set_derived(Some(Box::new(EmptyIterator::new_with_err(e)))),
                 }
             }
         }
@@ -566,7 +566,7 @@ mod tests {
     fn test_iter_with_cleanup() {
         let test_cleaned_up = Rc::new(RefCell::new(TestCleanup { results: vec![] }));
 
-        let mut iter = IterWithCleanup::new(EmptyIterator::new());
+        let mut iter = IterWithCleanup::new(Box::new(EmptyIterator::new()));
         for i in 0..100 {
             let cloned = test_cleaned_up.clone();
             iter.register_task(Box::new(move || cloned.borrow_mut().results.push(i)));

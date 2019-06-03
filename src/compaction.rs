@@ -319,10 +319,10 @@ struct FileIterFactory {
 impl DerivedIterFactory for FileIterFactory {
     fn produce(&self, options: Rc<ReadOptions>, value: &Slice) -> Result<Box<dyn Iterator>> {
         if value.size() != 2 * FILE_META_LENGTH {
-            Ok(EmptyIterator::new_with_err(WickErr::new(
+            Ok(Box::new(EmptyIterator::new_with_err(WickErr::new(
                 Status::Corruption,
                 Some("file reader invoked with unexpected value"),
-            )))
+            ))))
         } else {
             let file_number = decode_fixed_64(value.as_slice());
             let file_size = decode_fixed_64(&value.as_slice()[8..]);

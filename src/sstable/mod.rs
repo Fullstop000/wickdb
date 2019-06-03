@@ -237,18 +237,8 @@ impl BlockHandle {
     }
 
     #[inline]
-    pub fn get_offset(&self) -> u64 {
-        self.offset
-    }
-
-    #[inline]
     pub fn set_offset(&mut self, offset: u64) {
         self.offset = offset;
-    }
-
-    #[inline]
-    pub fn get_size(&self) -> u64 {
-        self.size
     }
 
     #[inline]
@@ -345,29 +335,5 @@ impl Footer {
             FOOTER_ENCODED_LENGTH
         );
         v
-    }
-
-    /// Get `meta_index_handle`
-    #[inline]
-    pub fn get_meta_index_handle(&self) -> &BlockHandle {
-        &self.meta_index_handle
-    }
-
-    /// Set `meta_index_handle`
-    #[inline]
-    pub fn set_meta_index_handle(&mut self, meta_index_handle: BlockHandle) {
-        self.meta_index_handle = meta_index_handle;
-    }
-
-    /// Get `index_handle`
-    #[inline]
-    pub fn get_index_handle(&self) -> &BlockHandle {
-        &self.index_handle
-    }
-
-    /// Set `index_handle`
-    #[inline]
-    pub fn set_index_handle(&mut self, index_handle: BlockHandle) {
-        self.index_handle = index_handle;
     }
 }

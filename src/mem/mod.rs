@@ -126,10 +126,7 @@ impl MemoryTable for MemTable {
     }
 
     fn new_iterator<'a>(&'a self) -> Box<dyn Iterator + 'a> {
-        let iter = MemTableIterator {
-            iter: SkiplistIterator::new(&self.table),
-        };
-        Box::new(iter)
+        Box::new(MemTableIterator::new(&self.table))
     }
 
     fn add(&self, seq_number: u64, val_type: ValueType, key: &[u8], value: &[u8]) {

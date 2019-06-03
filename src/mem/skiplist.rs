@@ -31,10 +31,6 @@ use std::{mem, slice};
 const BRANCHING: u32 = 4;
 pub const MAX_HEIGHT: usize = 12;
 
-// As we use #[repr(C)], the size of usize is always 8
-// MAX_NODE_SIZE = size of Node + MAX_HEIGHT * size_of(usize) (ptr size is same as usize) = 56 + 12 * 8 = 152
-pub const MAX_NODE_SIZE: usize = mem::size_of::<Node>() + MAX_HEIGHT * mem::size_of::<*mut u8>();
-
 #[derive(Debug)]
 #[repr(C)]
 /// Node represents a skiplist node.
@@ -42,6 +38,8 @@ pub const MAX_NODE_SIZE: usize = mem::size_of::<Node>() + MAX_HEIGHT * mem::size
 /// that fields can not be laid out in the order of their declaration.
 /// And `repr(C)` avoid it but it may add some padding bits for alignment purpose ( using 8 bits for u32 ).
 /// However, it seems we should not use `repr(C, packed)` by https://doc.rust-lang.org/nomicon/other-reprs.html#reprpacked
+/// As we use `#[repr(C)]`, the size of `usize` is always 8 so
+/// `MAX_NODE_SIZE = size of Node + MAX_HEIGHT * size_of(usize) (ptr size is same as usize) = 56 + 12 * 8 = 152`
 pub struct Node {
     pub key: Slice,
     // The inner memory of slices will be allocated dynamically
@@ -791,15 +789,13 @@ mod tests {
     }
 
     struct TestState {
-        seed: usize,
         quit_flag: AtomicBool,
         mu: (Mutex<ReaderState>, Condvar),
     }
 
     impl TestState {
-        fn new(s: usize) -> Self {
+        fn new() -> Self {
             Self {
-                seed: s,
                 quit_flag: AtomicBool::new(false),
                 mu: (Mutex::new(ReaderState::Starting), Condvar::new()),
             }
@@ -824,15 +820,12 @@ mod tests {
         }
     }
 
-    const RANDOM_SEED: usize = 301;
-
     // Test concurrency read&write
-    fn run_concurrent(run: usize) {
-        let seed = RANDOM_SEED + run * 100;
+    fn run_concurrent() {
         for _ in 0..100 {
             let test = Arc::new(ConcurrencyTest::new());
             let test2 = test.clone();
-            let state = Arc::new(TestState::new(seed + 1));
+            let state = Arc::new(TestState::new());
             let state2 = state.clone();
             let read = thread::spawn(move || {
                 state.change(ReaderState::Running);
@@ -865,8 +858,8 @@ mod tests {
 
     #[test]
     fn test_concurrency_read_write() {
-        for i in 1..=5 {
-            run_concurrent(i)
+        for _ in 0..5 {
+            run_concurrent()
         }
     }
 }

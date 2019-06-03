@@ -111,7 +111,7 @@ impl TableCache {
                 iter.register_task(Box::new(move || cache.release(h.clone())));
                 Box::new(iter)
             }
-            Err(e) => EmptyIterator::new_with_err(e),
+            Err(e) => Box::new(EmptyIterator::new_with_err(e)),
         }
     }
 }

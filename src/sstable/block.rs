@@ -360,15 +360,6 @@ impl BlockBuilder {
         self.buffer.len() + self.restarts.len() * 4 + 4
     }
 
-    pub fn reset(&mut self) {
-        self.buffer.clear();
-        self.restarts.clear();
-        self.restarts.push(0);
-        self.counter = 0;
-        self.finished = false;
-        self.last_key.clear();
-    }
-
     /// Appends the block restarts metadata and returns the block data
     pub fn finish(&mut self) -> &[u8] {
         for restart in self.restarts.iter() {

@@ -189,9 +189,13 @@ unsafe impl Send for VersionSet {}
 
 impl VersionSet {
     pub fn new(db_name: String, options: Arc<Options>) -> Self {
+        let mut compaction_stats = vec![];
+        for _ in 0..options.max_levels {
+            compaction_stats.push(CompactionStats::new());
+        }
         Self {
             snapshots: SnapshotList::new(),
-            compaction_stats: vec![],
+            compaction_stats,
             pending_outputs: HashSet::new(),
             manual_compaction: None,
             db_name,
