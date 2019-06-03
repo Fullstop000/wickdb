@@ -537,7 +537,7 @@ impl DBImpl {
             }
             let mem_ref = mem.as_ref().unwrap();
             batch.set_contents(&mut record_buf);
-            let last_seq = batch.get_sequence() + batch.get_count() as u64 - 1;
+            let last_seq = batch.get_sequence() + u64::from(batch.get_count()) - 1;
             if let Err(e) = batch.insert_into(&mem_ref) {
                 if self.options.paranoid_checks {
                     return Err(e);

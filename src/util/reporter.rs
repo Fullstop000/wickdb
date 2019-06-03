@@ -38,9 +38,10 @@ impl LogReporter {
     pub fn result(&self) -> Result<()> {
         let inner = self.inner.borrow();
         let static_reasons: &'static str = Box::leak(Box::new(inner.reason.clone()));
-        match inner.ok {
-            true => Ok(()),
-            false => Err(WickErr::new(Status::Corruption, Some(static_reasons))),
+        if inner.ok {
+            Ok(())
+        } else {
+            Err(WickErr::new(Status::Corruption, Some(static_reasons)))
         }
     }
 }
