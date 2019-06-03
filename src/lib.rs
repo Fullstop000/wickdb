@@ -45,11 +45,11 @@ pub mod storage;
 mod table_cache;
 mod version;
 
-pub use filter::bloom::BloomFilter;
 pub use batch::WriteBatch;
 pub use cache::{Cache, HandleRef};
 pub use compaction::ManualCompaction;
 pub use db::{WickDB, DB};
+pub use filter::bloom::BloomFilter;
 pub use iterator::Iterator;
 pub use log::{LevelFilter, Log};
 pub use options::{CompressionType, Options, ReadOptions, WriteOptions};
