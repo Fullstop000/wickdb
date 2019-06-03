@@ -16,29 +16,30 @@
 // found in the LICENSE file.
 
 use crate::compaction::{Compaction, CompactionStats, ManualCompaction};
+use crate::db::build_table;
 use crate::db::filename::{generate_filename, parse_filename, update_current, FileType};
 use crate::db::format::{InternalKey, InternalKeyComparator};
-use crate::db::build_table;
-use crate::table_cache::TableCache;
 use crate::iterator::Iterator;
 use crate::options::Options;
+use crate::record::reader::Reader;
 use crate::record::writer::Writer;
-use crate::record::reader::{Reader, Reporter};
 use crate::snapshot::{Snapshot, SnapshotList};
 use crate::sstable::table::TableBuilder;
+use crate::table_cache::TableCache;
 use crate::util::comparator::{BytewiseComparator, Comparator};
+use crate::util::reporter::LogReporter;
 use crate::util::slice::Slice;
-use crate::util::status::{Status, WickErr, Result};
+use crate::util::status::{Result, Status, WickErr};
 use crate::version::version_edit::{FileMetaData, VersionEdit};
 use crate::version::Version;
 use hashbrown::HashSet;
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::vec_deque::VecDeque;
+use std::fs::Metadata;
+use std::path::MAIN_SEPARATOR;
 use std::rc::Rc;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::cell::RefCell;
-use std::fs::Metadata;
 use std::time::SystemTime;
 
 struct LevelState {
@@ -498,13 +499,25 @@ impl VersionSet {
     }
 
     /// Persistent given memtable into a single level0 file.
-    pub fn write_level0_files<'a>(&mut self, db_name: &str, table_cache: Arc<TableCache>, mem_iter: Box<dyn Iterator + 'a>, edit: &mut VersionEdit) -> Result<()> {
+    pub fn write_level0_files<'a>(
+        &mut self,
+        db_name: &str,
+        table_cache: Arc<TableCache>,
+        mem_iter: Box<dyn Iterator + 'a>,
+        edit: &mut VersionEdit,
+    ) -> Result<()> {
         let base = self.current();
         let now = SystemTime::now();
         let mut meta = FileMetaData::default();
         meta.number = self.inc_next_file_number();
         info!("Level-0 table #{} : started", meta.number);
-        let build_result = build_table(self.options.clone(), db_name, table_cache, mem_iter, &mut meta);
+        let build_result = build_table(
+            self.options.clone(),
+            db_name,
+            table_cache,
+            mem_iter,
+            &mut meta,
+        );
         info!(
             "Level-0 table #{} : {} bytes [{:?}]",
             meta.number, meta.file_size, &build_result
@@ -570,23 +583,37 @@ impl VersionSet {
     pub fn recover(&mut self) -> Result<bool> {
         let env = self.options.env.clone();
         // Read "CURRENT" file, which contains a pointer to the current manifest file
-        let mut current = env.open(&generate_filename(self.db_name.as_str(), FileType::Current, 0))?;
+        let mut current = env.open(&generate_filename(
+            self.db_name.as_str(),
+            FileType::Current,
+            0,
+        ))?;
         let mut buf = vec![];
         current.read_all(&mut buf)?;
         let (current_manifest, file_name) = match String::from_utf8(buf) {
             Ok(s) => {
-                if s.is_empty() || s.chars().last().unwrap() != '\n' {
-                    return Err(WickErr::new(Status::Corruption, Some("CURRENT file does not end with newline")));
+                if s.is_empty() {
+                    return Err(WickErr::new(
+                        Status::Corruption,
+                        Some("CURRENT file is empty"),
+                    ));
                 }
-                let file_name = self.db_name.clone() + s.as_str();
+                let mut prefix = self.db_name.clone();
+                prefix.push(MAIN_SEPARATOR);
+                let file_name = prefix + s.as_str();
                 (env.open(&file_name)?, file_name)
-            },
+            }
             Err(e) => {
-                return Err(WickErr::new_from_raw(Status::Corruption, Some("Invalid CURRENT file content"), Box::new(e)));
+                return Err(WickErr::new_from_raw(
+                    Status::Corruption,
+                    Some("Invalid CURRENT file content"),
+                    Box::new(e),
+                ));
             }
         };
         let metadata = current_manifest.metadata();
-        let mut builder = VersionBuilder::new(Version::new(self.options.clone(), self.icmp.clone()));
+        let mut builder =
+            VersionBuilder::new(Version::new(self.options.clone(), self.icmp.clone()));
         let reporter = LogReporter::new();
         let mut reader = Reader::new(current_manifest, Some(Box::new(reporter.clone())), true, 0);
         let mut buf = vec![];
@@ -600,12 +627,20 @@ impl VersionSet {
         let mut last_sequence = 0;
         let mut has_last_sequence = false;
         while reader.read_record(&mut buf) {
-            reporter.result()?;
+            if let Err(e) = reporter.result() {
+                return Err(e);
+            }
             let mut edit = VersionEdit::new(self.options.max_levels);
             edit.decoded_from(&buf)?;
             if let Some(ref cmp_name) = edit.comparator_name {
                 if cmp_name.as_str() != self.icmp.user_comparator.name() {
-                    return Err(WickErr::new(Status::InvalidArgument, Some(Box::leak((cmp_name.clone() + " does not match existing compactor").into_boxed_str()))));
+                    return Err(WickErr::new(
+                        Status::InvalidArgument,
+                        Some(Box::leak(
+                            (cmp_name.clone() + " does not match existing compactor")
+                                .into_boxed_str(),
+                        )),
+                    ));
                 }
             }
             builder.accumulate(&edit, self);
@@ -628,13 +663,22 @@ impl VersionSet {
         }
 
         if !has_next_file_number {
-            return Err(WickErr::new(Status::Corruption, Some("no meta-nextfile entry in manifest")));
+            return Err(WickErr::new(
+                Status::Corruption,
+                Some("no meta-nextfile entry in manifest"),
+            ));
         }
         if !has_log_number {
-            return Err(WickErr::new(Status::Corruption, Some("no meta-lognumber entry in manifest")));
+            return Err(WickErr::new(
+                Status::Corruption,
+                Some("no meta-lognumber entry in manifest"),
+            ));
         }
         if !has_last_sequence {
-            return Err(WickErr::new(Status::Corruption, Some("no last-sequence-number entry in manifest")));
+            return Err(WickErr::new(
+                Status::Corruption,
+                Some("no last-sequence-number entry in manifest"),
+            ));
         }
 
         if !has_prev_log_number {
@@ -866,14 +910,12 @@ impl VersionSet {
                     }
                     match self.options.env.open(manifest_file) {
                         Ok(f) => {
-                            info!(
-                                "Reusing MANIFEST {}", manifest_file
-                            );
+                            info!("Reusing MANIFEST {}", manifest_file);
                             let writer = Writer::new(f);
                             self.manifest_writer = Some(writer);
                             self.manifest_file_number = file_number;
                             true
-                        },
+                        }
                         Err(e) => {
                             error!("Reuse MANIFEST {:?}", e);
                             false
@@ -887,40 +929,3 @@ impl VersionSet {
         }
     }
 }
-
-#[derive(Clone)]
-struct LogReporter {
-    inner: Rc<RefCell<LogReporterInner>>
-}
-
-struct LogReporterInner {
-    ok: bool,
-    reason: String,
-}
-
-impl LogReporter {
-    fn new() -> Self {
-        Self {
-           inner: Rc::new(RefCell::new(LogReporterInner {
-               ok: false,
-               reason: "".to_owned(),
-           }))
-        }
-    }
-    fn result(&self) -> Result<()> {
-        let inner = self.inner.borrow();
-        let static_reasons: &'static str = Box::leak(Box::new(inner.reason.clone()));
-        match inner.ok {
-            true => Ok(()),
-            false => Err(WickErr::new(Status::Corruption, Some(static_reasons)))
-        }
-    }
-}
-
-impl Reporter for LogReporter {
-    fn corruption(&mut self, _bytes: u64, reason: &str) {
-        self.inner.borrow_mut().ok = false;
-        self.inner.borrow_mut().reason = reason.to_owned();
-    }
-}
-

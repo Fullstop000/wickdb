@@ -176,7 +176,7 @@ impl Skiplist {
             unsafe {
                 let next = (*node).get_next(level);
                 if self.key_is_less_than_or_equal(key, next) {
-                    // given key < next key
+                    // given key <= next key
                     // record the prev node
                     if let Some(ref mut p) = prev_nodes {
                         p[level - 1] = node;
@@ -584,6 +584,8 @@ mod tests {
         assert_eq!(inputs[inputs.len() - 1], skl_iterator.key().as_str());
         skl_iterator.seek(&Slice::from("key7"));
         assert_eq!("key7", skl_iterator.key().as_str());
+        skl_iterator.seek(&Slice::from("key4"));
+        assert_eq!("key5", skl_iterator.key().as_str());
     }
 
     const K: usize = 4;

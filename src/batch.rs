@@ -17,7 +17,7 @@
 
 use crate::db::format::ValueType;
 use crate::mem::{MemTable, MemoryTable};
-use crate::util::coding::{decode_fixed_64, encode_fixed_64};
+use crate::util::coding::{decode_fixed_32, decode_fixed_64, encode_fixed_32, encode_fixed_64};
 use crate::util::slice::Slice;
 use crate::util::status::{Result, Status, WickErr};
 use crate::util::varint::VarintU32;
@@ -57,13 +57,12 @@ pub const HEADER_SIZE: usize = 12;
 #[derive(Clone, Default)]
 pub struct WriteBatch {
     pub(super) contents: Vec<u8>,
-    count: u32,
 }
 
 impl WriteBatch {
     pub fn new() -> Self {
         let contents = vec![0; HEADER_SIZE];
-        Self { contents, count: 0 }
+        Self { contents }
     }
 
     #[inline]
@@ -73,7 +72,7 @@ impl WriteBatch {
 
     /// Stores the mapping "key -> value" in the database
     pub fn put(&mut self, key: &[u8], value: &[u8]) {
-        self.count += 1;
+        self.set_count(self.get_count() + 1);
         self.contents.push(ValueType::Value as u8);
         VarintU32::put_varint(&mut self.contents, key.len() as u32);
         self.contents.extend_from_slice(key);
@@ -83,7 +82,7 @@ impl WriteBatch {
 
     /// If the database contains a mapping for "key", erase it. Else do nothing
     pub fn delete(&mut self, key: &[u8]) {
-        self.count += 1;
+        self.set_count(self.get_count() + 1);
         self.contents.push(ValueType::Deletion as u8);
         VarintU32::put_varint(&mut self.contents, key.len() as u32);
         self.contents.extend_from_slice(key);
@@ -101,7 +100,7 @@ impl WriteBatch {
             src.contents.len() >= HEADER_SIZE,
             "[batch] malformed WriteBatch (too small) to append"
         );
-        self.count += src.count;
+        self.set_count(self.get_count() + src.get_count());
         src.contents.drain(0..HEADER_SIZE);
         self.contents.append(&mut src.contents)
     }
@@ -111,7 +110,7 @@ impl WriteBatch {
     pub fn clear(&mut self) {
         self.contents.clear();
         self.contents.resize(HEADER_SIZE, 0);
-        self.count = 0;
+        self.set_count(0);
     }
 
     /// Insert all the records in the batch into the given `MemTable`
@@ -124,7 +123,7 @@ impl WriteBatch {
         }
         let mut s = Slice::from(&self.contents.as_slice()[HEADER_SIZE..]);
         let mut found = 0;
-        let mut seq = self.sequence();
+        let mut seq = self.get_sequence();
         while !s.is_empty() {
             found += 1;
             let tag = s[0];
@@ -162,7 +161,7 @@ impl WriteBatch {
                 }
             }
         }
-        if found != self.count() {
+        if found != self.get_count() {
             return Err(WickErr::new(
                 Status::Corruption,
                 Some("[batch] WriteBatch has wrong count"),
@@ -172,18 +171,28 @@ impl WriteBatch {
     }
 
     #[inline]
-    pub fn count(&self) -> u32 {
-        //        decode_fixed_32(&self.contents.as_slice()[8..])
-        self.count
+    pub(crate) fn set_contents(&mut self, src: &mut Vec<u8>) {
+        self.contents.clear();
+        self.contents.append(src);
+    }
+    #[inline]
+    pub fn get_count(&self) -> u32 {
+        decode_fixed_32(&self.contents.as_slice()[8..])
     }
 
     #[inline]
-    pub fn set_sequence(&mut self, seq: u64) {
+    pub(crate) fn set_count(&mut self, count: u32) {
+        let s = self.contents.as_mut_slice();
+        encode_fixed_32(&mut s[8..], count)
+    }
+
+    #[inline]
+    pub(crate) fn set_sequence(&mut self, seq: u64) {
         encode_fixed_64(self.contents.as_mut_slice(), seq)
     }
 
     #[inline]
-    pub fn sequence(&self) -> u64 {
+    pub fn get_sequence(&self) -> u64 {
         decode_fixed_64(self.contents.as_slice())
     }
 
@@ -234,7 +243,7 @@ mod tests {
         }
         if result.is_err() {
             s.push_str("ParseError()")
-        } else if count != batch.count() {
+        } else if count != batch.get_count() {
             s.push_str("CountMisMatch")
         }
         s
@@ -244,7 +253,7 @@ mod tests {
     fn test_empty_batch() {
         let b = WriteBatch::new();
         assert_eq!("", print_contents(&b).as_str());
-        assert_eq!(0, b.count());
+        assert_eq!(0, b.get_count());
     }
 
     #[test]
@@ -254,8 +263,8 @@ mod tests {
         b.delete("box".as_bytes());
         b.put("baz".as_bytes(), "boo".as_bytes());
         b.set_sequence(100);
-        assert_eq!(100, b.sequence());
-        assert_eq!(3, b.count());
+        assert_eq!(100, b.get_sequence());
+        assert_eq!(3, b.get_count());
         assert_eq!(
             "Put(baz, boo)@102|Delete(box)@101|Put(foo, bar)@100|",
             print_contents(&b).as_str()

@@ -23,12 +23,13 @@ use crate::db::format::{
 use crate::iterator::Iterator;
 use crate::mem::{MemTable, MemoryTable};
 use crate::options::{Options, ReadOptions, WriteOptions};
-use crate::record::writer::Writer;
 use crate::record::reader::Reader;
+use crate::record::writer::Writer;
 use crate::snapshot::Snapshot;
 use crate::sstable::table::TableBuilder;
 use crate::storage::{File, Storage};
 use crate::table_cache::TableCache;
+use crate::util::reporter::LogReporter;
 use crate::util::slice::Slice;
 use crate::util::status::{Result, Status, WickErr};
 use crate::version::version_edit::{FileMetaData, VersionEdit};
@@ -102,14 +103,16 @@ impl DB for WickDB {
 
 impl WickDB {
     /// Create a new WickDB
-    pub fn open_db(options: Options, db_name: String) -> Result<Self> {
+    pub fn open_db(mut options: Options, db_name: String) -> Result<Self> {
         let env = options.env.clone();
+        options.initialize(db_name.clone());
         let mut db = DBImpl::new(options, db_name.clone());
         let (mut edit, should_save_manifest) = db.recover()?;
         let mut versions = db.versions.lock().unwrap();
         if versions.record_writer.is_none() {
             let new_log_number = versions.inc_next_file_number();
-            let log_file = env.create(generate_filename(&db_name, FileType::Log, new_log_number).as_str())?;
+            let log_file =
+                env.create(generate_filename(&db_name, FileType::Log, new_log_number).as_str())?;
             versions.record_writer = Some(Writer::new(log_file));
             edit.set_log_number(new_log_number);
             versions.set_log_number(new_log_number);
@@ -122,14 +125,13 @@ impl WickDB {
 
         db.delete_obsolete_files(versions);
         let wick_db = WickDB {
-            inner: Arc::new(db)
+            inner: Arc::new(db),
         };
         wick_db.process_compaction();
         wick_db.process_batch();
         wick_db.inner.maybe_schedule_compaction();
         Ok(wick_db)
     }
-
 
     // The thread take batches from the queue and apples them into memtable and WAL.
     //
@@ -167,6 +169,7 @@ impl WickDB {
                     let current = queue.pop_front().unwrap();
                     if current.options.sync && !grouped.options.sync {
                         // Do not include a sync write into a batch handled by a non-sync write.
+                        queue.push_front(current);
                         break;
                     }
                     size += current.batch.approximate_size();
@@ -177,12 +180,13 @@ impl WickDB {
                     grouped.batch.append(current.batch);
                     signals.push(current.signal.clone());
                 }
-
+                // Release the queue lock
+                mem::drop(queue);
                 match db.make_room_for_write(false) {
                     Ok(mut versions) => {
                         let mut last_seq = versions.get_last_sequence();
                         grouped.batch.set_sequence(last_seq + 1);
-                        last_seq += u64::from(grouped.batch.count());
+                        last_seq += u64::from(grouped.batch.get_count());
                         // must initialize the WAL writer after `make_room_for_write`
                         let writer = versions.record_writer.as_mut().unwrap();
                         let mut status = writer.add_record(&Slice::from(grouped.batch.data()));
@@ -314,7 +318,6 @@ impl Drop for DBImpl {
 }
 
 impl DBImpl {
-
     fn new(options: Options, db_name: String) -> Self {
         let o = Arc::new(options);
         let icmp = Arc::new(InternalKeyComparator::new(o.comparator.clone()));
@@ -355,7 +358,7 @@ impl DBImpl {
         if let Some(result) = self.mem.read().unwrap().get(&lookup_key) {
             match result {
                 Ok(value) => return Ok(Some(value)),
-                // mem.get only returns Err() when get an Deletion of the key
+                // mem.get only returns Err() when it get a Deletion of the key
                 Err(_) => return Ok(None),
             }
         }
@@ -387,7 +390,8 @@ impl DBImpl {
         let _ = env.mkdir_all(self.db_name.as_str());
 
         // Try acquire file lock
-        let lock_file = env.create(generate_filename(self.db_name.as_str(), FileType::Lock, 0).as_str())?;
+        let lock_file =
+            env.create(generate_filename(self.db_name.as_str(), FileType::Lock, 0).as_str())?;
         lock_file.lock()?;
         self.db_lock = Some(lock_file);
         if !env.exists(generate_filename(self.db_name.as_str(), FileType::Current, 0).as_str()) {
@@ -399,7 +403,8 @@ impl DBImpl {
                 new_db.set_next_file(2);
                 new_db.set_last_sequence(0);
                 let manifest_filenum = 1;
-                let manifest_filename = generate_filename(self.db_name.as_str(), FileType::Manifest, manifest_filenum);
+                let manifest_filename =
+                    generate_filename(self.db_name.as_str(), FileType::Manifest, manifest_filenum);
                 let manifest = env.create(manifest_filename.as_str())?;
                 let mut manifest_writer = Writer::new(manifest);
                 let mut record = vec![];
@@ -412,12 +417,21 @@ impl DBImpl {
                     }
                 }
             } else {
-                return Err(WickErr::new(Status::InvalidArgument, Some(
-                    Box::leak((self.db_name.clone() + " does not exist (create_if_missing is false)").into_boxed_str()))))
+                return Err(WickErr::new(
+                    Status::InvalidArgument,
+                    Some(Box::leak(
+                        (self.db_name.clone() + " does not exist (create_if_missing is false)")
+                            .into_boxed_str(),
+                    )),
+                ));
             }
         } else if self.options.error_if_exists {
-            return Err(WickErr::new(Status::InvalidArgument, Some(
-                Box::leak((self.db_name.clone() + " exists (error_if_exists is true)").into_boxed_str()))))
+            return Err(WickErr::new(
+                Status::InvalidArgument,
+                Some(Box::leak(
+                    (self.db_name.clone() + " exists (error_if_exists is true)").into_boxed_str(),
+                )),
+            ));
         }
         let mut versions = self.versions.lock().unwrap();
         let mut should_save_manifest = versions.recover()?;
@@ -435,7 +449,8 @@ impl DBImpl {
         let mut logs_to_recover = vec![];
         for filename in all_files.iter() {
             if let Some((file_type, file_number)) = parse_filename(filename) {
-                if file_type == FileType::Log && ( file_number >= min_log || file_number == prev_log) {
+                if file_type == FileType::Log && (file_number >= min_log || file_number == prev_log)
+                {
                     logs_to_recover.push(file_number);
                 }
             }
@@ -446,7 +461,13 @@ impl DBImpl {
         let mut max_sequence = 0;
         let mut edit = VersionEdit::new(self.options.max_levels);
         for (i, log_number) in logs_to_recover.iter().enumerate() {
-            let last_seq = self.replay_log_file(&mut versions, *log_number, i == logs_to_recover.len() - 1, &mut should_save_manifest, &mut edit)?;
+            let last_seq = self.replay_log_file(
+                &mut versions,
+                *log_number,
+                i == logs_to_recover.len() - 1,
+                &mut should_save_manifest,
+                &mut edit,
+            )?;
             if max_sequence < last_seq {
                 max_sequence = last_seq
             }
@@ -464,7 +485,14 @@ impl DBImpl {
     }
 
     // Replays the edits in the named log file and returns the last sequence of insertions
-    fn replay_log_file(&self, versions: &mut MutexGuard<VersionSet>, log_number: u64, last_log: bool, save_manifest: &mut bool, edit: &mut VersionEdit) -> Result<u64> {
+    fn replay_log_file(
+        &self,
+        versions: &mut MutexGuard<VersionSet>,
+        log_number: u64,
+        last_log: bool,
+        save_manifest: &mut bool,
+        edit: &mut VersionEdit,
+    ) -> Result<u64> {
         let file_name = generate_filename(self.db_name.as_str(), FileType::Log, log_number);
 
         // Open the log file
@@ -484,7 +512,8 @@ impl DBImpl {
         // paranoid_checks is false so that corruptions cause entire commits
         // to be skipped instead of propagating bad information (like overly
         // large sequence numbers).
-        let mut reader = Reader::new(log_file, None, true, 0);
+        let reporter = LogReporter::new();
+        let mut reader = Reader::new(log_file, Some(Box::new(reporter.clone())), true, 0);
         info!("Recovering log #{}", log_number);
 
         // Read all the records and add to a memtable
@@ -494,15 +523,21 @@ impl DBImpl {
         let mut max_sequence = 0;
         let mut have_compacted = false; // indicates that maybe we need
         while reader.read_record(&mut record_buf) {
+            if let Err(e) = reporter.result() {
+                return Err(e);
+            }
             if record_buf.len() < HEADER_SIZE {
-                return Err(WickErr::new(Status::Corruption, Some("log record too small")));
+                return Err(WickErr::new(
+                    Status::Corruption,
+                    Some("log record too small"),
+                ));
             }
             if mem.is_none() {
                 mem = Some(MemTable::new(self.internal_comparator.clone()))
             }
             let mem_ref = mem.as_ref().unwrap();
-            batch.contents.append(&mut record_buf);
-            let last_seq = batch.sequence() + batch.count() as u64 - 1;
+            batch.set_contents(&mut record_buf);
+            let last_seq = batch.get_sequence() + batch.get_count() as u64 - 1;
             if let Err(e) = batch.insert_into(&mem_ref) {
                 if self.options.paranoid_checks {
                     return Err(e);
@@ -517,7 +552,12 @@ impl DBImpl {
                 have_compacted = true;
                 *save_manifest = true;
                 let iter = mem_ref.new_iterator();
-                versions.write_level0_files(self.db_name.as_str(), self.table_cache.clone(), iter, edit)?;
+                versions.write_level0_files(
+                    self.db_name.as_str(),
+                    self.table_cache.clone(),
+                    iter,
+                    edit,
+                )?;
                 mem = None;
             }
         }
@@ -536,7 +576,12 @@ impl DBImpl {
         }
         if let Some(m) = &mem {
             *save_manifest = true;
-            versions.write_level0_files(self.db_name.as_str(), self.table_cache.clone(), m.new_iterator(), edit)?;
+            versions.write_level0_files(
+                self.db_name.as_str(),
+                self.table_cache.clone(),
+                m.new_iterator(),
+                edit,
+            )?;
         }
         Ok(max_sequence)
     }
@@ -656,7 +701,12 @@ impl DBImpl {
         let mut versions = self.versions.lock().unwrap();
         let mut edit = VersionEdit::new(self.options.max_levels);
         let mut im_mem = self.im_mem.write().unwrap();
-        match versions.write_level0_files(self.db_name.as_str(), self.table_cache.clone(), im_mem.as_ref().unwrap().new_iterator(), &mut edit) {
+        match versions.write_level0_files(
+            self.db_name.as_str(),
+            self.table_cache.clone(),
+            im_mem.as_ref().unwrap().new_iterator(),
+            &mut edit,
+        ) {
             Ok(()) => {
                 if self.is_shutting_down.load(Ordering::Acquire) {
                     self.record_bg_error(WickErr::new(
@@ -988,8 +1038,6 @@ impl DBImpl {
             }
         }
     }
-
-
 
     // Finish the current output file by calling `buidler.finish` and insert it into the table cache
     fn finish_output_file(&self, compact: &mut Compaction, input_iter_valid: bool) -> Result<()> {

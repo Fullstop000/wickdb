@@ -18,12 +18,12 @@
 pub mod file;
 
 use crate::util::status::{Result, Status, WickErr};
+use std::fs::Metadata;
 use std::io;
 use std::io::SeekFrom;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::fs::Metadata;
 
 /// `Storage` is a namespace for files.
 ///
@@ -32,7 +32,6 @@ use std::fs::Metadata;
 ///
 /// `Storage` should be thread safe
 pub trait Storage: Send + Sync {
-
     /// Create a file if it does not exist and will truncate it if it does.
     fn create(&self, name: &str) -> Result<Box<dyn File>>;
 

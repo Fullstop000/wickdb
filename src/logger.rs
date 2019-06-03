@@ -16,6 +16,7 @@ use log::{LevelFilter, Log, Metadata, Record};
 use std::sync::Mutex;
 
 /// A simple file based Logger
+// TODO: maybe use slog-rs instead
 pub struct Logger {
     file: Mutex<Box<dyn File>>,
     level: LevelFilter,

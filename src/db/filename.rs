@@ -15,10 +15,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use crate::storage::{do_write_string_to_file, Storage};
+use crate::util::status::Result;
 use std::ffi::OsStr;
 use std::path::{Path, MAIN_SEPARATOR};
-use crate::util::status::Result;
-use crate::storage::{do_write_string_to_file, Storage};
 use std::sync::Arc;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -124,7 +124,6 @@ pub fn update_current(env: Arc<dyn Storage>, dbname: &str, manifest_file_num: u6
     }
     result
 }
-
 
 #[cfg(test)]
 mod tests {

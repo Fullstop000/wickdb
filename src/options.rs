@@ -15,17 +15,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use crate::cache::Cache;
-use crate::filter::FilterPolicy;
-use crate::util::comparator::{BytewiseComparator, Comparator};
-
 use crate::cache::lru::SharedLRUCache;
+use crate::cache::Cache;
+use crate::db::filename::{generate_filename, FileType};
+use crate::filter::FilterPolicy;
 use crate::logger::Logger;
 use crate::options::CompressionType::{NoCompression, SnappyCompression, Unknown};
 use crate::snapshot::Snapshot;
 use crate::sstable::block::Block;
 use crate::storage::file::FileStorage;
 use crate::storage::Storage;
+use crate::util::comparator::{BytewiseComparator, Comparator};
 use crate::LevelFilter;
 use crate::Log;
 use std::rc::Rc;
@@ -168,18 +168,18 @@ impl Options {
     /// Maximum number of bytes in all compacted files.  We avoid expanding
     /// the lower level file set of a compaction if it would make the
     /// total compaction cover more than this many bytes.
-    pub fn expanded_compaction_byte_size_limit(&self) -> u64 {
+    pub(crate) fn expanded_compaction_byte_size_limit(&self) -> u64 {
         25 * self.max_file_size
     }
 
     /// Maximum bytes of overlaps in grandparent (i.e., level+2) before we
     /// stop building a single file in a level->level+1 compaction.
-    pub fn max_grandparent_overlap_bytes(&self) -> u64 {
+    pub(crate) fn max_grandparent_overlap_bytes(&self) -> u64 {
         10 * self.max_file_size as u64
     }
 
     /// Maximum bytes of total files in a given level
-    pub fn max_bytes_for_level(&self, mut level: usize) -> u64 {
+    pub(crate) fn max_bytes_for_level(&self, mut level: usize) -> u64 {
         // Note: the result for level zero is not really used since we set
         // the level-0 compaction threshold based on number of files.
 
@@ -193,12 +193,12 @@ impl Options {
     }
 
     /// Reserve `non_table_cache_files` files or so for other uses and give the rest to TableCache
-    pub fn table_cache_size(&self) -> usize {
+    pub(crate) fn table_cache_size(&self) -> usize {
         self.max_open_files - self.non_table_cache_files
     }
 
-    /// Make Options become valid
-    pub fn sanitize(&mut self, db_name: String) {
+    /// Initialize Options by limiting ranges of some flags, applying customized Logger and etc.
+    pub(crate) fn initialize(&mut self, db_name: String) {
         self.max_open_files =
             Self::clip_range(self.max_open_files, 64 + self.non_table_cache_files, 50000);
         self.write_buffer_size = Self::clip_range(self.write_buffer_size, 64 << 10, 1 << 30);
@@ -206,12 +206,26 @@ impl Options {
         self.block_size = Self::clip_range(self.block_size, 1 << 10, 4 << 20);
 
         if self.logger.is_none() {
-            if let Ok(f) = self.env.create(&db_name) {
+            let _ = self.env.mkdir_all(&db_name);
+            if let Ok(f) = self
+                .env
+                .create(generate_filename(&db_name, FileType::InfoLog, 0).as_str())
+            {
                 self.logger = Some(Box::new(Logger::new(f, self.logger_level)))
             }
         }
+        self.apply_logger();
         if self.block_cache.is_none() {
             self.block_cache = Some(Arc::new(SharedLRUCache::new(8 << 20)))
+        }
+    }
+
+    fn apply_logger(&mut self) {
+        if let Some(logger) = self.logger.take() {
+            let static_logger: &'static Log = Box::leak(logger);
+            log::set_logger(static_logger).unwrap();
+            log::set_max_level(self.logger_level);
+            info!("Logger initialized");
         }
     }
 
@@ -231,7 +245,7 @@ impl Default for Options {
     fn default() -> Self {
         Options {
             comparator: Arc::new(BytewiseComparator::new()),
-            create_if_missing: false,
+            create_if_missing: true,
             error_if_exists: false,
             paranoid_checks: false,
             env: Arc::new(FileStorage {}),

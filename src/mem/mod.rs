@@ -128,7 +128,6 @@ impl MemoryTable for MemTable {
     fn new_iterator<'a>(&'a self) -> Box<dyn Iterator + 'a> {
         let iter = MemTableIterator {
             iter: SkiplistIterator::new(&self.table),
-            buffer: Vec::new(),
         };
         Box::new(iter)
     }
@@ -177,17 +176,12 @@ impl MemoryTable for MemTable {
 
 pub struct MemTableIterator<'a> {
     iter: SkiplistIterator<'a>,
-    // for passing to encode_key
-    buffer: Vec<u8>,
 }
 
 impl<'a> MemTableIterator<'a> {
     pub fn new(table: &'a Skiplist) -> Self {
         let iter = SkiplistIterator::new(table);
-        Self {
-            iter,
-            buffer: Vec::new(),
-        }
+        Self { iter }
     }
 }
 
@@ -205,9 +199,7 @@ impl<'a> Iterator for MemTableIterator<'a> {
     }
 
     fn seek(&mut self, target: &Slice) {
-        // convert to mem key first
-        encode_key(&mut self.buffer, target);
-        self.iter.seek(&Slice::from(self.buffer.as_slice()))
+        self.iter.seek(target)
     }
 
     fn next(&mut self) {
@@ -244,13 +236,6 @@ impl<'a> Iterator for MemTableIterator<'a> {
     fn status(&mut self) -> Result<()> {
         Ok(())
     }
-}
-
-// Encode a suitable internal key target for "target" into a given buffer.
-fn encode_key(buf: &mut Vec<u8>, target: &Slice) {
-    buf.clear();
-    VarintU32::put_varint(buf, target.size() as u32);
-    buf.extend_from_slice(target.as_slice());
 }
 
 // Decodes the length (varint u32) from the first of the give slice and

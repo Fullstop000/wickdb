@@ -46,6 +46,7 @@ impl ReaderError {
 }
 
 // represent a record
+#[derive(Debug, Clone)]
 struct Record {
     t: RecordType,
     data: Vec<u8>,
@@ -360,9 +361,7 @@ impl Reader {
         }
         self.end_of_buffer_offset = block_start_location;
         if block_start_location > 0 {
-            let res = self
-                .file
-                .seek(SeekFrom::Start(block_start_location));
+            let res = self.file.seek(SeekFrom::Start(block_start_location));
             if res.is_err() {
                 self.report_drop(block_start_location, res.unwrap_err().description());
                 return false;

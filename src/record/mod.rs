@@ -71,9 +71,9 @@ mod tests {
     use rand::Rng;
     use std::cell::RefCell;
     use std::cmp::min;
+    use std::fs::Metadata;
     use std::io::SeekFrom;
     use std::rc::Rc;
-    use std::fs::Metadata;
 
     // Construct a string of the specified length made out of the supplied
     // partial string.
@@ -244,7 +244,12 @@ mod tests {
                 read_source: f.clone(),
                 reporter: reporter.clone(),
                 reading: false,
-                reader: Reader::new(Box::new(f.clone()), Some(Box::new(reporter.clone())), true, 0),
+                reader: Reader::new(
+                    Box::new(f.clone()),
+                    Some(Box::new(reporter.clone())),
+                    true,
+                    0,
+                ),
                 writer,
             }
         }

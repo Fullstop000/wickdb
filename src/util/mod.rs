@@ -18,5 +18,6 @@ pub mod crc32;
 #[macro_use]
 pub mod status;
 pub mod hash;
+pub mod reporter;
 pub mod slice;
 pub mod varint;
