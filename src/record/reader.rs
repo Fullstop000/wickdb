@@ -225,9 +225,11 @@ impl Reader {
         }
     }
 
-    /// Returns the last_record_offset
+    // Returns the last_record_offset.
+    // Temporary for test.
     #[inline]
-    pub fn last_record_offset(&self) -> u64 {
+    #[allow(dead_code)]
+    pub(super) fn last_record_offset(&self) -> u64 {
         self.last_record_offset
     }
 

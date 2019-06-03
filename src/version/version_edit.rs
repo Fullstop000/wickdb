@@ -171,6 +171,7 @@ impl VersionEdit {
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub fn add_compaction_pointer(&mut self, level: usize, key: InternalKey) {
         self.compaction_pointers.push((level, Rc::new(key)))
     }

@@ -61,6 +61,7 @@ impl SnapshotList {
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub fn newest(&self) -> Arc<Snapshot> {
         assert!(!self.is_empty());
         self.snapshots.back().unwrap().clone()

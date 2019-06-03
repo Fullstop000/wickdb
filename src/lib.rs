@@ -45,6 +45,7 @@ pub mod storage;
 mod table_cache;
 mod version;
 
+pub use filter::bloom::BloomFilter;
 pub use batch::WriteBatch;
 pub use cache::{Cache, HandleRef};
 pub use compaction::ManualCompaction;

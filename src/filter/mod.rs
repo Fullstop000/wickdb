@@ -17,7 +17,7 @@
 
 use crate::util::slice::Slice;
 
-mod bloom;
+pub mod bloom;
 
 /// `FilterPolicy` is an algorithm for probabilistically encoding a set of keys.
 /// The canonical implementation is a Bloom filter.

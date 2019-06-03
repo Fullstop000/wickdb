@@ -147,6 +147,7 @@ pub struct EmptyIterator {
 
 impl EmptyIterator {
     #[inline]
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self { err: None }
     }
