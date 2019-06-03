@@ -4,17 +4,13 @@
 [![Coverage Status](https://coveralls.io/repos/github/Fullstop000/wickdb/badge.svg?branch=master)](https://coveralls.io/github/Fullstop000/wickdb?branch=master)
 [![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2FFullstop000%2Fwickdb.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2FFullstop000%2Fwickdb?ref=badge_shield)
 
-*This lib is in WIP and any current implementation may be unstable*
-
-### Problems
-We need a scheduling implementation for compaction and applying `WriteBatch`. This requires that `DBImpl` should
-be thread-safe otherwise we have to spilt it into several thread-safe types.
+You can find a simple worked example in `examples`. 
 
 ### Plan & Progress
 
-##### The basic shape of LevelDB
+#### The basic shape of LevelDB
 
-- [ ] Fundamental components
+- [x] Fundamental components
   - [x] Arena
   - [x] Skiplist
   - [x] Cache
@@ -29,20 +25,26 @@ be thread-safe otherwise we have to spilt it into several thread-safe types.
   - [x] DB
 - [x] Compaction implementation
 - [x] Scheduling
+
+#### [ongoing] Test cases & Benches
+
 - [ ] Solid test cases
 - [ ] Benchmark
 
-##### Remove unsafe codes
+#### Remove unsafe codes
 
-We should use Rust as safe as we could because that's why we using Rust.
+We should use Rust as safe as we could because that's why we prefer using Rust.
 
-- `Slice` can be replaced using crate [bytes](https://docs.rs/bytes).
+- `Slice` could be replaced using crate [bytes](https://docs.rs/bytes).
 - `LRUCache` is a double-linked circle list implemented by raw pointer.
 
+### Development
 
-##### Add new features
+For now we should focus on increasing test case coverage and benchmarks because they're so much significant to a storage engine.
 
-TODO
+Besides, there're so many `TODO`s in current implementation and you can pick either of them to do something.
+
+Still, any pr or issue is welcomed.
 
 ## License
 [![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2FFullstop000%2Fwickdb.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2FFullstop000%2Fwickdb?ref=badge_large)
