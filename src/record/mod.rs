@@ -69,7 +69,6 @@ mod tests {
     use rand::Rng;
     use std::cell::RefCell;
     use std::cmp::min;
-    use std::fs::Metadata;
     use std::io::SeekFrom;
     use std::rc::Rc;
 
@@ -164,7 +163,7 @@ mod tests {
             unimplemented!()
         }
 
-        fn metadata(&self) -> Result<Metadata> {
+        fn len(&self) -> Result<u64> {
             unimplemented!()
         }
 

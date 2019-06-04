@@ -35,7 +35,6 @@ use crate::version::Version;
 use hashbrown::HashSet;
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::vec_deque::VecDeque;
-use std::fs::Metadata;
 use std::path::MAIN_SEPARATOR;
 use std::rc::Rc;
 use std::sync::atomic::Ordering;
@@ -615,7 +614,7 @@ impl VersionSet {
                 ));
             }
         };
-        let metadata = current_manifest.metadata();
+        let file_length = current_manifest.len();
         let mut builder =
             VersionBuilder::new(Version::new(self.options.clone(), self.icmp.clone()));
         let reporter = LogReporter::new();
@@ -700,7 +699,7 @@ impl VersionSet {
         self.last_sequence = last_sequence;
         self.log_number = log_number;
         self.prev_log_number = prev_log_number;
-        Ok(!self.should_reuse_manifest(&file_name, metadata))
+        Ok(!self.should_reuse_manifest(&file_name, file_length))
     }
 
     /// Forward to `num + 1` as the next file number
@@ -898,7 +897,7 @@ impl VersionSet {
     }
 
     // See if we can reuse the existing MANIFEST file
-    fn should_reuse_manifest(&mut self, manifest_file: &str, metadata: Result<Metadata>) -> bool {
+    fn should_reuse_manifest(&mut self, manifest_file: &str, file_size: Result<u64>) -> bool {
         if !self.options.reuse_logs {
             return false;
         }
@@ -906,10 +905,10 @@ impl VersionSet {
             if file_type != FileType::Manifest {
                 return false;
             };
-            match metadata {
-                Ok(meta) => {
+            match file_size {
+                Ok(len) => {
                     // Make new compacted MANIFEST if old one is too big
-                    if meta.len() > self.options.max_file_size {
+                    if len > self.options.max_file_size {
                         return false;
                     }
                     match self.options.env.open(manifest_file) {

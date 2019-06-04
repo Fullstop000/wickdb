@@ -16,9 +16,9 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
 pub mod file;
+pub mod mem;
 
 use crate::util::status::{Result, Status, WickErr};
-use std::fs::Metadata;
 use std::io;
 use std::io::SeekFrom;
 use std::path::PathBuf;
@@ -64,8 +64,14 @@ pub trait File {
     fn seek(&mut self, pos: SeekFrom) -> Result<u64>;
     fn read(&mut self, buf: &mut [u8]) -> Result<usize>;
     fn read_all(&mut self, buf: &mut Vec<u8>) -> Result<usize>;
-    fn metadata(&self) -> Result<Metadata>;
-
+    fn len(&self) -> Result<u64>;
+    fn is_empty(&self) -> bool {
+        if let Ok(length) = self.len() {
+            return length == 0;
+        }
+        // Err is considered as empty
+        false
+    }
     /// Locks the file for exclusive usage, blocking if the file is currently
     /// locked.
     fn lock(&self) -> Result<()>;

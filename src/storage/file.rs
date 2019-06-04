@@ -18,9 +18,7 @@
 use crate::storage::{File, Storage};
 use crate::util::status::{Result, Status, WickErr};
 use fs2::FileExt;
-use std::fs::{
-    create_dir_all, read_dir, remove_file, rename, File as SysFile, Metadata, OpenOptions,
-};
+use std::fs::{create_dir_all, read_dir, remove_file, rename, File as SysFile, OpenOptions};
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
@@ -121,9 +119,11 @@ impl File for SysFile {
         w_io_result!(r)
     }
 
-    fn metadata(&self) -> Result<Metadata> {
-        let r = SysFile::metadata(self);
-        w_io_result!(r)
+    fn len(&self) -> Result<u64> {
+        match SysFile::metadata(self) {
+            Ok(v) => Ok(v.len()),
+            Err(e) => Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e))),
+        }
     }
 
     fn lock(&self) -> Result<()> {

@@ -21,7 +21,7 @@ use std::mem;
 use std::rc::Rc;
 use std::result;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Status {
     NotFound,
     Corruption,
