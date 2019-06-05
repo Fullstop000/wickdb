@@ -11,10 +11,129 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::storage::File;
+use crate::storage::{File, Storage};
 use crate::util::status::{Result, Status, WickErr};
+use hashbrown::HashMap;
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
+
+/// An in memory file system based on a simple HashMap
+// TODO: maybe use a trie tree instead
+#[derive(Default)]
+pub struct MemStorage {
+    inner: RwLock<HashMap<String, FileNode>>,
+}
+
+impl Storage for MemStorage {
+    fn create(&self, name: &str) -> Result<Box<dyn File>> {
+        let file_node = FileNode::new(name);
+        self.inner
+            .write()
+            .unwrap()
+            .insert(String::from(name), file_node.clone());
+        Ok(Box::new(file_node))
+    }
+
+    fn open(&self, name: &str) -> Result<Box<dyn File>> {
+        match self.inner.read().unwrap().get(name) {
+            Some(f) => Ok(Box::new(f.clone())),
+            None => Err(WickErr::new(Status::IOError, Some("Not Found"))),
+        }
+    }
+
+    // If not found, still returns Ok
+    fn remove(&self, name: &str) -> Result<()> {
+        self.inner.write().unwrap().remove(name);
+        Ok(())
+    }
+
+    fn exists(&self, name: &str) -> bool {
+        self.inner.read().unwrap().contains_key(name)
+    }
+
+    fn rename(&self, old: &str, new: &str) -> Result<()> {
+        let mut map = self.inner.write().unwrap();
+        match map.remove(old) {
+            Some(f) => {
+                map.insert(new.to_owned(), f);
+                Ok(())
+            }
+            None => Err(WickErr::new(Status::IOError, Some("Not Found"))),
+        }
+    }
+
+    // Should not be used
+    fn mkdir_all(&self, _dir: &str) -> Result<()> {
+        Ok(())
+    }
+
+    // Just list all keys in HashMap
+    fn list(&self, _dir: &str) -> Result<Vec<PathBuf>> {
+        let mut result = vec![];
+        for (key, _) in self.inner.read().unwrap().iter() {
+            result.push(PathBuf::from(key.clone()))
+        }
+        Ok(result)
+    }
+}
+
+#[derive(Clone)]
+pub struct FileNode {
+    inner: Arc<RwLock<InmemFile>>,
+}
+
+impl FileNode {
+    fn new(name: &str) -> Self {
+        FileNode {
+            inner: Arc::new(RwLock::new(InmemFile::new(name))),
+        }
+    }
+}
+
+impl File for FileNode {
+    fn write(&mut self, buf: &[u8]) -> Result<usize> {
+        // TODO: as we acquire a mutable ref, the lock shouldn't be needed
+        self.inner.write().unwrap().write(buf)
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        self.inner.write().unwrap().flush()
+    }
+
+    fn close(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
+        self.inner.write().unwrap().seek(pos)
+    }
+
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+        self.inner.write().unwrap().read(buf)
+    }
+
+    fn read_all(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
+        self.inner.write().unwrap().read_all(buf)
+    }
+
+    fn len(&self) -> Result<u64> {
+        self.inner.read().unwrap().len()
+    }
+
+    fn lock(&self) -> Result<()> {
+        self.inner.read().unwrap().lock()
+    }
+
+    fn unlock(&self) -> Result<()> {
+        self.inner.read().unwrap().unlock()
+    }
+
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
+        self.inner.read().unwrap().read_at(buf, offset)
+    }
+}
 
 /// `File` implementation based on memory
 /// This is handy for our tests.
@@ -46,13 +165,15 @@ impl InmemFile {
 
 impl File for InmemFile {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
+        let pos = self.contents.position();
         let r = self.contents.write(buf);
+        // Prevent position from being modified
+        self.contents.set_position(pos);
         w_io_result!(r)
     }
 
     fn flush(&mut self) -> Result<()> {
-        let r = self.contents.flush();
-        w_io_result!(r)
+        Ok(())
     }
 
     fn close(&mut self) -> Result<()> {
@@ -70,6 +191,7 @@ impl File for InmemFile {
     }
 
     fn read_all(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
+        self.contents.set_position(0);
         let r = self.contents.read_to_end(buf);
         w_io_result!(r)
     }
@@ -115,11 +237,31 @@ impl File for InmemFile {
 
 #[cfg(test)]
 mod tests {
-    use super::InmemFile;
-    use crate::storage::File;
+    use super::{InmemFile, MemStorage};
+    use crate::storage::{File, Storage};
     use crate::util::coding::put_fixed_32;
     use crate::util::status::Status;
+    use hashbrown::HashSet;
     use std::error::Error;
+
+    #[test]
+    fn test_mem_file_read_write() {
+        let mut f = InmemFile::new("test");
+        let written = f.write(b"hello world").expect("write should work");
+        assert_eq!(written, 11);
+        let (pos, data) = f.get_pos_and_data();
+        assert_eq!(pos, 0);
+        assert_eq!(String::from_utf8(Vec::from(data)).unwrap(), "hello world");
+        let mut read_buf = vec![0u8; 5];
+        let read = f.read(read_buf.as_mut_slice()).expect("read should work");
+        assert_eq!(read, 5);
+        let (pos, _) = f.get_pos_and_data();
+        assert_eq!(pos, 5);
+        read_buf.clear();
+        let all = f.read_all(&mut read_buf).expect("read_all should work");
+        assert_eq!(all, written);
+        assert_eq!(String::from_utf8(read_buf.clone()).unwrap(), "hello world");
+    }
 
     #[test]
     fn test_mem_file_lock_unlock() {
@@ -162,6 +304,52 @@ mod tests {
                 Ok(size) => assert_eq!(buf_len, size),
                 Err(e) => assert_eq!(e.description(), "EOF"),
             }
+        }
+    }
+
+    #[test]
+    fn test_memory_storage_basic() {
+        let env = MemStorage::default();
+        let mut f = env.create("test1").expect("'create' should work");
+        assert!(env.exists("test1"));
+        f.write(b"hello world").expect("file write should work");
+
+        let expected_not_found = env.open("not exist");
+        assert!(expected_not_found.is_err());
+        assert_eq!(expected_not_found.err().unwrap().description(), "Not Found");
+
+        f = env.open("test1").expect("'open' should work");
+        let mut read_buf = vec![];
+        f.read_all(&mut read_buf)
+            .expect("file read_all should work");
+        assert_eq!(String::from_utf8(read_buf).unwrap(), "hello world");
+
+        let expected_not_found = env.rename("not exist", "test3");
+        assert!(expected_not_found.is_err());
+        assert_eq!(expected_not_found.unwrap_err().description(), "Not Found");
+
+        env.rename("test1", "test2").expect("'rename' should work");
+        assert!(!env.exists("test1"));
+        assert!(env.exists("test2"));
+        f = env.open("test2").expect("'open' should work");
+        let mut read_buf = vec![];
+        f.read_all(&mut read_buf)
+            .expect("file read_all should work");
+        assert_eq!(String::from_utf8(read_buf).unwrap(), "hello world");
+
+        env.remove("test2").expect("'remove' should work");
+        assert!(!env.exists("test2"));
+        assert!(env.list("").expect("'list' should work").is_empty());
+
+        let mut tmp_names = HashSet::new();
+        for i in 0..1000 {
+            env.create(i.to_string().as_str())
+                .expect("'create' should work");
+            tmp_names.insert(i.to_string());
+        }
+        let list = env.list("").expect("'list' should work");
+        for name in list.iter() {
+            assert!(tmp_names.contains(name.to_str().unwrap()))
         }
     }
 }
