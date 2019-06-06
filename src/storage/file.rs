@@ -18,7 +18,10 @@
 use crate::storage::{File, Storage};
 use crate::util::status::{Result, Status, WickErr};
 use fs2::FileExt;
-use std::fs::{create_dir_all, read_dir, remove_file, rename, File as SysFile, OpenOptions};
+use std::fs::{
+    create_dir_all, read_dir, remove_dir, remove_dir_all, remove_file, rename, File as SysFile,
+    OpenOptions,
+};
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
@@ -47,6 +50,15 @@ impl Storage for FileStorage {
 
     fn remove(&self, name: &str) -> Result<()> {
         let r = remove_file(name);
+        w_io_result!(r)
+    }
+
+    fn remove_dir(&self, dir: &str, recursively: bool) -> Result<()> {
+        let r = if recursively {
+            remove_dir_all(dir)
+        } else {
+            remove_dir(dir)
+        };
         w_io_result!(r)
     }
 

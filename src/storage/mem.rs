@@ -21,9 +21,9 @@ use std::sync::{Arc, RwLock};
 
 /// An in memory file system based on a simple HashMap
 // TODO: maybe use a trie tree instead
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct MemStorage {
-    inner: RwLock<HashMap<String, FileNode>>,
+    inner: Arc<RwLock<HashMap<String, FileNode>>>,
 }
 
 impl Storage for MemStorage {
@@ -46,6 +46,11 @@ impl Storage for MemStorage {
     // If not found, still returns Ok
     fn remove(&self, name: &str) -> Result<()> {
         self.inner.write().unwrap().remove(name);
+        Ok(())
+    }
+
+    // Should not be used
+    fn remove_dir(&self, _dir: &str, _recursively: bool) -> Result<()> {
         Ok(())
     }
 

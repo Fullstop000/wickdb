@@ -62,10 +62,18 @@ pub trait DB {
     /// the DB does not contain the key.
     fn delete(&self, write_opt: WriteOptions, key: Slice) -> Result<()>;
 
-    /// `apply` applies the operations contained in the `WriteBatch` to the DB atomically.
+    /// `write` applies the operations contained in the `WriteBatch` to the DB atomically.
     fn write(&self, write_opt: WriteOptions, batch: WriteBatch) -> Result<()>;
 
-    /// Acquire a Snapshot for reading DB
+    /// `close` shuts down the current WickDB by waiting util all the background tasks are complete
+    /// and then releases the file lock. A closed db should never be used again and is able to be
+    /// dropped safely.
+    fn close(&mut self) -> Result<()>;
+
+    /// `destroy` shuts down the current WickDB and delete all relative files and the db directory.
+    fn destroy(&mut self) -> Result<()>;
+
+    /// Acquire a `Snapshot` for reading DB
     fn get_snapshot(&self) -> Arc<Snapshot>;
 }
 
@@ -94,6 +102,20 @@ impl DB for WickDB {
 
     fn write(&self, options: WriteOptions, batch: WriteBatch) -> Result<()> {
         self.inner.schedule_batch_and_wait(options, batch)
+    }
+
+    fn close(&mut self) -> Result<()> {
+        self.inner.is_shutting_down.store(true, Ordering::Release);
+        match &self.inner.db_lock {
+            Some(lock) => lock.unlock(),
+            None => Ok(()),
+        }
+    }
+
+    fn destroy(&mut self) -> Result<()> {
+        let db = self.inner.clone();
+        db.is_shutting_down.store(true, Ordering::Release);
+        db.options.env.remove_dir(&db.db_name, true)
     }
 
     fn get_snapshot(&self) -> Arc<Snapshot> {
@@ -146,6 +168,9 @@ impl WickDB {
         let db = self.inner.clone();
         thread::spawn(move || {
             loop {
+                if db.is_shutting_down.load(Ordering::Acquire) {
+                    break;
+                }
                 let mut queue = db.batch_queue.lock().unwrap();
                 while queue.is_empty() {
                     queue = db.process_batch_sem.wait(queue).unwrap();
@@ -349,6 +374,12 @@ impl DBImpl {
     }
 
     fn get(&self, options: ReadOptions, key: Slice) -> Result<Option<Slice>> {
+        if self.is_shutting_down.load(Ordering::Acquire) {
+            return Err(WickErr::new(
+                Status::NotSupported,
+                Some("Try to operate a closed db"),
+            ));
+        }
         let snapshot = match &options.snapshot {
             Some(snapshot) => snapshot.sequence(),
             None => self.versions.lock().unwrap().get_last_sequence(),
@@ -631,6 +662,12 @@ impl DBImpl {
     // Schedule the WriteBatch and wait for the result from the receiver.
     // This function wakes up the thread in `process_batch`.
     fn schedule_batch_and_wait(&self, options: WriteOptions, batch: WriteBatch) -> Result<()> {
+        if self.is_shutting_down.load(Ordering::Acquire) {
+            return Err(WickErr::new(
+                Status::NotSupported,
+                Some("Try to operate a closed db"),
+            ));
+        }
         if batch.is_empty() {
             return Ok(());
         }
