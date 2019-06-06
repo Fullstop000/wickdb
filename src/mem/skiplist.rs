@@ -259,12 +259,12 @@ impl Skiplist {
 }
 
 /// Iteration over the contents of a skip list
-pub struct SkiplistIterator<'a> {
-    skl: &'a Skiplist,
+pub struct SkiplistIterator {
+    skl: Arc<Skiplist>,
     pub(super) node: *mut Node,
 }
 
-impl<'a> Iterator for SkiplistIterator<'a> {
+impl Iterator for SkiplistIterator {
     /// Returns true whether the iterator is positioned at a valid node
     #[inline]
     fn valid(&self) -> bool {
@@ -324,8 +324,8 @@ impl<'a> Iterator for SkiplistIterator<'a> {
     }
 }
 
-impl<'a> SkiplistIterator<'a> {
-    pub fn new(skl: &'a Skiplist) -> Self {
+impl SkiplistIterator {
+    pub fn new(skl: Arc<Skiplist>) -> Self {
         Self {
             skl,
             node: ptr::null_mut(),
@@ -560,7 +560,7 @@ mod tests {
         for key in inputs.clone().drain(..) {
             skl.insert(Slice::from(key))
         }
-        let mut skl_iterator = SkiplistIterator::new(&skl);
+        let mut skl_iterator = SkiplistIterator::new(Arc::new(skl));
         assert_eq!(ptr::null_mut(), skl_iterator.node,);
 
         skl_iterator.seek_to_first();
@@ -689,7 +689,7 @@ mod tests {
     // at iterator construction time.
     struct ConcurrencyTest {
         current: State,
-        list: Skiplist,
+        list: Arc<Skiplist>,
     }
 
     unsafe impl Send for ConcurrencyTest {}
@@ -700,7 +700,7 @@ mod tests {
             let arena = BlockArena::new();
             Self {
                 current: State::new(),
-                list: Skiplist::new(Arc::new(U64Comparator {}), Box::new(arena)),
+                list: Arc::new(Skiplist::new(Arc::new(U64Comparator {}), Box::new(arena))),
             }
         }
 
@@ -724,7 +724,7 @@ mod tests {
             let mut pos = random_target();
             let mut pos_bytes = vec![];
             put_fixed_64(&mut pos_bytes, pos);
-            let mut iter = SkiplistIterator::new(&self.list);
+            let mut iter = SkiplistIterator::new(self.list.clone());
             iter.seek(&Slice::from(&pos_bytes));
             loop {
                 let current = if !iter.valid() {

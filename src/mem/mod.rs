@@ -38,10 +38,8 @@ pub trait MemoryTable {
     fn approximate_memory_usage(&self) -> usize;
 
     /// Return an iterator that yields the contents of the memtable.
-    ///
-    /// The caller must ensure that the underlying MemTable remains live
-    /// while the returned iterator is live.
-    fn new_iterator<'a>(&'a self) -> Box<dyn Iterator + 'a>;
+    // TODO: rename this to `iter()`
+    fn new_iterator(&self) -> Box<dyn Iterator>;
 
     /// Add an entry into memtable that maps key to value at the
     /// specified sequence number and with the specified type.
@@ -105,28 +103,25 @@ impl Comparator for KeyComparator {
 /// In-memory write buffer
 pub struct MemTable {
     cmp: Arc<KeyComparator>,
-    table: Skiplist,
+    table: Arc<Skiplist>,
 }
 
 impl MemTable {
     pub fn new(cmp: Arc<InternalKeyComparator>) -> Self {
         let arena = BlockArena::new();
         let kcmp = Arc::new(KeyComparator { cmp });
-        let table = Skiplist::new(kcmp.clone(), Box::new(arena));
+        let table = Arc::new(Skiplist::new(kcmp.clone(), Box::new(arena)));
         Self { cmp: kcmp, table }
     }
 }
-
-unsafe impl Send for MemTable {}
-unsafe impl Sync for MemTable {}
 
 impl MemoryTable for MemTable {
     fn approximate_memory_usage(&self) -> usize {
         self.table.arena.memory_used()
     }
 
-    fn new_iterator<'a>(&'a self) -> Box<dyn Iterator + 'a> {
-        Box::new(MemTableIterator::new(&self.table))
+    fn new_iterator(&self) -> Box<dyn Iterator> {
+        Box::new(MemTableIterator::new(self.table.clone()))
     }
 
     fn add(&self, seq_number: u64, val_type: ValueType, key: &[u8], value: &[u8]) {
@@ -171,18 +166,18 @@ impl MemoryTable for MemTable {
     }
 }
 
-pub struct MemTableIterator<'a> {
-    iter: SkiplistIterator<'a>,
+pub struct MemTableIterator {
+    iter: SkiplistIterator,
 }
 
-impl<'a> MemTableIterator<'a> {
-    pub fn new(table: &'a Skiplist) -> Self {
+impl MemTableIterator {
+    pub fn new(table: Arc<Skiplist>) -> Self {
         let iter = SkiplistIterator::new(table);
         Self { iter }
     }
 }
 
-impl<'a> Iterator for MemTableIterator<'a> {
+impl Iterator for MemTableIterator {
     fn valid(&self) -> bool {
         self.iter.valid()
     }
