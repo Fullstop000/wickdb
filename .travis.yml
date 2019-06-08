@@ -1,9 +1,18 @@
 language: rust
 cache: cargo
 sudo: required
+
+os:
+  - linux
+  - windows
+  - osx
+
 rust:
   - stable
   - nightly
+  # The latest version to support `uniform_paths`
+  # See https://github.com/rust-lang/rust/pull/56759
+  - 1.32.0
 
 # Dependencies of kcov, used by coverage
 addons:
