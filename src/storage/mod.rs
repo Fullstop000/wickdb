@@ -41,6 +41,9 @@ pub trait Storage: Send + Sync {
     /// Delete the named file
     fn remove(&self, name: &str) -> Result<()>;
 
+    /// Removes a directory at this path. If `recursively`, removes all its contents.
+    fn remove_dir(&self, dir: &str, recursively: bool) -> Result<()>;
+
     /// Returns true iff the named file exists.
     fn exists(&self, name: &str) -> bool;
 
