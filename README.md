@@ -38,13 +38,27 @@ We should use Rust as safe as we could because that's why we prefer using Rust.
 - `Slice` could be replaced using crate [bytes](https://docs.rs/bytes).
 - `LRUCache` is a double-linked circle list implemented by raw pointer.
 
-### Development
+### Developing
 
-For now we should focus on increasing test case coverage and benchmarks because they're so much significant to a storage engine.
+`wickdb` is built using the latest version of `stable` Rust, using [the 2018 edition](https://doc.rust-lang.org/edition-guide/rust-2018/).
 
-Besides, there're so many `TODO`s in current implementation and you can pick either of them to do something.
+In order to have your PR merged running the following must finish without error otherwise the CI will fail:
 
-Still, any pr or issue is welcomed.
+```bash
+cargo test --all && \
+cargo clippy && \
+cargo fmt --all -- --check
+```
+
+You may optionally want to install `cargo-watch` to allow for automated rebuilding while editing:
+
+```bash
+cargo watch -s "cargo check --tests"
+```
+
+There're so many `TODO`s in current implementation and you can pick either of them to do something.
+
+This crate is still at early stage so any PR or Issue is welcomed !.
 
 ## License
 [![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2FFullstop000%2Fwickdb.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2FFullstop000%2Fwickdb?ref=badge_large)
