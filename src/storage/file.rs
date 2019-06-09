@@ -153,7 +153,7 @@ impl File for SysFile {
     }
     #[cfg(windows)]
     fn read_at(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
-        let r = std::os::windows::prelude::FileExt::seek_read(self,buf, offset);
+        let r = std::os::windows::prelude::FileExt::seek_read(self, buf, offset);
         w_io_result!(r)
     }
 }
