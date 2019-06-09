@@ -130,6 +130,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(unix)]
     fn test_generate_filename() {
         let dirname = "test";
         let mut tests = vec![
@@ -149,6 +150,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_parse_filename() {
         let mut tests = vec![
             ("a/b/c/000123.log", Some((FileType::Log, 123))),
@@ -173,4 +175,6 @@ mod tests {
             assert_eq!(result, expect);
         }
     }
+
+    // TODO: add windows support
 }
