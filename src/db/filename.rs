@@ -125,6 +125,9 @@ pub fn update_current(env: Arc<dyn Storage>, dbname: &str, manifest_file_num: u6
     result
 }
 
+
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,7 +136,7 @@ mod tests {
     fn test_generate_filename() {
         let dirname = "test";
         let mut tests = if cfg!(windows) {
-        let tests_windows =  vec![
+         vec![
             (FileType::Log, 10, "test\\000010.log"),
             (FileType::Lock, 1, "test\\LOCK"),
             (FileType::Table, 123, "test\\000123.sst"),
@@ -142,10 +145,10 @@ mod tests {
             (FileType::Temp, 100, "test\\000100.dbtmp"),
             (FileType::InfoLog, 1, "test\\LOG"),
             (FileType::OldInfoLog, 1, "test\\LOG.old"),
-        ];
-            tests_windows
+        ]
+           
         } else {
-            let tests_unix =  vec![
+             vec![
             (FileType::Log, 10, "test/000010.log"),
             (FileType::Lock, 1, "test/LOCK"),
             (FileType::Table, 123, "test/000123.sst"),
@@ -154,8 +157,7 @@ mod tests {
             (FileType::Temp, 100, "test/000100.dbtmp"),
             (FileType::InfoLog, 1, "test/LOG"),
             (FileType::OldInfoLog, 1, "test/LOG.old"),
-        ];
-            tests_unix
+        ]
         };
         
         
@@ -166,9 +168,30 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
     fn test_parse_filename() {
-        let mut tests = vec![
+
+        let mut tests = if cfg!(windows) {
+           vec![
+            ("a\\b\\c\\000123.log", Some((FileType::Log, 123))),
+            ("a\\b\\c\\LOCK", Some((FileType::Lock, 0))),
+            ("a\\b\\c\\010666.sst", Some((FileType::Table, 10666))),
+            ("a\\b\\c\\MANIFEST-000009", Some((FileType::Manifest, 9))),
+            ("a\\b\\c\\000123.dbtmp", Some((FileType::Temp, 123))),
+            ("a\\b\\c\\CURRENT", Some((FileType::Current, 0))),
+            ("a\\b\\c\\LOG", Some((FileType::InfoLog, 0))),
+            ("a\\b\\c\\LOG.old", Some((FileType::OldInfoLog, 0))),
+
+            ("a\\b\\c\\test.123", None),
+            ("a\\b\\c\\LOG.", None),
+            ("a\\b\\c\\LOG.new", None),
+            ("a\\b\\c\\000def.log", None),
+            ("a\\b\\c\\MANIFEST-abcedf", None),
+            ("a\\b\\c\\MANIFEST", None),
+            ("a\\b\\c\\MANIFEST-123123-abcdef", None),
+            ]
+
+        } else {
+             vec![
             ("a/b/c/000123.log", Some((FileType::Log, 123))),
             ("a/b/c/LOCK", Some((FileType::Lock, 0))),
             ("a/b/c/010666.sst", Some((FileType::Table, 10666))),
@@ -185,12 +208,15 @@ mod tests {
             ("a/b/c/MANIFEST-abcedf", None),
             ("a/b/c/MANIFEST", None),
             ("a/b/c/MANIFEST-123123-abcdef", None),
-        ];
+        ]
+        };
+        
+       
         for (filename, expect) in tests.drain(..) {
             let result = parse_filename(filename);
             assert_eq!(result, expect);
         }
     }
 
-    // TODO: add windows support
+    
 }
