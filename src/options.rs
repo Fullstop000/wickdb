@@ -96,6 +96,14 @@ pub struct Options {
     /// number of bytes for a level is exceeded, compaction is requested.
     pub l1_max_bytes: u64,
 
+    /// Maximum level to which a new compacted memtable is pushed if it
+    /// does not create overlap.  We try to push to level 2 to avoid the
+    /// relatively expensive level 0=>1 compactions and to avoid some
+    /// expensive manifest file operations.  We do not push all the way to
+    /// the largest level since that can generate a lot of wasted disk
+    /// space if the same key space is being repeatedly overwritten.
+    pub max_mem_compact_level: usize,
+
     // -------------------
     // Parameters that affect performance:
     /// Amount of data to build up in memory (backed by an unsorted log
@@ -254,6 +262,7 @@ impl Default for Options {
             l0_slowdown_writes_threshold: 8,
             l0_stop_writes_threshold: 12,
             l1_max_bytes: 64 * 1024 * 1024,     // 64MB
+            max_mem_compact_level: 2,
             write_buffer_size: 4 * 1024 * 1024, // 4MB
             max_open_files: 500,
             block_cache: Some(Arc::new(SharedLRUCache::new(8 << 20))),

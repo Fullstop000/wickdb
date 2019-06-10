@@ -242,12 +242,11 @@ impl Version {
                 VALUE_TYPE_FOR_SEEK,
             ));
             let largest_ikey = Rc::new(InternalKey::new(largest_ukey, 0, ValueType::Deletion));
-            let max_levels = self.options.max_levels as usize;
-            while level < max_levels {
+            while level < self.options.max_mem_compact_level {
                 if self.overlap_in_level(level + 1, smallest_ukey, largest_ukey) {
                     break;
                 }
-                if level + 2 < max_levels {
+                if level + 2 < self.options.max_levels as usize {
                     // Check that file does not overlap too many grandparent bytes
                     let overlaps = self.get_overlapping_inputs(
                         level + 2,
