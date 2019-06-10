@@ -130,10 +130,22 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg(unix)]
     fn test_generate_filename() {
         let dirname = "test";
-        let mut tests = vec![
+        let mut tests = if cfg!(windows) {
+        let tests_windows =  vec![
+            (FileType::Log, 10, "test\\000010.log"),
+            (FileType::Lock, 1, "test\\LOCK"),
+            (FileType::Table, 123, "test\\000123.sst"),
+            (FileType::Manifest, 9, "test\\MANIFEST-000009"),
+            (FileType::Current, 1, "test\\CURRENT"),
+            (FileType::Temp, 100, "test\\000100.dbtmp"),
+            (FileType::InfoLog, 1, "test\\LOG"),
+            (FileType::OldInfoLog, 1, "test\\LOG.old"),
+        ];
+            tests_windows
+        } else {
+            let tests_unix =  vec![
             (FileType::Log, 10, "test/000010.log"),
             (FileType::Lock, 1, "test/LOCK"),
             (FileType::Table, 123, "test/000123.sst"),
@@ -143,6 +155,10 @@ mod tests {
             (FileType::InfoLog, 1, "test/LOG"),
             (FileType::OldInfoLog, 1, "test/LOG.old"),
         ];
+            tests_unix
+        };
+        
+        
         for (ft, seq, expect) in tests.drain(..) {
             let name = generate_filename(dirname, ft, seq);
             assert_eq!(name.as_str(), expect);
