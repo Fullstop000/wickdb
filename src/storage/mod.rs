@@ -22,7 +22,6 @@ use crate::util::status::{Result, Status, WickErr};
 use std::io;
 use std::io::SeekFrom;
 use std::path::PathBuf;
-use std::rc::Rc;
 use std::sync::Arc;
 
 /// `Storage` is a namespace for files.
@@ -105,23 +104,17 @@ pub trait File {
                     buf = &mut tmp[n..];
                     offset += n as u64;
                 }
-                Err(mut e) => {
-                    match e.status() {
-                        Status::IOError => {
-                            if let Some(r) = e.take_raw() {
-                                let raw = Rc::try_unwrap(r).unwrap();
-                                // DANGER: the raw error must be a io::Error otherwise we got UB
-                                #[allow(clippy::cast_ptr_alignment)]
-                                let raw_ptr = Box::into_raw(raw) as *mut io::Error;
-                                match (unsafe { &*raw_ptr }).kind() {
-                                    io::ErrorKind::Interrupted => {}
-                                    _ => return Err(e),
-                                }
+                Err(mut e) => match e.status() {
+                    Status::IOError => {
+                        if let Some(r) = e.take_raw() {
+                            match r.downcast_ref::<io::Error>() {
+                                Some(r) if r.kind() == io::ErrorKind::Interrupted => {}
+                                _ => return Err(e),
                             }
                         }
-                        _ => return Err(e),
                     }
-                }
+                    _ => return Err(e),
+                },
             }
         }
         if !buf.is_empty() {
