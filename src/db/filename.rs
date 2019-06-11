@@ -130,19 +130,32 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg(unix)]
     fn test_generate_filename() {
         let dirname = "test";
-        let mut tests = vec![
-            (FileType::Log, 10, "test/000010.log"),
-            (FileType::Lock, 1, "test/LOCK"),
-            (FileType::Table, 123, "test/000123.sst"),
-            (FileType::Manifest, 9, "test/MANIFEST-000009"),
-            (FileType::Current, 1, "test/CURRENT"),
-            (FileType::Temp, 100, "test/000100.dbtmp"),
-            (FileType::InfoLog, 1, "test/LOG"),
-            (FileType::OldInfoLog, 1, "test/LOG.old"),
-        ];
+        let mut tests = if cfg!(windows) {
+            vec![
+                (FileType::Log, 10, "test\\000010.log"),
+                (FileType::Lock, 1, "test\\LOCK"),
+                (FileType::Table, 123, "test\\000123.sst"),
+                (FileType::Manifest, 9, "test\\MANIFEST-000009"),
+                (FileType::Current, 1, "test\\CURRENT"),
+                (FileType::Temp, 100, "test\\000100.dbtmp"),
+                (FileType::InfoLog, 1, "test\\LOG"),
+                (FileType::OldInfoLog, 1, "test\\LOG.old"),
+            ]
+        } else {
+            vec![
+                (FileType::Log, 10, "test/000010.log"),
+                (FileType::Lock, 1, "test/LOCK"),
+                (FileType::Table, 123, "test/000123.sst"),
+                (FileType::Manifest, 9, "test/MANIFEST-000009"),
+                (FileType::Current, 1, "test/CURRENT"),
+                (FileType::Temp, 100, "test/000100.dbtmp"),
+                (FileType::InfoLog, 1, "test/LOG"),
+                (FileType::OldInfoLog, 1, "test/LOG.old"),
+            ]
+        };
+
         for (ft, seq, expect) in tests.drain(..) {
             let name = generate_filename(dirname, ft, seq);
             assert_eq!(name.as_str(), expect);
@@ -150,31 +163,50 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
     fn test_parse_filename() {
-        let mut tests = vec![
-            ("a/b/c/000123.log", Some((FileType::Log, 123))),
-            ("a/b/c/LOCK", Some((FileType::Lock, 0))),
-            ("a/b/c/010666.sst", Some((FileType::Table, 10666))),
-            ("a/b/c/MANIFEST-000009", Some((FileType::Manifest, 9))),
-            ("a/b/c/000123.dbtmp", Some((FileType::Temp, 123))),
-            ("a/b/c/CURRENT", Some((FileType::Current, 0))),
-            ("a/b/c/LOG", Some((FileType::InfoLog, 0))),
-            ("a/b/c/LOG.old", Some((FileType::OldInfoLog, 0))),
-            // invalid conditions
-            ("a/b/c/test.123", None),
-            ("a/b/c/LOG.", None),
-            ("a/b/c/LOG.new", None),
-            ("a/b/c/000def.log", None),
-            ("a/b/c/MANIFEST-abcedf", None),
-            ("a/b/c/MANIFEST", None),
-            ("a/b/c/MANIFEST-123123-abcdef", None),
-        ];
+        let mut tests = if cfg!(windows) {
+            vec![
+                ("a\\b\\c\\000123.log", Some((FileType::Log, 123))),
+                ("a\\b\\c\\LOCK", Some((FileType::Lock, 0))),
+                ("a\\b\\c\\010666.sst", Some((FileType::Table, 10666))),
+                ("a\\b\\c\\MANIFEST-000009", Some((FileType::Manifest, 9))),
+                ("a\\b\\c\\000123.dbtmp", Some((FileType::Temp, 123))),
+                ("a\\b\\c\\CURRENT", Some((FileType::Current, 0))),
+                ("a\\b\\c\\LOG", Some((FileType::InfoLog, 0))),
+                ("a\\b\\c\\LOG.old", Some((FileType::OldInfoLog, 0))),
+                ("a\\b\\c\\test.123", None),
+                ("a\\b\\c\\LOG.", None),
+                ("a\\b\\c\\LOG.new", None),
+                ("a\\b\\c\\000def.log", None),
+                ("a\\b\\c\\MANIFEST-abcedf", None),
+                ("a\\b\\c\\MANIFEST", None),
+                ("a\\b\\c\\MANIFEST-123123-abcdef", None),
+            ]
+        } else {
+            vec![
+                ("a/b/c/000123.log", Some((FileType::Log, 123))),
+                ("a/b/c/LOCK", Some((FileType::Lock, 0))),
+                ("a/b/c/010666.sst", Some((FileType::Table, 10666))),
+                ("a/b/c/MANIFEST-000009", Some((FileType::Manifest, 9))),
+                ("a/b/c/000123.dbtmp", Some((FileType::Temp, 123))),
+                ("a/b/c/CURRENT", Some((FileType::Current, 0))),
+                ("a/b/c/LOG", Some((FileType::InfoLog, 0))),
+                ("a/b/c/LOG.old", Some((FileType::OldInfoLog, 0))),
+                // invalid conditions
+                ("a/b/c/test.123", None),
+                ("a/b/c/LOG.", None),
+                ("a/b/c/LOG.new", None),
+                ("a/b/c/000def.log", None),
+                ("a/b/c/MANIFEST-abcedf", None),
+                ("a/b/c/MANIFEST", None),
+                ("a/b/c/MANIFEST-123123-abcdef", None),
+            ]
+        };
+
         for (filename, expect) in tests.drain(..) {
             let result = parse_filename(filename);
             assert_eq!(result, expect);
         }
     }
 
-    // TODO: add windows support
 }
