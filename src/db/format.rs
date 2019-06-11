@@ -335,7 +335,7 @@ impl FilterPolicy for InternalFilterPolicy {
 
 // use a `Slice` to represent only the user key in a internal key slice
 #[inline]
-fn extract_user_key(key: &[u8]) -> Slice {
+pub fn extract_user_key(key: &[u8]) -> Slice {
     let size = key.len();
     assert!(
         size >= 8,

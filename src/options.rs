@@ -104,6 +104,9 @@ pub struct Options {
     /// space if the same key space is being repeatedly overwritten.
     pub max_mem_compact_level: usize,
 
+    /// Approximate gap in bytes between samples of data read during iteration
+    pub read_bytes_period: u64,
+
     // -------------------
     // Parameters that affect performance:
     /// Amount of data to build up in memory (backed by an unsorted log
@@ -261,8 +264,9 @@ impl Default for Options {
             l0_compaction_threshold: 4,
             l0_slowdown_writes_threshold: 8,
             l0_stop_writes_threshold: 12,
-            l1_max_bytes: 64 * 1024 * 1024,     // 64MB
+            l1_max_bytes: 64 * 1024 * 1024, // 64MB
             max_mem_compact_level: 2,
+            read_bytes_period: 1048576,
             write_buffer_size: 4 * 1024 * 1024, // 4MB
             max_open_files: 500,
             block_cache: Some(Arc::new(SharedLRUCache::new(8 << 20))),

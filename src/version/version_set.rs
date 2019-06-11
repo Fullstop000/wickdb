@@ -19,19 +19,21 @@ use crate::compaction::{Compaction, CompactionStats, ManualCompaction};
 use crate::db::build_table;
 use crate::db::filename::{generate_filename, parse_filename, update_current, FileType};
 use crate::db::format::{InternalKey, InternalKeyComparator};
-use crate::iterator::Iterator;
+use crate::iterator::{ConcatenateIterator, DerivedIterFactory, EmptyIterator, Iterator};
 use crate::options::Options;
 use crate::record::reader::Reader;
 use crate::record::writer::Writer;
 use crate::snapshot::{Snapshot, SnapshotList};
 use crate::sstable::table::TableBuilder;
 use crate::table_cache::TableCache;
+use crate::util::coding::decode_fixed_64;
 use crate::util::comparator::{BytewiseComparator, Comparator};
 use crate::util::reporter::LogReporter;
 use crate::util::slice::Slice;
 use crate::util::status::{Result, Status, WickErr};
 use crate::version::version_edit::{FileMetaData, VersionEdit};
-use crate::version::Version;
+use crate::version::{LevelFileNumIterator, Version, FILE_META_LENGTH};
+use crate::ReadOptions;
 use hashbrown::HashSet;
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::vec_deque::VecDeque;
@@ -295,6 +297,40 @@ impl VersionSet {
     #[inline]
     pub fn new_snapshot(&mut self) -> Arc<Snapshot> {
         self.snapshots.snapshot(self.last_sequence)
+    }
+
+    /// Returns the collection of all the file iterators in current version
+    pub fn current_iters(
+        &self,
+        read_opt: Rc<ReadOptions>,
+        table_cache: Arc<TableCache>,
+    ) -> Vec<Box<dyn Iterator>> {
+        let version = self.current();
+        let mut res = vec![];
+        // Merge all level zero files together since they may overlap
+        for file in version.files[0].iter() {
+            res.push(table_cache.new_iter(read_opt.clone(), file.number, file.file_size));
+        }
+
+        // For levels > 0, we can use a concatenating iterator that sequentially
+        // walks through the non-overlapping files in the level, opening them
+        // lazily
+        for files in version.files.iter().skip(1) {
+            if !files.is_empty() {
+                let level_file_iter = LevelFileNumIterator::new(
+                    Arc::new(InternalKeyComparator::new(self.options.comparator.clone())),
+                    files.clone(),
+                );
+                let factory = FileIterFactory::new(table_cache.clone());
+                let iter = ConcatenateIterator::new(
+                    read_opt.clone(),
+                    Box::new(level_file_iter),
+                    Box::new(factory),
+                );
+                res.push(Box::new(iter));
+            }
+        }
+        res
     }
 
     /// Apply `edit` to the current version to form a new descriptor that
@@ -929,6 +965,31 @@ impl VersionSet {
             }
         } else {
             false
+        }
+    }
+}
+
+pub struct FileIterFactory {
+    table_cache: Arc<TableCache>,
+}
+
+impl FileIterFactory {
+    pub fn new(table_cache: Arc<TableCache>) -> Self {
+        Self { table_cache }
+    }
+}
+
+impl DerivedIterFactory for FileIterFactory {
+    fn produce(&self, options: Rc<ReadOptions>, value: &Slice) -> Result<Box<dyn Iterator>> {
+        if value.size() != 2 * FILE_META_LENGTH {
+            Ok(Box::new(EmptyIterator::new_with_err(WickErr::new(
+                Status::Corruption,
+                Some("file reader invoked with unexpected value"),
+            ))))
+        } else {
+            let file_number = decode_fixed_64(value.as_slice());
+            let file_size = decode_fixed_64(&value.as_slice()[8..]);
+            Ok(self.table_cache.new_iter(options, file_number, file_size))
         }
     }
 }

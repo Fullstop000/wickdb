@@ -13,6 +13,7 @@
 
 pub mod filename;
 pub mod format;
+pub mod iterator;
 
 use crate::batch::{WriteBatch, HEADER_SIZE};
 use crate::compaction::{Compaction, CompactionInputsRelation};
@@ -20,7 +21,8 @@ use crate::db::filename::{generate_filename, parse_filename, update_current, Fil
 use crate::db::format::{
     InternalKey, InternalKeyComparator, LookupKey, ParsedInternalKey, ValueType,
 };
-use crate::iterator::Iterator;
+use crate::db::iterator::DBIterator;
+use crate::iterator::{Iterator, MergingIterator};
 use crate::mem::{MemTable, MemoryTable};
 use crate::options::{Options, ReadOptions, WriteOptions};
 use crate::record::reader::Reader;
@@ -36,6 +38,7 @@ use crate::version::version_edit::{FileMetaData, VersionEdit};
 use crate::version::version_set::VersionSet;
 use crossbeam_channel::{Receiver, Sender};
 use crossbeam_utils::sync::ShardedLock;
+use std::cell::RefCell;
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::vec_deque::VecDeque;
 use std::mem;
@@ -57,6 +60,9 @@ pub trait DB {
     /// `get` gets the value for the given key. It returns `None` if the DB
     /// does not contain the key.
     fn get(&self, read_opt: ReadOptions, key: Slice) -> Result<Option<Slice>>;
+
+    /// Return an iterator over the contents of the database.
+    fn iter(&self, read_opt: ReadOptions) -> Box<dyn Iterator>;
 
     /// `delete` deletes the value for the given key. It returns `Status::NotFound` if
     /// the DB does not contain the key.
@@ -92,6 +98,38 @@ impl DB for WickDB {
 
     fn get(&self, options: ReadOptions, key: Slice) -> Result<Option<Slice>> {
         self.inner.get(options, key)
+    }
+
+    fn iter(&self, read_opt: ReadOptions) -> Box<dyn Iterator> {
+        let ucmp = self.inner.internal_comparator.user_comparator.clone();
+        let sequence = if let Some(snapshot) = &read_opt.snapshot {
+            snapshot.sequence()
+        } else {
+            self.inner.versions.lock().unwrap().get_last_sequence()
+        };
+        let mut children = vec![];
+        children.push(Rc::new(RefCell::new(
+            self.inner.mem.read().unwrap().new_iterator(),
+        )));
+        if let Some(im_mem) = self.inner.im_mem.read().unwrap().as_ref() {
+            children.push(Rc::new(RefCell::new(im_mem.new_iterator())));
+        }
+        let mut table_iters = self
+            .inner
+            .versions
+            .lock()
+            .unwrap()
+            .current_iters(Rc::new(read_opt), self.inner.table_cache.clone());
+        for iter in table_iters.drain(..) {
+            children.push(Rc::new(RefCell::new(iter)));
+        }
+        let iter = MergingIterator::new(self.inner.internal_comparator.clone(), children);
+        Box::new(DBIterator::new(
+            Box::new(iter),
+            self.inner.clone(),
+            sequence,
+            ucmp,
+        ))
     }
 
     fn delete(&self, options: WriteOptions, key: Slice) -> Result<()> {
@@ -292,7 +330,7 @@ impl Clone for WickDB {
     }
 }
 
-struct DBImpl {
+pub struct DBImpl {
     env: Arc<dyn Storage>,
     internal_comparator: Arc<InternalKeyComparator>,
     options: Arc<Options>,
@@ -408,6 +446,20 @@ impl DBImpl {
             self.maybe_schedule_compaction()
         }
         Ok(value)
+    }
+
+    // Record a sample of bytes read at the specified internal key
+    // Might schedule a background compaction.
+    fn record_read_sample(&self, key: Slice) {
+        if self
+            .versions
+            .lock()
+            .unwrap()
+            .current()
+            .record_read_sample(key)
+        {
+            self.maybe_schedule_compaction()
+        }
     }
 
     // Recover DB from `db_name`.
