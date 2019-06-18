@@ -230,11 +230,11 @@ impl Options {
             self.block_cache = Some(Arc::new(SharedLRUCache::new(8 << 20)))
         }
     }
-
+    #[allow(unused_must_use)]
     fn apply_logger(&mut self) {
         if let Some(logger) = self.logger.take() {
             let static_logger: &'static Log = Box::leak(logger);
-            log::set_logger(static_logger).unwrap();
+            log::set_logger(static_logger);
             log::set_max_level(self.logger_level);
             info!("Logger initialized");
         }
