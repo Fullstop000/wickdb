@@ -100,8 +100,6 @@ impl Default for Block {
         }
     }
 }
-unsafe impl Send for Block {}
-unsafe impl Sync for Block {}
 
 /// Iterator for every entry in the block
 pub struct BlockIterator {
