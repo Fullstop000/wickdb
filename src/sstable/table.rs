@@ -30,6 +30,7 @@ use crate::util::status::{Result, Status, WickErr};
 use std::cmp::Ordering;
 use std::rc::Rc;
 use std::sync::Arc;
+use snap::max_compress_len;
 
 /// A `Table` is a sorted map from strings to strings.  Tables are
 /// immutable and persistent.  A Table may be safely accessed from
@@ -552,7 +553,7 @@ fn compress_block(
         CompressionType::SnappyCompression => {
             let mut enc = snap::Encoder::new();
             // TODO: avoid this allocation ?
-            let mut buffer = vec![];
+            let mut buffer = vec![0; max_compress_len(raw_block.len())];
             match enc.compress(raw_block, buffer.as_mut_slice()) {
                 Ok(_) => {}
                 Err(e) => {
