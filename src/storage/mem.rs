@@ -172,7 +172,8 @@ impl File for InmemFile {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         let pos = self.contents.position();
         // Set position to last to prevent overwritting
-        self.contents.set_position(self.contents.get_ref().len() as u64);
+        self.contents
+            .set_position(self.contents.get_ref().len() as u64);
         let r = self.contents.write(buf);
         // Prevent position from being modified
         self.contents.set_position(pos);
@@ -260,7 +261,10 @@ mod tests {
         assert_eq!(written2, 12);
         let (pos, data) = f.get_pos_and_data();
         assert_eq!(pos, 0);
-        assert_eq!(String::from_utf8(Vec::from(data)).unwrap(), "hello world|hello world");
+        assert_eq!(
+            String::from_utf8(Vec::from(data)).unwrap(),
+            "hello world|hello world"
+        );
         let mut read_buf = vec![0u8; 5];
         let read = f.read(read_buf.as_mut_slice()).expect("read should work");
         assert_eq!(read, 5);
@@ -269,7 +273,10 @@ mod tests {
         read_buf.clear();
         let all = f.read_all(&mut read_buf).expect("read_all should work");
         assert_eq!(all, written1 + written2);
-        assert_eq!(String::from_utf8(read_buf.clone()).unwrap(), "hello world|hello world");
+        assert_eq!(
+            String::from_utf8(read_buf.clone()).unwrap(),
+            "hello world|hello world"
+        );
     }
 
     #[test]

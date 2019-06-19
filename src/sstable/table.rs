@@ -27,10 +27,10 @@ use crate::util::comparator::Comparator;
 use crate::util::crc32::{extend, unmask, value};
 use crate::util::slice::Slice;
 use crate::util::status::{Result, Status, WickErr};
+use snap::max_compress_len;
 use std::cmp::Ordering;
 use std::rc::Rc;
 use std::sync::Arc;
-use snap::max_compress_len;
 
 /// A `Table` is a sorted map from strings to strings.  Tables are
 /// immutable and persistent.  A Table may be safely accessed from
