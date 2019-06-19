@@ -232,7 +232,7 @@ impl File for InmemFile {
             if offset > length - 1 {
                 return Ok(0);
             }
-            let exact = if buf.len() as u64 + offset > length - 1 {
+            let exact = if buf.len() as u64 + offset > length {
                 return Err(WickErr::new(Status::IOError, Some("EOF")));
             } else {
                 buf.len()
@@ -300,9 +300,10 @@ mod tests {
         f.write(&buf).expect("");
 
         for (offset, buf_len, is_ok) in vec![
+            (0, 0, true),
+            (0, 400, true),
             (0, 100, true),
-            (300, 99, true),
-            (300, 100, false),
+            (300, 100, true),
             (340, 100, false),
         ]
         .drain(..)
@@ -317,7 +318,10 @@ mod tests {
                 buf_len
             );
             match res {
-                Ok(size) => assert_eq!(buf_len, size),
+                Ok(size) => {
+                    assert_eq!(buf_len, size);
+                    assert_eq!(read_buf.as_slice(), &buf.as_slice()[offset as usize..offset as usize + buf_len])
+                },
                 Err(e) => assert_eq!(e.description(), "EOF"),
             }
         }

@@ -111,6 +111,8 @@ pub trait File {
                                 Some(r) if r.kind() == io::ErrorKind::Interrupted => {}
                                 _ => return Err(e),
                             }
+                        } else {
+                            return Err(e)
                         }
                     }
                     _ => return Err(e),
