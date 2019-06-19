@@ -414,6 +414,8 @@ impl BlockBuilder {
         // update last_key
         self.last_key.clear();
         self.last_key.extend_from_slice(key);
+        // update counter
+        self.counter+=1
     }
 
     /// Returns true iff no entries have been added since the last `reset()`
