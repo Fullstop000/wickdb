@@ -320,8 +320,11 @@ mod tests {
             match res {
                 Ok(size) => {
                     assert_eq!(buf_len, size);
-                    assert_eq!(read_buf.as_slice(), &buf.as_slice()[offset as usize..offset as usize + buf_len])
-                },
+                    assert_eq!(
+                        read_buf.as_slice(),
+                        &buf.as_slice()[offset as usize..offset as usize + buf_len]
+                    )
+                }
                 Err(e) => assert_eq!(e.description(), "EOF"),
             }
         }
