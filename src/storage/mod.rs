@@ -112,7 +112,7 @@ pub trait File {
                                 _ => return Err(e),
                             }
                         } else {
-                            return Err(e)
+                            return Err(e);
                         }
                     }
                     _ => return Err(e),

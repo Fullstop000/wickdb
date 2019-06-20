@@ -24,7 +24,7 @@ use crate::sstable::{BlockHandle, Footer, BLOCK_TRAILER_SIZE, FOOTER_ENCODED_LEN
 use crate::storage::File;
 use crate::util::coding::{decode_fixed_32, put_fixed_32, put_fixed_64};
 use crate::util::comparator::Comparator;
-use crate::util::crc32::{extend, unmask, value};
+use crate::util::crc32::{extend, mask, unmask, value};
 use crate::util::slice::Slice;
 use crate::util::status::{Result, Status, WickErr};
 use snap::max_compress_len;
@@ -64,7 +64,6 @@ impl Table {
             size - FOOTER_ENCODED_LENGTH as u64,
         )?;
         let (footer, _) = Footer::decode_from(footer_space.as_slice())?;
-
         // Read the index block
         let index_block_contents =
             read_block(file.as_ref(), &footer.index_handle, options.paranoid_checks)?;
@@ -438,8 +437,8 @@ impl TableBuilder {
         };
         self.write_block(meta_block, &mut meta_block_handle)?;
 
-        // write index block
-        self.maybe_append_index_block(None);
+        // Write index block
+        self.maybe_append_index_block(None); // flush the last index first
         let index_block = self.index_block.finish();
         let mut index_block_handle = BlockHandle::new(0, 0);
         let (c_index_block, ct) = compress_block(index_block, self.options.compression)?;
@@ -517,28 +516,13 @@ impl TableBuilder {
 
     fn write_block(&mut self, raw_block: &[u8], handle: &mut BlockHandle) -> Result<()> {
         let (data, compression) = compress_block(raw_block, self.options.compression)?;
-        self.write_raw_block(data.as_slice(), compression, handle)?;
-        Ok(())
-    }
-
-    // Write given block `data` with trailer to the file and update the 'handle'
-    fn write_raw_block(
-        &mut self,
-        data: &[u8],
-        compression: CompressionType,
-        handle: &mut BlockHandle,
-    ) -> Result<()> {
-        handle.set_offset(self.offset);
-        handle.set_size(data.len() as u64);
-        // write block data
-        self.file.write(data)?;
-        // write trailer
-        let mut trailer = vec![0u8; BLOCK_TRAILER_SIZE];
-        trailer[0] = compression as u8;
-        let crc = extend(value(data), &[compression as u8]);
-        put_fixed_32(&mut trailer, crc);
-        self.file.write(trailer.as_slice())?;
-        self.offset += (data.len() + BLOCK_TRAILER_SIZE) as u64;
+        write_raw_block(
+            self.file.as_mut(),
+            &data,
+            compression,
+            handle,
+            &mut self.offset,
+        )?;
         Ok(())
     }
 }
@@ -555,7 +539,7 @@ fn compress_block(
             // TODO: avoid this allocation ?
             let mut buffer = vec![0; max_compress_len(raw_block.len())];
             match enc.compress(raw_block, buffer.as_mut_slice()) {
-                Ok(_) => {}
+                Ok(size) => buffer.truncate(size),
                 Err(e) => {
                     return Err(WickErr::new_from_raw(
                         Status::CompressionError,
@@ -586,10 +570,11 @@ fn write_raw_block(
     handle.set_offset(*offset);
     handle.set_size(data.len() as u64);
     // write trailer
-    let mut trailer = vec![0u8; BLOCK_TRAILER_SIZE];
-    trailer[0] = compression as u8;
-    let crc = extend(value(data), &[compression as u8]);
+    let mut trailer = vec![];
+    trailer.push(compression as u8);
+    let crc = mask(extend(value(data), &[compression as u8]));
     put_fixed_32(&mut trailer, crc);
+    assert_eq!(trailer.len(), BLOCK_TRAILER_SIZE);
     file.write(trailer.as_slice())?;
     // update offset
     *offset += (data.len() + BLOCK_TRAILER_SIZE) as u64;
@@ -604,7 +589,8 @@ pub fn read_block(file: &dyn File, handle: &BlockHandle, verify_checksum: bool) 
     file.read_exact_at(buffer.as_mut_slice(), handle.offset)?;
     if verify_checksum {
         let crc = unmask(decode_fixed_32(&buffer.as_slice()[n + 1..]));
-        let actual = value(&buffer.as_slice()[..n]);
+        // Compression type is included in CRC checksum
+        let actual = value(&buffer.as_slice()[..=n]);
         if crc != actual {
             return Err(WickErr::new(
                 Status::Corruption,
@@ -612,11 +598,10 @@ pub fn read_block(file: &dyn File, handle: &BlockHandle, verify_checksum: bool) 
             ));
         }
     }
-
     let data = {
         match CompressionType::from(buffer[n]) {
             CompressionType::NoCompression => {
-                buffer.truncate(BLOCK_TRAILER_SIZE);
+                buffer.truncate(buffer.len() - BLOCK_TRAILER_SIZE);
                 buffer
             }
             CompressionType::SnappyCompression => {
