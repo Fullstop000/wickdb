@@ -289,7 +289,6 @@ mod tests {
         let mut iter = memtable.iter();
         assert!(!iter.valid());
         let entries = add_test_data_set(&memtable);
-
         // Forward scan
         iter.seek_to_first();
         assert!(iter.valid());

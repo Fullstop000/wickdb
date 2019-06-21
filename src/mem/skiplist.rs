@@ -283,6 +283,9 @@ impl Iterator for SkiplistIterator {
     #[inline]
     fn seek_to_last(&mut self) {
         self.node = self.skl.find_last();
+        if self.node == self.skl.head {
+            self.node = ptr::null_mut();
+        }
     }
 
     /// Advance to the first node with a key >= target

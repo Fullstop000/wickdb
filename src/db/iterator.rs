@@ -193,7 +193,7 @@ impl DBIterator {
         ucmp: Arc<dyn Comparator>,
     ) -> Self {
         Self {
-            valid: true,
+            valid: false,
             db: db.clone(),
             ucmp,
             sequence,
