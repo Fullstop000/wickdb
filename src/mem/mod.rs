@@ -27,9 +27,8 @@ use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
 use crate::util::status::Status;
 use crate::util::status::{Result, WickErr};
-use crate::util::varint::{VarintU32, MAX_VARINT_LEN_U32};
+use crate::util::varint::VarintU32;
 use std::cmp::Ordering;
-use std::slice;
 use std::sync::Arc;
 
 pub trait MemoryTable {
@@ -225,24 +224,24 @@ impl Iterator for MemTableIterator {
 // Returns a new slice points to the data according to the extracted length
 fn extract_varint32_encoded_slice(origin: &mut Slice) -> Slice {
     if origin.is_empty() {
-        return Slice::from("")
+        return Slice::from("");
     }
-    VarintU32::get_varint_prefixed_slice(origin).unwrap_or(Slice::from(""))
+    VarintU32::get_varint_prefixed_slice(origin).unwrap_or_else(|| Slice::from(""))
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::db::format::{InternalKeyComparator, LookupKey, ParsedInternalKey, ValueType};
     use crate::mem::{MemTable, MemoryTable};
-    use crate::db::format::{ValueType, InternalKeyComparator, LookupKey, ParsedInternalKey};
     use crate::util::comparator::BytewiseComparator;
     use crate::util::status::Status;
-    use crate::util::slice::Slice;
-    use std::sync::Arc;
     use rand::Rng;
+    use std::sync::Arc;
 
     fn new_mem_table() -> MemTable {
-        let icmp = Arc::new(
-            InternalKeyComparator::new(Arc::new(BytewiseComparator::new())));
+        let icmp = Arc::new(InternalKeyComparator::new(Arc::new(
+            BytewiseComparator::new(),
+        )));
         MemTable::new(icmp)
     }
 
@@ -297,8 +296,20 @@ mod tests {
         assert!(iter.valid());
         for (key, value) in entries.iter() {
             let pkey = ParsedInternalKey::decode_from(iter.key()).unwrap();
-            assert_eq!(pkey.user_key.as_str(), *key, "expected key: {:?}, but got {:?}", *key, pkey.user_key.as_str());
-            assert_eq!(iter.value().as_str(), *value, "expected value: {:?}, but got {:?}", *value, iter.value().as_str());
+            assert_eq!(
+                pkey.user_key.as_str(),
+                *key,
+                "expected key: {:?}, but got {:?}",
+                *key,
+                pkey.user_key.as_str()
+            );
+            assert_eq!(
+                iter.value().as_str(),
+                *value,
+                "expected value: {:?}, but got {:?}",
+                *value,
+                iter.value().as_str()
+            );
             iter.next();
         }
         assert!(!iter.valid());
@@ -308,8 +319,20 @@ mod tests {
         assert!(iter.valid());
         for (key, value) in entries.iter().rev() {
             let pkey = ParsedInternalKey::decode_from(iter.key()).unwrap();
-            assert_eq!(pkey.user_key.as_str(), *key, "expected key: {:?}, but got {:?}", *key, pkey.user_key.as_str());
-            assert_eq!(iter.value().as_str(), *value, "expected value: {:?}, but got {:?}", *value, iter.value().as_str());
+            assert_eq!(
+                pkey.user_key.as_str(),
+                *key,
+                "expected key: {:?}, but got {:?}",
+                *key,
+                pkey.user_key.as_str()
+            );
+            assert_eq!(
+                iter.value().as_str(),
+                *value,
+                "expected value: {:?}, but got {:?}",
+                *value,
+                iter.value().as_str()
+            );
             iter.prev();
         }
     }

@@ -108,9 +108,7 @@ impl DB for WickDB {
             self.inner.versions.lock().unwrap().get_last_sequence()
         };
         let mut children = vec![];
-        children.push(Rc::new(RefCell::new(
-            self.inner.mem.read().unwrap().iter(),
-        )));
+        children.push(Rc::new(RefCell::new(self.inner.mem.read().unwrap().iter())));
         if let Some(im_mem) = self.inner.im_mem.read().unwrap().as_ref() {
             children.push(Rc::new(RefCell::new(im_mem.iter())));
         }
