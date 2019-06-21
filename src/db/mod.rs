@@ -109,10 +109,10 @@ impl DB for WickDB {
         };
         let mut children = vec![];
         children.push(Rc::new(RefCell::new(
-            self.inner.mem.read().unwrap().new_iterator(),
+            self.inner.mem.read().unwrap().iter(),
         )));
         if let Some(im_mem) = self.inner.im_mem.read().unwrap().as_ref() {
-            children.push(Rc::new(RefCell::new(im_mem.new_iterator())));
+            children.push(Rc::new(RefCell::new(im_mem.iter())));
         }
         let mut table_iters = self
             .inner
@@ -634,7 +634,7 @@ impl DBImpl {
             if mem_ref.approximate_memory_usage() > self.options.write_buffer_size {
                 have_compacted = true;
                 *save_manifest = true;
-                let iter = mem_ref.new_iterator();
+                let iter = mem_ref.iter();
                 versions.write_level0_files(
                     self.db_name.as_str(),
                     self.table_cache.clone(),
@@ -662,7 +662,7 @@ impl DBImpl {
             versions.write_level0_files(
                 self.db_name.as_str(),
                 self.table_cache.clone(),
-                m.new_iterator(),
+                m.iter(),
                 edit,
             )?;
         }
@@ -793,7 +793,7 @@ impl DBImpl {
         match versions.write_level0_files(
             self.db_name.as_str(),
             self.table_cache.clone(),
-            im_mem.as_ref().unwrap().new_iterator(),
+            im_mem.as_ref().unwrap().iter(),
             &mut edit,
         ) {
             Ok(()) => {

@@ -552,7 +552,14 @@ mod tests {
         }
     }
 
-    // this is a e2e test for all methods in SkiplistIterator
+    #[test]
+    fn test_empty_skiplist_iterator() {
+        let skl = new_test_skl();
+        let iter = SkiplistIterator::new(Arc::new(skl));
+        assert!(!iter.valid());
+    }
+
+    // An e2e test for all methods in SkiplistIterator
     #[test]
     fn test_basic() {
         let skl = new_test_skl();
@@ -579,11 +586,21 @@ mod tests {
         assert_eq!(inputs[0], skl_iterator.key().as_str());
         skl_iterator.seek_to_first();
         skl_iterator.seek_to_last();
-        assert_eq!(inputs[inputs.len() - 1], skl_iterator.key().as_str());
+        for key in inputs.clone().drain(..).rev() {
+            if !skl_iterator.valid() {
+                break;
+            }
+            assert_eq!(key, skl_iterator.key().as_str());
+            skl_iterator.prev();
+        }
         skl_iterator.seek(&Slice::from("key7"));
         assert_eq!("key7", skl_iterator.key().as_str());
         skl_iterator.seek(&Slice::from("key4"));
         assert_eq!("key5", skl_iterator.key().as_str());
+        skl_iterator.seek(&Slice::from(""));
+        assert_eq!("key1", skl_iterator.key().as_str());
+        skl_iterator.seek(&Slice::from("llllllllllllllll"));
+        assert!(!skl_iterator.valid());
     }
 
     const K: usize = 4;

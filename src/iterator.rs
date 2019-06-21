@@ -414,12 +414,12 @@ impl MergingIterator {
         }
     }
 
-    pub fn valid_or_panic(&self) {
+    fn valid_or_panic(&self) {
         assert!(self.current.is_some())
     }
 
     // Find the iterator with the smallest 'key' and set it as current
-    pub fn find_smallest(&mut self) {
+    fn find_smallest(&mut self) {
         let mut smallest: Option<Rc<RefCell<Box<dyn Iterator>>>> = None;
         let mut index = self.current_index;
         for (i, child) in self.children.iter().enumerate() {
@@ -439,7 +439,7 @@ impl MergingIterator {
     }
 
     // Find the iterator with the largest 'key' and set it as current
-    pub fn find_largest(&mut self) {
+    fn find_largest(&mut self) {
         let mut largest: Option<Rc<RefCell<Box<dyn Iterator>>>> = None;
         let mut index = self.current_index;
         for (i, child) in self.children.iter().enumerate() {
@@ -461,7 +461,7 @@ impl MergingIterator {
 
 impl Iterator for MergingIterator {
     fn valid(&self) -> bool {
-        self.current.is_some()
+        self.current.is_some() && self.current.as_ref().unwrap().borrow().valid()
     }
 
     fn seek_to_first(&mut self) {

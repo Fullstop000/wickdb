@@ -38,8 +38,7 @@ pub trait MemoryTable {
     fn approximate_memory_usage(&self) -> usize;
 
     /// Return an iterator that yields the contents of the memtable.
-    // TODO: rename this to `iter()`
-    fn new_iterator(&self) -> Box<dyn Iterator>;
+    fn iter(&self) -> Box<dyn Iterator>;
 
     /// Add an entry into memtable that maps key to value at the
     /// specified sequence number and with the specified type.
@@ -79,9 +78,13 @@ struct KeyComparator {
 
 impl Comparator for KeyComparator {
     fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
-        let ia = extract_varint_encoded_slice(Slice::from(a));
-        let ib = extract_varint_encoded_slice(Slice::from(b));
-        self.cmp.compare(ia.as_slice(), ib.as_slice())
+        let ia = extract_varint32_encoded_slice(&mut Slice::from(a));
+        let ib = extract_varint32_encoded_slice(&mut Slice::from(b));
+        if ia.is_empty() || ib.is_empty() {
+            ia.compare(&ib)
+        } else {
+            self.cmp.compare(ia.as_slice(), ib.as_slice())
+        }
     }
 
     fn name(&self) -> &str {
@@ -89,13 +92,13 @@ impl Comparator for KeyComparator {
     }
 
     fn separator(&self, a: &[u8], b: &[u8]) -> Vec<u8> {
-        let ia = extract_varint_encoded_slice(Slice::from(a));
-        let ib = extract_varint_encoded_slice(Slice::from(b));
+        let ia = extract_varint32_encoded_slice(&mut Slice::from(a));
+        let ib = extract_varint32_encoded_slice(&mut Slice::from(b));
         self.cmp.separator(ia.as_slice(), ib.as_slice())
     }
 
     fn successor(&self, key: &[u8]) -> Vec<u8> {
-        let ia = extract_varint_encoded_slice(Slice::from(key));
+        let ia = extract_varint32_encoded_slice(&mut Slice::from(key));
         self.cmp.successor(ia.as_slice())
     }
 }
@@ -120,7 +123,7 @@ impl MemoryTable for MemTable {
         self.table.arena.memory_used()
     }
 
-    fn new_iterator(&self) -> Box<dyn Iterator> {
+    fn iter(&self) -> Box<dyn Iterator> {
         Box::new(MemTableIterator::new(self.table.clone()))
     }
 
@@ -131,8 +134,7 @@ impl MemoryTable for MemTable {
         VarintU32::put_varint(&mut buf, internal_key_size as u32);
         buf.extend_from_slice(key);
         put_fixed_64(&mut buf, (seq_number << 8) | val_type as u64);
-        VarintU32::put_varint(&mut buf, value.len() as u32);
-        buf.extend_from_slice(value);
+        VarintU32::put_varint_prefixed_slice(&mut buf, value);
         // TODO: remove redundant copying
         self.table.insert(Slice::from(buf.as_slice()))
     }
@@ -140,7 +142,7 @@ impl MemoryTable for MemTable {
     fn get(&self, key: &LookupKey) -> Option<Result<Slice>> {
         let mk = key.mem_key();
         // internal key
-        let mut iter = self.new_iterator();
+        let mut iter = self.iter();
         iter.seek(&mk);
         if iter.valid() {
             let internal_key = iter.key();
@@ -204,25 +206,14 @@ impl Iterator for MemTableIterator {
 
     // returns the internal key
     fn key(&self) -> Slice {
-        extract_varint_encoded_slice(self.iter.key())
+        extract_varint32_encoded_slice(&mut self.iter.key())
     }
 
     // returns the Slice represents the value
     fn value(&self) -> Slice {
-        let internal_key = self.key();
-        if internal_key.size() != 0 {
-            unsafe {
-                let val_ptr = internal_key.as_ptr().add(internal_key.size());
-                match VarintU32::read(slice::from_raw_parts(val_ptr, MAX_VARINT_LEN_U32)) {
-                    Some((len, n)) => {
-                        let val_start = val_ptr.add(n);
-                        return Slice::new(val_start, len as usize);
-                    }
-                    None => return Slice::default(),
-                }
-            }
-        }
-        Slice::default()
+        let mut origin = self.iter.key();
+        extract_varint32_encoded_slice(&mut origin);
+        extract_varint32_encoded_slice(&mut origin)
     }
 
     fn status(&mut self) -> Result<()> {
@@ -230,11 +221,96 @@ impl Iterator for MemTableIterator {
     }
 }
 
-// Decodes the length (varint u32) from the first of the give slice and
-// returns a new slice points to the data according to the extracted length
-fn extract_varint_encoded_slice(origin: Slice) -> Slice {
-    match VarintU32::read(origin.as_slice()) {
-        Some((len, n)) => Slice::from(&origin.as_slice()[n..len as usize + n]),
-        None => Slice::default(),
+// Decodes the length (varint u32) from the first of the give slice and advance the origin slice.
+// Returns a new slice points to the data according to the extracted length
+fn extract_varint32_encoded_slice(origin: &mut Slice) -> Slice {
+    if origin.is_empty() {
+        return Slice::from("")
+    }
+    VarintU32::get_varint_prefixed_slice(origin).unwrap_or(Slice::from(""))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::mem::{MemTable, MemoryTable};
+    use crate::db::format::{ValueType, InternalKeyComparator, LookupKey, ParsedInternalKey};
+    use crate::util::comparator::BytewiseComparator;
+    use crate::util::status::Status;
+    use crate::util::slice::Slice;
+    use std::sync::Arc;
+    use rand::Rng;
+
+    fn new_mem_table() -> MemTable {
+        let icmp = Arc::new(
+            InternalKeyComparator::new(Arc::new(BytewiseComparator::new())));
+        MemTable::new(icmp)
+    }
+
+    fn add_test_data_set(memtable: &MemTable) -> Vec<(&str, &str)> {
+        let tests = vec![
+            (2, ValueType::Value, "boo", "boo"),
+            (4, ValueType::Value, "foo", "val3"),
+            (3, ValueType::Deletion, "foo", ""),
+            (2, ValueType::Value, "foo", "val2"),
+            (1, ValueType::Value, "foo", "val1"),
+        ];
+        let mut results = vec![];
+        for (seq, t, key, value) in tests.clone().drain(..) {
+            memtable.add(seq, t, key.as_bytes(), value.as_bytes());
+            results.push((key, value));
+        }
+        results
+    }
+
+    #[test]
+    fn test_memtable_add_get() {
+        let memtable = new_mem_table();
+        memtable.add(1, ValueType::Value, b"foo", b"val1");
+        memtable.add(2, ValueType::Value, b"foo", b"val2");
+        memtable.add(3, ValueType::Deletion, b"foo", b"");
+        memtable.add(4, ValueType::Value, b"foo", b"val3");
+        memtable.add(2, ValueType::Value, b"boo", b"boo");
+
+        let v = memtable.get(&LookupKey::new(b"null", 10));
+        assert!(v.is_none());
+        let v = memtable.get(&LookupKey::new(b"foo", 10));
+        assert_eq!(b"val3", v.unwrap().unwrap().as_slice());
+        let v = memtable.get(&LookupKey::new(b"foo", 0));
+        assert!(v.is_none());
+        let v = memtable.get(&LookupKey::new(b"foo", 1));
+        assert_eq!(b"val1", v.unwrap().unwrap().as_slice());
+        let v = memtable.get(&LookupKey::new(b"foo", 3));
+        assert_eq!(Status::NotFound, v.unwrap().unwrap_err().status());
+        let v = memtable.get(&LookupKey::new(b"boo", 3));
+        assert_eq!(b"boo", v.unwrap().unwrap().as_slice());
+    }
+
+    #[test]
+    fn test_memtable_iter() {
+        let memtable = new_mem_table();
+        let mut iter = memtable.iter();
+        assert!(!iter.valid());
+        let entries = add_test_data_set(&memtable);
+
+        // Forward scan
+        iter.seek_to_first();
+        assert!(iter.valid());
+        for (key, value) in entries.iter() {
+            let pkey = ParsedInternalKey::decode_from(iter.key()).unwrap();
+            assert_eq!(pkey.user_key.as_str(), *key, "expected key: {:?}, but got {:?}", *key, pkey.user_key.as_str());
+            assert_eq!(iter.value().as_str(), *value, "expected value: {:?}, but got {:?}", *value, iter.value().as_str());
+            iter.next();
+        }
+        assert!(!iter.valid());
+
+        // Backward scan
+        iter.seek_to_last();
+        assert!(iter.valid());
+        for (key, value) in entries.iter().rev() {
+            let pkey = ParsedInternalKey::decode_from(iter.key()).unwrap();
+            assert_eq!(pkey.user_key.as_str(), *key, "expected key: {:?}, but got {:?}", *key, pkey.user_key.as_str());
+            assert_eq!(iter.value().as_str(), *value, "expected value: {:?}, but got {:?}", *value, iter.value().as_str());
+            iter.prev();
+        }
     }
 }
