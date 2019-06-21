@@ -235,7 +235,6 @@ mod tests {
     use crate::mem::{MemTable, MemoryTable};
     use crate::util::comparator::BytewiseComparator;
     use crate::util::status::Status;
-    use rand::Rng;
     use std::sync::Arc;
 
     fn new_mem_table() -> MemTable {
@@ -335,5 +334,6 @@ mod tests {
             );
             iter.prev();
         }
+        assert!(!iter.valid());
     }
 }
