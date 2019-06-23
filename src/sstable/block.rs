@@ -419,7 +419,27 @@ impl BlockBuilder {
     }
 
     /// Returns true iff no entries have been added since the last `reset()`
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.buffer.is_empty()
+    }
+
+    /// Reset the current BlockBuilder if it is finished
+    ///
+    /// # Panic
+    ///
+    /// * BlockBuilder is not finished
+    ///
+    #[inline]
+    pub fn reset(&mut self) {
+        assert!(
+            self.finished,
+            "[block] Try to reset an unfinished BlockBuilder"
+        );
+        self.buffer.clear();
+        self.finished = false;
+        self.counter = 0;
+        self.restarts = vec![0; 1];
+        self.last_key.clear();
     }
 }

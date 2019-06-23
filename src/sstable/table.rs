@@ -320,8 +320,8 @@ impl TableBuilder {
     }
 
     /// Adds a key/value pair to the table being constructed.
-    /// If we just have flushed a new block data before, add a index entry into the index block.
     /// If the data block reaches the limit, it will be flushed
+    /// If we just have flushed a new block data before, add an index entry into the index block.
     ///
     /// # Panics
     ///
@@ -337,9 +337,9 @@ impl TableBuilder {
                 "[table builder] new key is inconsistent with the last key in sstable"
             )
         }
-        // check iff we need to add a new entry into the index block
+        // Check iff we need to create a new index entry
         self.maybe_append_index_block(Some(key));
-        // write to filter block
+        // Update filter block
         if let Some(fb) = self.filter_block.as_mut() {
             fb.add_key(&Slice::from(key))
         }
@@ -378,6 +378,7 @@ impl TableBuilder {
                 &mut self.pending_handle,
                 &mut self.offset,
             )?;
+            self.data_block.reset();
             self.pending_index_entry = true;
             if let Err(e) = self.file.flush() {
                 return Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e)));
@@ -390,7 +391,7 @@ impl TableBuilder {
     }
 
     /// Finishes building the table and close the relative file.
-    /// if `sync` is true, the `f_flush` will be called.
+    /// if `sync` is true, the `File::flush` will be called.
     /// Stops using the file passed to the
     /// constructor after this function returns.
     ///
@@ -449,7 +450,7 @@ impl TableBuilder {
             &mut index_block_handle,
             &mut self.offset,
         )?;
-
+        self.index_block.reset();
         // write footer
         let footer = Footer::new(meta_block_handle, index_block_handle).encoded();
         self.file.write(footer.as_slice())?;
@@ -496,8 +497,8 @@ impl TableBuilder {
 
     fn maybe_append_index_block(&mut self, key: Option<&[u8]>) -> bool {
         if self.pending_index_entry {
-            // We've flushed a data block to the file so omit a index entry to index block for it
-            assert!(self.data_block.is_empty(), "[table builder] the data block buffer is not empty after flushed, something wrong must happen");
+            // We've flushed a data block to the file so adding an relate index entry into index block
+            assert!(self.data_block.is_empty(), "[table builder] the data block buffer is not empty after flushed, something is wrong");
             let s = if let Some(k) = key {
                 self.cmp.separator(self.last_key.as_slice(), k)
             } else {
