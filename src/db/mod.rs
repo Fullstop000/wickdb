@@ -80,7 +80,7 @@ pub trait DB {
     fn destroy(&mut self) -> Result<()>;
 
     /// Acquire a `Snapshot` for reading DB
-    fn get_snapshot(&self) -> Arc<Snapshot>;
+    fn snapshot(&self) -> Arc<Snapshot>;
 }
 
 /// The wrapper of `DBImpl` for concurrency control.
@@ -154,8 +154,8 @@ impl DB for WickDB {
         db.options.env.remove_dir(&db.db_name, true)
     }
 
-    fn get_snapshot(&self) -> Arc<Snapshot> {
-        self.inner.get_snapshot()
+    fn snapshot(&self) -> Arc<Snapshot> {
+        self.inner.snapshot()
     }
 }
 
@@ -405,7 +405,7 @@ impl DBImpl {
             is_shutting_down: AtomicBool::new(false),
         }
     }
-    fn get_snapshot(&self) -> Arc<Snapshot> {
+    fn snapshot(&self) -> Arc<Snapshot> {
         self.versions.lock().unwrap().new_snapshot()
     }
 

@@ -158,12 +158,12 @@ impl InmemFile {
     }
 
     #[inline]
-    pub fn get_name(&self) -> &str {
+    pub fn name(&self) -> &str {
         &self.name
     }
 
     #[inline]
-    pub fn get_pos_and_data(&self) -> (u64, &[u8]) {
+    pub fn pos_and_data(&self) -> (u64, &[u8]) {
         (self.contents.position(), self.contents.get_ref().as_slice())
     }
 }
@@ -259,7 +259,7 @@ mod tests {
         assert_eq!(written1, 11);
         let written2 = f.write(b"|hello world").expect("write should work");
         assert_eq!(written2, 12);
-        let (pos, data) = f.get_pos_and_data();
+        let (pos, data) = f.pos_and_data();
         assert_eq!(pos, 0);
         assert_eq!(
             String::from_utf8(Vec::from(data)).unwrap(),
@@ -268,7 +268,7 @@ mod tests {
         let mut read_buf = vec![0u8; 5];
         let read = f.read(read_buf.as_mut_slice()).expect("read should work");
         assert_eq!(read, 5);
-        let (pos, _) = f.get_pos_and_data();
+        let (pos, _) = f.pos_and_data();
         assert_eq!(pos, 5);
         read_buf.clear();
         let all = f.read_all(&mut read_buf).expect("read_all should work");

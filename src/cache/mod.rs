@@ -22,7 +22,7 @@ pub mod lru;
 /// The `Handle` is a simple trait for the value in Cache
 pub trait Handle<T> {
     /// Returns the value the Handle pointing to
-    fn get_value(&self) -> Option<T>;
+    fn value(&self) -> Option<T>;
 }
 
 /// A `Cache` is an interface that maps keys to values.

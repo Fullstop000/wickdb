@@ -255,7 +255,7 @@ impl Compaction {
     /// in levels greater than "level+1".
     pub fn key_exist_in_deeper_level(&mut self, ukey: &Slice) -> bool {
         let v = self.input_version.as_ref().unwrap().clone();
-        let icmp = v.get_comparator().clone();
+        let icmp = v.comparator().clone();
         let ucmp = icmp.user_comparator.as_ref();
         let max_levels = self.options.max_levels as usize;
         if self.level + 2 < max_levels {

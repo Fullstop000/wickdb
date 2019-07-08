@@ -83,7 +83,7 @@ impl TableCache {
         let handle = self.find_table(file_number, file_size)?;
         // every value should be valid so unwrap is safe here
         let parsed_key = handle
-            .get_value()
+            .value()
             .unwrap()
             .internal_get(options, key.as_slice())?;
         self.cache.release(handle);
@@ -105,7 +105,7 @@ impl TableCache {
     ) -> Box<dyn Iterator> {
         match self.find_table(file_number, file_size) {
             Ok(h) => {
-                let table = h.get_value().unwrap();
+                let table = h.value().unwrap();
                 let mut iter = IterWithCleanup::new(new_table_iterator(table, options));
                 let cache = self.cache.clone();
                 iter.register_task(Box::new(move || cache.release(h.clone())));
