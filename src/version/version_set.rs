@@ -222,13 +222,13 @@ impl VersionSet {
 
     /// Returns `prev_log_number`
     #[inline]
-    pub fn get_prev_log_number(&self) -> u64 {
+    pub fn prev_log_number(&self) -> u64 {
         self.prev_log_number
     }
 
     /// Returns current file number of .log file
     #[inline]
-    pub fn get_log_number(&self) -> u64 {
+    pub fn log_number(&self) -> u64 {
         self.log_number
     }
 
@@ -271,13 +271,13 @@ impl VersionSet {
 
     /// Returns the current manifest number
     #[inline]
-    pub fn get_manifest_number(&self) -> u64 {
+    pub fn manifest_number(&self) -> u64 {
         self.manifest_file_number
     }
 
     /// Returns the last sequence of the version set
     #[inline]
-    pub fn get_last_sequence(&self) -> u64 {
+    pub fn last_sequence(&self) -> u64 {
         self.last_sequence
     }
 
