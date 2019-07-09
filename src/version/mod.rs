@@ -304,7 +304,7 @@ impl Version {
 
     /// Returns `icmp`
     #[inline]
-    pub fn get_comparator(&self) -> Arc<InternalKeyComparator> {
+    pub fn comparator(&self) -> Arc<InternalKeyComparator> {
         self.icmp.clone()
     }
 
