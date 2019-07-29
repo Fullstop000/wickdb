@@ -130,7 +130,7 @@ pub struct BlockIterator {
 }
 
 impl BlockIterator {
-    pub fn new(cmp: Arc<Comparator>, data: Rc<Vec<u8>>, restarts: u32, restarts_len: u32) -> Self {
+    pub fn new(cmp: Arc<dyn Comparator>, data: Rc<Vec<u8>>, restarts: u32, restarts_len: u32) -> Self {
         // should be 0
         Self {
             cmp,
@@ -139,7 +139,7 @@ impl BlockIterator {
             restarts,
             restarts_len,
             restart_index: 0,
-            current: 0,
+            current: restarts,
             shared: 0,
             not_shared: 0,
             value_len: 0,
@@ -388,7 +388,7 @@ impl BlockBuilder {
         assert!(
             self.buffer.is_empty()
                 || self.cmp.compare(key, self.last_key.as_slice()) == Ordering::Greater,
-            "[block builder] in consistent new key"
+            "[block builder] inconsistent new key"
         );
         let mut shared = 0;
         if self.counter < self.block_restart_interval {
@@ -441,5 +441,102 @@ impl BlockBuilder {
         self.counter = 0;
         self.restarts = vec![0; 1];
         self.last_key.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::sstable::block::Block;
+    use crate::sstable::block::BlockBuilder;
+    use crate::util::coding::{decode_fixed_32, put_fixed_32};
+    use crate::util::comparator::BytewiseComparator;
+    use crate::util::slice::Slice;
+    use crate::util::status::{Status, WickErr};
+    use std::sync::Arc;
+
+    #[test]
+    fn test_corrupted_block() {
+        let res = Block::new(vec![0, 0, 0]);
+        assert_eq!(res.unwrap_err().status(), Status::Corruption);
+
+        let mut data = vec![];
+        let mut test_restarts = vec![0, 10, 20];
+        let length = test_restarts.len() as u32;
+        for restart in test_restarts.drain(..) {
+            put_fixed_32(&mut data, restart);
+        }
+        // Append invalid length of restarts
+        put_fixed_32(&mut data, length + 1);
+        let res = Block::new(data);
+        assert_eq!(res.unwrap_err().status(), Status::Corruption);
+    }
+
+    #[test]
+    fn test_new_empty_block() {
+        let cmp = Arc::new(BytewiseComparator::new());
+        let mut builder = BlockBuilder::new(2, cmp.clone());
+        let data = builder.finish();
+        let length = data.len();
+        let restarts_len = decode_fixed_32(&data[length - 4..length]);
+        let restarts = &data[..length - 4];
+        assert_eq!(restarts_len, 1);
+        assert_eq!(restarts.len() as u32 / 4, restarts_len);
+        assert_eq!(decode_fixed_32(restarts), 0);
+        let block = Block::new(Vec::from(data)).expect("New block should work");
+        let mut iter = block.iter(cmp.clone());
+        assert!(!iter.valid());
+    }
+
+    #[test]
+    fn test_simple_empty_key() {
+        let cmp = Arc::new(BytewiseComparator::new());
+        let mut builder = BlockBuilder::new(2, cmp.clone());
+        builder.add(b"", b"test");
+        let data = builder.finish();
+        let block = Block::new(Vec::from(data)).expect("New block should work");
+        let mut iter = block.iter(cmp.clone());
+        iter.seek(&Slice::from(""));
+        assert!(iter.valid());
+        let k = iter.key();
+        let v = iter.value();
+        assert_eq!(k.as_str(), "");
+        assert_eq!(v.as_str(), "test")
+    }
+
+    #[test]
+    #[should_panic(expected = "[block builder] inconsistent new key")]
+    fn test_add_inconsistent_key() {
+        let cmp = Arc::new(BytewiseComparator::new());
+        let mut builder = BlockBuilder::new(2, cmp.clone());
+        builder.add(b"ffffff", b"");
+        builder.add(b"a", b"");
+    }
+
+    #[test]
+    fn test_read_write() {
+        let cmp = Arc::new(BytewiseComparator::new());
+        let mut builder = BlockBuilder::new(2, cmp.clone());
+        let mut tests = vec![
+            ("1111", "val1"),
+            ("1112", "val2"),
+            ("1113", "val3"),
+            ("abc", "1"),
+            ("acd", "2"),
+        ];
+        for (key, val) in tests.clone().drain(..) {
+            builder.add(key.as_bytes(), val.as_bytes());
+        }
+        let data = builder.finish();
+        let block = Block::new(Vec::from(data)).expect("New block should work");
+        let mut iter = block.iter(cmp.clone());
+        assert!(!iter.valid());
+        iter.seek_to_first();
+        for (key, val) in tests.clone().drain(..) {
+            assert!(iter.valid());
+            assert_eq!(iter.key().as_str(), key);
+            assert_eq!(iter.value().as_str(), val);
+            iter.next();
+        }
+        assert!(iter.valid());
     }
 }
