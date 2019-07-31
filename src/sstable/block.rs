@@ -130,7 +130,12 @@ pub struct BlockIterator {
 }
 
 impl BlockIterator {
-    pub fn new(cmp: Arc<dyn Comparator>, data: Rc<Vec<u8>>, restarts: u32, restarts_len: u32) -> Self {
+    pub fn new(
+        cmp: Arc<dyn Comparator>,
+        data: Rc<Vec<u8>>,
+        restarts: u32,
+        restarts_len: u32,
+    ) -> Self {
         // should be 0
         Self {
             cmp,
@@ -388,7 +393,9 @@ impl BlockBuilder {
         assert!(
             self.buffer.is_empty()
                 || self.cmp.compare(key, self.last_key.as_slice()) == Ordering::Greater,
-            "[block builder] inconsistent new key"
+            "[block builder] inconsistent new key [{:?}] compared to last_key {:?}",
+            key,
+            self.last_key.as_slice()
         );
         let mut shared = 0;
         if self.counter < self.block_restart_interval {
@@ -452,6 +459,7 @@ mod tests {
     use crate::util::comparator::BytewiseComparator;
     use crate::util::slice::Slice;
     use crate::util::status::{Status, WickErr};
+    use crate::util::varint::VarintU32;
     use std::sync::Arc;
 
     #[test]
@@ -483,7 +491,7 @@ mod tests {
         assert_eq!(restarts.len() as u32 / 4, restarts_len);
         assert_eq!(decode_fixed_32(restarts), 0);
         let block = Block::new(Vec::from(data)).expect("New block should work");
-        let mut iter = block.iter(cmp.clone());
+        let iter = block.iter(cmp.clone());
         assert!(!iter.valid());
     }
 
@@ -513,10 +521,75 @@ mod tests {
     }
 
     #[test]
+    fn test_write_entries() {
+        let cmp = Arc::new(BytewiseComparator::new());
+        let mut builder = BlockBuilder::new(2, cmp.clone());
+        assert!(builder.last_key.is_empty());
+        // Basic key
+        builder.add(b"1111", b"val1");
+        assert_eq!(1, builder.counter);
+        assert_eq!(builder.last_key.as_slice(), b"1111");
+        let (shared, n1) = VarintU32::common_read(builder.buffer.as_slice());
+        assert_eq!(0, shared);
+        assert_eq!(1, n1);
+        let (non_shared, n2) = VarintU32::common_read(&builder.buffer.as_slice()[n1 as usize..]);
+        assert_eq!(4, non_shared);
+        assert_eq!(1, n2);
+        let (value_len, n3) =
+            VarintU32::common_read(&builder.buffer.as_slice()[(n1 + n2) as usize..]);
+        assert_eq!(4, value_len);
+        assert_eq!(1, n3);
+        let key_len = shared + non_shared;
+        let read = (n1 + n2 + n3) as usize;
+        let key = &builder.buffer.as_slice()[read..read + non_shared as usize];
+        assert_eq!(key, b"1111");
+        let val_offset = read + key_len as usize;
+        let val = &builder.buffer.as_slice()[val_offset..val_offset + value_len as usize];
+        assert_eq!(val, b"val1");
+
+        // Shared key
+        let current = val_offset + value_len as usize;
+        builder.add(b"11122", b"val2");
+        let (shared, n1) = VarintU32::common_read(&builder.buffer.as_slice()[current..]);
+        assert_eq!(shared, 3);
+        let (non_shared, n2) =
+            VarintU32::common_read(&builder.buffer.as_slice()[current + n1 as usize..]);
+        assert_eq!(non_shared, 2);
+        let (value_len, n3) =
+            VarintU32::common_read(&builder.buffer.as_slice()[current + (n1 + n2) as usize..]);
+        assert_eq!(value_len, 4);
+        let key_offset = current + (n1 + n2 + n3) as usize;
+        let key = &builder.buffer.as_slice()[key_offset..key_offset + non_shared as usize];
+        assert_eq!(key, b"22"); // compressed
+        let val_offset = key_offset + non_shared as usize;
+        let val = &builder.buffer.as_slice()[val_offset..val_offset + value_len as usize];
+        assert_eq!(val, b"val2");
+    }
+
+    #[test]
+    fn test_write_restarts() {
+        let samples = vec!["1", "12", "123", "abc", "abd", "acd", "bbb"];
+        let cmp = Arc::new(BytewiseComparator::new());
+        let mut tests = vec![
+            (1, vec![0, 4, 9, 15, 21, 27, 33], 39),
+            (2, vec![0, 8, 20, 31], 37),
+            (3, vec![0, 12, 27], 33),
+        ];
+        for (restarts_interval, expected, buffer_size) in tests.drain(..) {
+            let mut builder = BlockBuilder::new(restarts_interval, cmp.clone());
+            for key in samples.clone().drain(..) {
+                builder.add(key.as_bytes(), b"");
+            }
+            assert_eq!(builder.buffer.len(), buffer_size);
+            assert_eq!(builder.restarts, expected);
+        }
+    }
+
+    #[test]
     fn test_read_write() {
         let cmp = Arc::new(BytewiseComparator::new());
         let mut builder = BlockBuilder::new(2, cmp.clone());
-        let mut tests = vec![
+        let tests = vec![
             ("1111", "val1"),
             ("1112", "val2"),
             ("1113", "val3"),
