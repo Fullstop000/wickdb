@@ -116,7 +116,7 @@ pub struct BlockIterator {
     restarts_len: u32,  // length of restarts array
     restart_index: u32, // current restart index
 
-    // current block offset entry
+    // block offset of current entry start
     current: u32,
 
     /*
@@ -126,7 +126,7 @@ pub struct BlockIterator {
     not_shared: u32, // not shared length
     value_len: u32,  // value length
     key_offset: u32, // the offset of the key in the block
-    key: Vec<u8>,    // buffer for a concated key
+    key: Vec<u8>,    // buffer for a completed key
 }
 
 impl BlockIterator {
@@ -156,7 +156,7 @@ impl BlockIterator {
     // return the offset in data just past the end of the current entry
     #[inline]
     fn next_entry_offset(&self) -> u32 {
-        self.key_offset + self.shared + self.not_shared + self.value_len
+        self.key_offset + self.not_shared + self.value_len
     }
 
     #[inline]
@@ -170,7 +170,7 @@ impl BlockIterator {
         self.current = self.get_restart_point(index);
     }
 
-    // decodes a block entry from `current`
+    // Decodes a block entry from `current`
     // mark as corrupted when the current entry tail overflows the starting offset of restarts
     fn parse_block_entry(&mut self) -> bool {
         let offset = self.current;
@@ -179,20 +179,19 @@ impl BlockIterator {
         let (not_shared, n1) = VarintU32::common_read(&src[n0 as usize..]);
         let (value_len, n2) = VarintU32::common_read(&src[(n1 + n0) as usize..]);
         let n = (n0 + n1 + n2) as u32;
-        //
         if offset + n + shared + not_shared + value_len > self.restarts {
             self.corruption_err();
             return false;
         }
         self.key_offset = self.current + n;
-        self.shared = shared;
+        self.shared = shared; // actually not be used
         self.not_shared = not_shared;
         self.value_len = value_len;
-        let key_len = (shared + not_shared) as usize;
-        // update current key
-        self.key.resize(key_len, 0);
-        let delta = &src[self.key_offset as usize..self.key_offset as usize + key_len];
-        for i in shared as usize..self.key.len() {
+        let total_key_len = (shared + not_shared) as usize;
+        self.key.resize(total_key_len, 0);
+        // compressed key
+        let delta = &self.data[self.key_offset as usize..(self.key_offset + not_shared) as usize];
+        for i in shared as usize..total_key_len {
             self.key[i] = delta[i - shared as usize]
         }
         // update restart index
@@ -209,7 +208,7 @@ impl BlockIterator {
     fn corruption_err(&mut self) {
         self.err = Some(WickErr::new(Status::Corruption, Some("bad entry in block")));
         self.key.clear();
-        self.current = 0;
+        self.current = self.restarts;
         self.restart_index = self.restarts_len
     }
 
@@ -233,6 +232,7 @@ impl Iterator for BlockIterator {
 
     fn seek_to_first(&mut self) {
         self.seek_to_restart_point(0);
+        self.parse_block_entry();
     }
 
     fn seek_to_last(&mut self) {
@@ -261,7 +261,7 @@ impl Iterator for BlockIterator {
             }
             let key_offset = region_offset + (n0 + n1 + n2) as u32;
             let key_len = (shared + not_shared) as usize;
-            let mid_key = &src[key_offset as usize..key_offset as usize + key_len];
+            let mid_key = &self.data[key_offset as usize..key_offset as usize + key_len];
             match self.cmp.compare(&mid_key, target.as_slice()) {
                 Ordering::Less => left = mid,
                 _ => right = mid - 1,
@@ -286,7 +286,7 @@ impl Iterator for BlockIterator {
 
     fn next(&mut self) {
         self.valid_or_panic();
-        // should set the next current offset first
+        // Set the next current offset first
         self.current = self.next_entry_offset();
         self.parse_block_entry();
     }
@@ -294,7 +294,18 @@ impl Iterator for BlockIterator {
     // seek to prev restart offset and scan backwards to a restart point before current
     fn prev(&mut self) {
         let original = self.current;
-        while self.get_restart_point(self.restart_index) >= original {}
+        while self.get_restart_point(self.restart_index) >= original {
+            if self.restart_index == 0 {
+                // No more entries
+                // marked as invalid
+                self.current = self.restarts;
+                self.restart_index = self.restarts_len;
+            }
+            self.restart_index -= 1
+        }
+        self.seek_to_restart_point(self.restart_index);
+        // Loop until end of current entry hits the start of original entry
+        while self.parse_block_entry() && self.next_entry_offset() < original {}
     }
 
     fn key(&self) -> Slice {
@@ -453,14 +464,27 @@ impl BlockBuilder {
 
 #[cfg(test)]
 mod tests {
-    use crate::sstable::block::Block;
+    use crate::iterator::Iterator;
     use crate::sstable::block::BlockBuilder;
+    use crate::sstable::block::{Block, BlockIterator};
     use crate::util::coding::{decode_fixed_32, put_fixed_32};
     use crate::util::comparator::BytewiseComparator;
     use crate::util::slice::Slice;
     use crate::util::status::{Status, WickErr};
     use crate::util::varint::VarintU32;
     use std::sync::Arc;
+
+    fn new_test_block() -> Vec<u8> {
+        let mut samples = vec!["1", "12", "123", "abc", "abd", "acd", "bbb"];
+        let cmp = Arc::new(BytewiseComparator::new());
+        let mut builder = BlockBuilder::new(3, cmp.clone());
+        for key in samples.drain(..) {
+            builder.add(key.as_bytes(), key.as_bytes());
+        }
+        // restarts: [0, 18, 42]
+        // entries data size: 51
+        Vec::from(builder.finish())
+    }
 
     #[test]
     fn test_corrupted_block() {
@@ -493,6 +517,14 @@ mod tests {
         let block = Block::new(Vec::from(data)).expect("New block should work");
         let iter = block.iter(cmp.clone());
         assert!(!iter.valid());
+    }
+
+    #[test]
+    fn test_new_block_from_bytes() {
+        let data = new_test_block();
+        assert_eq!(Block::restarts_len(&data), 3);
+        let block = Block::new(data).expect("");
+        assert_eq!(block.restart_offset, 51);
     }
 
     #[test]
@@ -583,6 +615,43 @@ mod tests {
             assert_eq!(builder.buffer.len(), buffer_size);
             assert_eq!(builder.restarts, expected);
         }
+    }
+
+    #[test]
+    fn test_block_iter() {
+        let cmp = Arc::new(BytewiseComparator::new());
+        // keys ["1", "12", "123", "abc", "abd", "acd", "bbb"]
+        let data = new_test_block();
+        let restarts_len = Block::restarts_len(&data);
+        let block = Block::new(data).expect("");
+        let mut iter =
+            BlockIterator::new(cmp, block.data.clone(), block.restart_offset, restarts_len);
+        assert!(!iter.valid());
+        iter.seek_to_first();
+        assert_eq!(iter.current, 0);
+        assert_eq!(iter.key().as_str(), "1");
+        assert_eq!(iter.value().as_str(), "1");
+        iter.next();
+        assert_eq!(iter.current, 5); // shared 1 + non_shared 1 + value_len 1 + key 1 + value + 1
+        assert_eq!(iter.key_offset, 8);
+        assert_eq!(iter.key().as_str(), "12");
+        assert_eq!(iter.value().as_str(), "12");
+        iter.prev();
+        assert_eq!(iter.current, 0);
+        assert_eq!(iter.key().as_str(), "1");
+        assert_eq!(iter.value().as_str(), "1");
+        iter.seek_to_last();
+        assert_eq!(iter.key().as_str(), "bbb");
+        assert_eq!(iter.value().as_str(), "bbb");
+        // Seek
+        iter.seek(&Slice::from("abd"));
+        assert_eq!(iter.key().as_str(), "abd");
+        assert_eq!(iter.value().as_str(), "abd");
+        iter.seek(&Slice::from(""));
+        assert_eq!(iter.key().as_str(), "1");
+        assert_eq!(iter.value().as_str(), "1");
+        iter.seek(&Slice::from("zzzzzzzzzzzzzzz"));
+        assert!(!iter.valid());
     }
 
     #[test]
