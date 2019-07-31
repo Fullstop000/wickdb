@@ -679,6 +679,6 @@ mod tests {
             assert_eq!(iter.value().as_str(), val);
             iter.next();
         }
-        assert!(iter.valid());
+        assert!(!iter.valid());
     }
 }
