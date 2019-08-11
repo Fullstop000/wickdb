@@ -16,20 +16,15 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
 use crate::db::format::{InternalKey, InternalKeyComparator};
-use crate::iterator::{
-    ConcatenateIterator, DerivedIterFactory, EmptyIterator, Iterator, MergingIterator,
-};
+use crate::iterator::{ConcatenateIterator, Iterator, MergingIterator};
 use crate::options::{Options, ReadOptions};
 use crate::sstable::table::TableBuilder;
 use crate::table_cache::TableCache;
-use crate::util::coding::decode_fixed_64;
 use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
-use crate::util::status::Result;
-use crate::util::status::{Status, WickErr};
 use crate::version::version_edit::{FileMetaData, VersionEdit};
-use crate::version::version_set::VersionSet;
-use crate::version::{LevelFileNumIterator, Version, FILE_META_LENGTH};
+use crate::version::version_set::{FileIterFactory, VersionSet};
+use crate::version::{LevelFileNumIterator, Version};
 use std::cell::RefCell;
 use std::cmp::Ordering as CmpOrdering;
 use std::rc::Rc;
@@ -218,9 +213,7 @@ impl Compaction {
                     }
                 } else {
                     let origin = LevelFileNumIterator::new(icmp.clone(), self.inputs[i].clone());
-                    let factory = FileIterFactory {
-                        table_cache: table_cache.clone(),
-                    };
+                    let factory = FileIterFactory::new(table_cache.clone());
                     iter_list.push(Rc::new(RefCell::new(Box::new(ConcatenateIterator::new(
                         read_options.clone(),
                         Box::new(origin),
@@ -262,7 +255,7 @@ impl Compaction {
     /// in levels greater than "level+1".
     pub fn key_exist_in_deeper_level(&mut self, ukey: &Slice) -> bool {
         let v = self.input_version.as_ref().unwrap().clone();
-        let icmp = v.get_comparator().clone();
+        let icmp = v.comparator().clone();
         let ucmp = icmp.user_comparator.as_ref();
         let max_levels = self.options.max_levels as usize;
         if self.level + 2 < max_levels {
@@ -309,25 +302,6 @@ impl Compaction {
     #[inline]
     pub fn bytes_written(&self) -> u64 {
         self.outputs.iter().fold(0, |sum, file| sum + file.number)
-    }
-}
-
-struct FileIterFactory {
-    table_cache: Arc<TableCache>,
-}
-
-impl DerivedIterFactory for FileIterFactory {
-    fn produce(&self, options: Rc<ReadOptions>, value: &Slice) -> Result<Box<dyn Iterator>> {
-        if value.size() != 2 * FILE_META_LENGTH {
-            Ok(Box::new(EmptyIterator::new_with_err(WickErr::new(
-                Status::Corruption,
-                Some("file reader invoked with unexpected value"),
-            ))))
-        } else {
-            let file_number = decode_fixed_64(value.as_slice());
-            let file_size = decode_fixed_64(&value.as_slice()[8..]);
-            Ok(self.table_cache.new_iter(options, file_number, file_size))
-        }
     }
 }
 

@@ -225,6 +225,7 @@ const FOOTER_ENCODED_LENGTH: usize = 2 * MAX_BLOCK_HANDLE_ENCODE_LENGTH + 8;
 
 /// `BlockHandle` is a pointer to the extent of a file that stores a data
 /// block or a meta block.
+#[derive(Eq, PartialEq, Debug)]
 pub struct BlockHandle {
     offset: u64,
     // NOTICE: the block trailer size is not included
@@ -282,6 +283,7 @@ impl BlockHandle {
 
 /// `Footer` encapsulates the fixed information stored at the tail
 /// end of every table file.
+#[derive(Debug)]
 pub struct Footer {
     meta_index_handle: BlockHandle,
     index_handle: BlockHandle,
@@ -326,6 +328,7 @@ impl Footer {
         let mut v = vec![];
         self.meta_index_handle.encoded_to(&mut v);
         self.index_handle.encoded_to(&mut v);
+        v.resize(2 * MAX_BLOCK_HANDLE_ENCODE_LENGTH, 0);
         put_fixed_64(&mut v, TABLE_MAGIC_NUMBER);
         assert_eq!(
             v.len(),
@@ -335,5 +338,34 @@ impl Footer {
             FOOTER_ENCODED_LENGTH
         );
         v
+    }
+}
+
+#[cfg(test)]
+mod test_footer {
+    use crate::sstable::{BlockHandle, Footer};
+    use crate::util::status::Status;
+    use std::error::Error;
+
+    #[test]
+    fn test_footer_corruption() {
+        let footer = Footer::new(BlockHandle::new(300, 100), BlockHandle::new(401, 1000));
+        let mut encoded = footer.encoded();
+        let last = encoded.last_mut().unwrap();
+        *last += 1;
+        let r1 = Footer::decode_from(&encoded);
+        assert!(r1.is_err());
+        let e1 = r1.unwrap_err();
+        assert_eq!(e1.status(), Status::Corruption);
+        assert_eq!(e1.description(), "not an sstable (bad magic number)");
+    }
+
+    #[test]
+    fn test_encode_decode() {
+        let footer = Footer::new(BlockHandle::new(300, 100), BlockHandle::new(401, 1000));
+        let encoded = footer.encoded();
+        let (footer, _) = Footer::decode_from(&encoded).expect("footer decoding should work");
+        assert_eq!(footer.index_handle, BlockHandle::new(401, 1000));
+        assert_eq!(footer.meta_index_handle, BlockHandle::new(300, 100));
     }
 }

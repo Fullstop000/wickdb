@@ -158,12 +158,12 @@ impl InmemFile {
     }
 
     #[inline]
-    pub fn get_name(&self) -> &str {
+    pub fn name(&self) -> &str {
         &self.name
     }
 
     #[inline]
-    pub fn get_pos_and_data(&self) -> (u64, &[u8]) {
+    pub fn pos_and_data(&self) -> (u64, &[u8]) {
         (self.contents.position(), self.contents.get_ref().as_slice())
     }
 }
@@ -171,6 +171,9 @@ impl InmemFile {
 impl File for InmemFile {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         let pos = self.contents.position();
+        // Set position to last to prevent overwritting
+        self.contents
+            .set_position(self.contents.get_ref().len() as u64);
         let r = self.contents.write(buf);
         // Prevent position from being modified
         self.contents.set_position(pos);
@@ -229,7 +232,7 @@ impl File for InmemFile {
             if offset > length - 1 {
                 return Ok(0);
             }
-            let exact = if buf.len() as u64 + offset > length - 1 {
+            let exact = if buf.len() as u64 + offset > length {
                 return Err(WickErr::new(Status::IOError, Some("EOF")));
             } else {
                 buf.len()
@@ -252,20 +255,28 @@ mod tests {
     #[test]
     fn test_mem_file_read_write() {
         let mut f = InmemFile::new("test");
-        let written = f.write(b"hello world").expect("write should work");
-        assert_eq!(written, 11);
-        let (pos, data) = f.get_pos_and_data();
+        let written1 = f.write(b"hello world").expect("write should work");
+        assert_eq!(written1, 11);
+        let written2 = f.write(b"|hello world").expect("write should work");
+        assert_eq!(written2, 12);
+        let (pos, data) = f.pos_and_data();
         assert_eq!(pos, 0);
-        assert_eq!(String::from_utf8(Vec::from(data)).unwrap(), "hello world");
+        assert_eq!(
+            String::from_utf8(Vec::from(data)).unwrap(),
+            "hello world|hello world"
+        );
         let mut read_buf = vec![0u8; 5];
         let read = f.read(read_buf.as_mut_slice()).expect("read should work");
         assert_eq!(read, 5);
-        let (pos, _) = f.get_pos_and_data();
+        let (pos, _) = f.pos_and_data();
         assert_eq!(pos, 5);
         read_buf.clear();
         let all = f.read_all(&mut read_buf).expect("read_all should work");
-        assert_eq!(all, written);
-        assert_eq!(String::from_utf8(read_buf.clone()).unwrap(), "hello world");
+        assert_eq!(all, written1 + written2);
+        assert_eq!(
+            String::from_utf8(read_buf.clone()).unwrap(),
+            "hello world|hello world"
+        );
     }
 
     #[test]
@@ -289,9 +300,10 @@ mod tests {
         f.write(&buf).expect("");
 
         for (offset, buf_len, is_ok) in vec![
+            (0, 0, true),
+            (0, 400, true),
             (0, 100, true),
-            (300, 99, true),
-            (300, 100, false),
+            (300, 100, true),
             (340, 100, false),
         ]
         .drain(..)
@@ -306,7 +318,13 @@ mod tests {
                 buf_len
             );
             match res {
-                Ok(size) => assert_eq!(buf_len, size),
+                Ok(size) => {
+                    assert_eq!(buf_len, size);
+                    assert_eq!(
+                        read_buf.as_slice(),
+                        &buf.as_slice()[offset as usize..offset as usize + buf_len]
+                    )
+                }
                 Err(e) => assert_eq!(e.description(), "EOF"),
             }
         }

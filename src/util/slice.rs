@@ -28,11 +28,6 @@ use std::slice;
 /// storage and a size.  The user of a Slice must ensure that the slice
 /// is not used after the corresponding external storage has been
 /// deallocated.
-///
-/// Multiple threads can invoke const methods on a Slice without
-/// external synchronization, but if any of the threads may call a
-/// non-const method, all threads accessing the same Slice must use
-/// external synchronization.
 #[derive(Clone, Eq)]
 pub struct Slice {
     data: *const u8,
@@ -49,7 +44,7 @@ impl Slice {
         if !self.data.is_null() {
             unsafe { slice::from_raw_parts(self.data, self.size) }
         } else {
-            panic!("empty Slice should not used as a &[u8] ")
+            panic!("try to convert a empty(invalid) Slice as a &[u8] ")
         }
     }
 
@@ -94,7 +89,11 @@ impl Slice {
 
     #[inline]
     pub fn as_str(&self) -> &str {
-        unsafe { ::std::str::from_utf8_unchecked(self.as_slice()) }
+        if self.is_empty() {
+            ""
+        } else {
+            unsafe { ::std::str::from_utf8_unchecked(self.as_slice()) }
+        }
     }
 }
 

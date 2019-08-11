@@ -16,7 +16,8 @@
 // found in the LICENSE file.
 
 use crate::db::format::{
-    InternalKey, InternalKeyComparator, LookupKey, ValueType, VALUE_TYPE_FOR_SEEK,
+    InternalKey, InternalKeyComparator, LookupKey, ParsedInternalKey, ValueType,
+    VALUE_TYPE_FOR_SEEK,
 };
 use crate::iterator::Iterator;
 use crate::options::{Options, ReadOptions};
@@ -27,6 +28,7 @@ use crate::util::slice::Slice;
 use crate::util::status::Result;
 use crate::version::version_edit::FileMetaData;
 use crate::version::version_set::VersionSet;
+use std::cell::RefCell;
 use std::cmp::Ordering as CmpOrdering;
 use std::mem;
 use std::rc::Rc;
@@ -242,12 +244,11 @@ impl Version {
                 VALUE_TYPE_FOR_SEEK,
             ));
             let largest_ikey = Rc::new(InternalKey::new(largest_ukey, 0, ValueType::Deletion));
-            let max_levels = self.options.max_levels as usize;
-            while level < max_levels {
+            while level < self.options.max_mem_compact_level {
                 if self.overlap_in_level(level + 1, smallest_ukey, largest_ukey) {
                     break;
                 }
-                if level + 2 < max_levels {
+                if level + 2 < self.options.max_levels as usize {
                     // Check that file does not overlap too many grandparent bytes
                     let overlaps = self.get_overlapping_inputs(
                         level + 2,
@@ -303,7 +304,7 @@ impl Version {
 
     /// Returns `icmp`
     #[inline]
-    pub fn get_comparator(&self) -> Arc<InternalKeyComparator> {
+    pub fn comparator(&self) -> Arc<InternalKeyComparator> {
         self.icmp.clone()
     }
 
@@ -321,6 +322,96 @@ impl Version {
             self.options.max_levels - 1
         );
         self.files[level].as_slice()
+    }
+
+    /// Call `func(level, file)` for every file that overlaps `user_key` in
+    /// order from newest to oldest.  If an invocation of func returns
+    /// false, makes no more calls.
+    pub fn for_each_overlapping(
+        &self,
+        user_key: Slice,
+        internal_key: Slice,
+        mut func: Box<FnMut(usize, Arc<FileMetaData>) -> bool>,
+    ) {
+        let ucmp = self.icmp.user_comparator.clone();
+        for (level, files) in self.files.iter().enumerate() {
+            if level == 0 {
+                let mut target_files = vec![];
+                // Search level 0 files
+                for f in files.iter() {
+                    if ucmp.compare(user_key.as_slice(), f.smallest.user_key()) != CmpOrdering::Less
+                        && ucmp.compare(user_key.as_slice(), f.largest.user_key())
+                            != CmpOrdering::Greater
+                    {
+                        target_files.push(f.clone());
+                    }
+                }
+                if !target_files.is_empty() {
+                    target_files.sort_by(|a, b| b.number.cmp(&a.number))
+                }
+                for target_file in target_files.iter() {
+                    if !func(0, target_file.clone()) {
+                        return;
+                    }
+                }
+            } else {
+                if files.is_empty() {
+                    continue;
+                }
+                let index = Self::find_file(
+                    self.icmp.clone(),
+                    self.files[level].as_slice(),
+                    &internal_key,
+                );
+                if index >= files.len() {
+                    // we reach the end but not found a file matches
+                } else {
+                    let target = files[index].clone();
+                    // if what we found is just the first file, it could still not includes the target
+                    if ucmp.compare(user_key.as_slice(), target.smallest.data())
+                        != CmpOrdering::Less
+                        && !func(level, target)
+                    {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Record a sample of bytes read at the specified internal key.
+    /// Returns true if a new compaction may need to be triggered
+    pub fn record_read_sample(&self, internal_key: Slice) -> bool {
+        if let Some(pkey) = ParsedInternalKey::decode_from(internal_key.clone()) {
+            let stats = Rc::new(RefCell::new(SeekStats::new()));
+            let matches = Rc::new(RefCell::new(0));
+            let stats_clone = stats.clone();
+            let matches_clone = matches.clone();
+            self.for_each_overlapping(
+                pkey.user_key.clone(),
+                internal_key,
+                Box::new(move |level, file| {
+                    *matches_clone.borrow_mut() += 1;
+                    if *matches_clone.borrow() == 1 {
+                        // Remember first match
+                        stats_clone.borrow_mut().seek_file = Some(file.clone());
+                        stats_clone.borrow_mut().seek_file_level = Some(level);
+                    }
+                    *matches_clone.borrow() < 2
+                }),
+            );
+
+            // Must have at least two matches since we want to merge across
+            // files. But what if we have a single file that contains many
+            // overwrites and deletions?  Should we have another mechanism for
+            // finding such files?
+            if *matches.borrow() >= 2 {
+                if let Ok(s) = Rc::try_unwrap(stats) {
+                    return self.update_stats(s.into_inner());
+                }
+            }
+        }
+        false
     }
 
     // Returns true iff some file in the specified level overlaps

@@ -283,6 +283,9 @@ impl Iterator for SkiplistIterator {
     #[inline]
     fn seek_to_last(&mut self) {
         self.node = self.skl.find_last();
+        if self.node == self.skl.head {
+            self.node = ptr::null_mut();
+        }
     }
 
     /// Advance to the first node with a key >= target
@@ -303,8 +306,12 @@ impl Iterator for SkiplistIterator {
     /// Advance to the previous position
     #[inline]
     fn prev(&mut self) {
+        self.panic_valid();
         let key = self.key();
         self.node = self.skl.find_less_than(&key);
+        if self.node == self.skl.head {
+            self.node = ptr::null_mut();
+        }
     }
 
     /// Return the key of node in current position
@@ -552,38 +559,57 @@ mod tests {
         }
     }
 
-    // this is a e2e test for all methods in SkiplistIterator
     #[test]
-    fn test_basic() {
+    fn test_empty_skiplist_iterator() {
+        let skl = new_test_skl();
+        let iter = SkiplistIterator::new(Arc::new(skl));
+        assert!(!iter.valid());
+    }
+
+    // An e2e test for all methods in SkiplistIterator
+    #[test]
+    fn test_skiplist_basic() {
         let skl = new_test_skl();
         let inputs = vec!["key1", "key11", "key13", "key3", "key5", "key7", "key9"];
         for key in inputs.clone().drain(..) {
             skl.insert(Slice::from(key))
         }
-        let mut skl_iterator = SkiplistIterator::new(Arc::new(skl));
-        assert_eq!(ptr::null_mut(), skl_iterator.node,);
+        let mut iter = SkiplistIterator::new(Arc::new(skl));
+        assert_eq!(ptr::null_mut(), iter.node,);
 
-        skl_iterator.seek_to_first();
-        assert_eq!("key1", skl_iterator.key().as_str());
+        iter.seek_to_first();
+        assert_eq!("key1", iter.key().as_str());
         for key in inputs.clone().drain(..) {
-            if !skl_iterator.valid() {
+            if !iter.valid() {
                 break;
             }
-            assert_eq!(key, skl_iterator.key().as_str());
-            skl_iterator.next();
+            assert_eq!(key, iter.key().as_str());
+            iter.next();
         }
+        assert!(!iter.valid());
 
-        skl_iterator.seek_to_first();
-        skl_iterator.next();
-        skl_iterator.prev();
-        assert_eq!(inputs[0], skl_iterator.key().as_str());
-        skl_iterator.seek_to_first();
-        skl_iterator.seek_to_last();
-        assert_eq!(inputs[inputs.len() - 1], skl_iterator.key().as_str());
-        skl_iterator.seek(&Slice::from("key7"));
-        assert_eq!("key7", skl_iterator.key().as_str());
-        skl_iterator.seek(&Slice::from("key4"));
-        assert_eq!("key5", skl_iterator.key().as_str());
+        iter.seek_to_first();
+        iter.next();
+        iter.prev();
+        assert_eq!(inputs[0], iter.key().as_str());
+        iter.seek_to_first();
+        iter.seek_to_last();
+        for key in inputs.clone().drain(..).rev() {
+            if !iter.valid() {
+                break;
+            }
+            assert_eq!(key, iter.key().as_str());
+            iter.prev();
+        }
+        assert!(!iter.valid());
+        iter.seek(&Slice::from("key7"));
+        assert_eq!("key7", iter.key().as_str());
+        iter.seek(&Slice::from("key4"));
+        assert_eq!("key5", iter.key().as_str());
+        iter.seek(&Slice::from(""));
+        assert_eq!("key1", iter.key().as_str());
+        iter.seek(&Slice::from("llllllllllllllll"));
+        assert!(!iter.valid());
     }
 
     const K: usize = 4;

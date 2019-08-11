@@ -126,7 +126,7 @@ impl<T: Clone> Drop for LRUHandle<T> {
 }
 
 impl<T: Clone> CacheHandle<T> for LRUHandle<T> {
-    fn get_value(&self) -> Option<T> {
+    fn value(&self) -> Option<T> {
         match &self.value {
             Some(v) => Some(v.clone()),
             None => None,
@@ -431,7 +431,7 @@ mod tests {
             put_fixed_32(&mut k, key);
             match self.cache.look_up(k.as_slice()) {
                 Some(h) => {
-                    let v = h.get_value().unwrap();
+                    let v = h.value().unwrap();
                     self.cache.release(h);
                     Some(v)
                 }
@@ -483,7 +483,7 @@ mod tests {
         pub fn assert_inside_handle(&self, key: u32, want: u32) -> HandleRef<u32> {
             let encoded = encoded_u32(key);
             let h = self.cache.look_up(encoded.as_slice()).unwrap();
-            assert_eq!(want, h.get_value().unwrap());
+            assert_eq!(want, h.value().unwrap());
             h
         }
     }

@@ -13,6 +13,7 @@
 
 pub mod filename;
 pub mod format;
+pub mod iterator;
 
 use crate::batch::{WriteBatch, HEADER_SIZE};
 use crate::compaction::{Compaction, CompactionInputsRelation};
@@ -20,7 +21,8 @@ use crate::db::filename::{generate_filename, parse_filename, update_current, Fil
 use crate::db::format::{
     InternalKey, InternalKeyComparator, LookupKey, ParsedInternalKey, ValueType,
 };
-use crate::iterator::Iterator;
+use crate::db::iterator::DBIterator;
+use crate::iterator::{Iterator, MergingIterator};
 use crate::mem::{MemTable, MemoryTable};
 use crate::options::{Options, ReadOptions, WriteOptions};
 use crate::record::reader::Reader;
@@ -36,6 +38,7 @@ use crate::version::version_edit::{FileMetaData, VersionEdit};
 use crate::version::version_set::VersionSet;
 use crossbeam_channel::{Receiver, Sender};
 use crossbeam_utils::sync::ShardedLock;
+use std::cell::RefCell;
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::vec_deque::VecDeque;
 use std::mem;
@@ -58,6 +61,9 @@ pub trait DB {
     /// does not contain the key.
     fn get(&self, read_opt: ReadOptions, key: Slice) -> Result<Option<Slice>>;
 
+    /// Return an iterator over the contents of the database.
+    fn iter(&self, read_opt: ReadOptions) -> Box<dyn Iterator>;
+
     /// `delete` deletes the value for the given key. It returns `Status::NotFound` if
     /// the DB does not contain the key.
     fn delete(&self, write_opt: WriteOptions, key: Slice) -> Result<()>;
@@ -74,7 +80,7 @@ pub trait DB {
     fn destroy(&mut self) -> Result<()>;
 
     /// Acquire a `Snapshot` for reading DB
-    fn get_snapshot(&self) -> Arc<Snapshot>;
+    fn snapshot(&self) -> Arc<Snapshot>;
 }
 
 /// The wrapper of `DBImpl` for concurrency control.
@@ -92,6 +98,36 @@ impl DB for WickDB {
 
     fn get(&self, options: ReadOptions, key: Slice) -> Result<Option<Slice>> {
         self.inner.get(options, key)
+    }
+
+    fn iter(&self, read_opt: ReadOptions) -> Box<dyn Iterator> {
+        let ucmp = self.inner.internal_comparator.user_comparator.clone();
+        let sequence = if let Some(snapshot) = &read_opt.snapshot {
+            snapshot.sequence()
+        } else {
+            self.inner.versions.lock().unwrap().last_sequence()
+        };
+        let mut children = vec![];
+        children.push(Rc::new(RefCell::new(self.inner.mem.read().unwrap().iter())));
+        if let Some(im_mem) = self.inner.im_mem.read().unwrap().as_ref() {
+            children.push(Rc::new(RefCell::new(im_mem.iter())));
+        }
+        let mut table_iters = self
+            .inner
+            .versions
+            .lock()
+            .unwrap()
+            .current_iters(Rc::new(read_opt), self.inner.table_cache.clone());
+        for iter in table_iters.drain(..) {
+            children.push(Rc::new(RefCell::new(iter)));
+        }
+        let iter = MergingIterator::new(self.inner.internal_comparator.clone(), children);
+        Box::new(DBIterator::new(
+            Box::new(iter),
+            self.inner.clone(),
+            sequence,
+            ucmp,
+        ))
     }
 
     fn delete(&self, options: WriteOptions, key: Slice) -> Result<()> {
@@ -118,8 +154,8 @@ impl DB for WickDB {
         db.options.env.remove_dir(&db.db_name, true)
     }
 
-    fn get_snapshot(&self) -> Arc<Snapshot> {
-        self.inner.get_snapshot()
+    fn snapshot(&self) -> Arc<Snapshot> {
+        self.inner.snapshot()
     }
 }
 
@@ -141,7 +177,7 @@ impl WickDB {
         }
         if should_save_manifest {
             edit.set_prev_log_number(0);
-            edit.set_log_number(versions.get_log_number());
+            edit.set_log_number(versions.log_number());
             versions.log_and_apply(&mut edit)?;
         }
 
@@ -209,7 +245,7 @@ impl WickDB {
                 mem::drop(queue);
                 match db.make_room_for_write(false) {
                     Ok(mut versions) => {
-                        let mut last_seq = versions.get_last_sequence();
+                        let mut last_seq = versions.last_sequence();
                         grouped.batch.set_sequence(last_seq + 1);
                         last_seq += u64::from(grouped.batch.get_count());
                         // must initialize the WAL writer after `make_room_for_write`
@@ -292,7 +328,7 @@ impl Clone for WickDB {
     }
 }
 
-struct DBImpl {
+pub struct DBImpl {
     env: Arc<dyn Storage>,
     internal_comparator: Arc<InternalKeyComparator>,
     options: Arc<Options>,
@@ -369,7 +405,7 @@ impl DBImpl {
             is_shutting_down: AtomicBool::new(false),
         }
     }
-    fn get_snapshot(&self) -> Arc<Snapshot> {
+    fn snapshot(&self) -> Arc<Snapshot> {
         self.versions.lock().unwrap().new_snapshot()
     }
 
@@ -382,7 +418,7 @@ impl DBImpl {
         }
         let snapshot = match &options.snapshot {
             Some(snapshot) => snapshot.sequence(),
-            None => self.versions.lock().unwrap().get_last_sequence(),
+            None => self.versions.lock().unwrap().last_sequence(),
         };
         let lookup_key = LookupKey::new(key.as_slice(), snapshot);
         // search the memtable
@@ -408,6 +444,20 @@ impl DBImpl {
             self.maybe_schedule_compaction()
         }
         Ok(value)
+    }
+
+    // Record a sample of bytes read at the specified internal key
+    // Might schedule a background compaction.
+    fn record_read_sample(&self, key: Slice) {
+        if self
+            .versions
+            .lock()
+            .unwrap()
+            .current()
+            .record_read_sample(key)
+        {
+            self.maybe_schedule_compaction()
+        }
     }
 
     // Recover DB from `db_name`.
@@ -474,8 +524,8 @@ impl DBImpl {
         // Note that PrevLogNumber() is no longer used, but we pay
         // attention to it in case we are recovering a database
         // produced by an older version of leveldb.
-        let min_log = versions.get_log_number();
-        let prev_log = versions.get_prev_log_number();
+        let min_log = versions.log_number();
+        let prev_log = versions.prev_log_number();
         let all_files = env.list(self.db_name.as_str())?;
         let mut logs_to_recover = vec![];
         for filename in all_files.iter() {
@@ -508,7 +558,7 @@ impl DBImpl {
             // update the file number allocation counter in VersionSet.
             versions.mark_file_number_used(*log_number);
         }
-        if versions.get_last_sequence() < max_sequence {
+        if versions.last_sequence() < max_sequence {
             versions.set_last_sequence(max_sequence)
         }
 
@@ -582,7 +632,7 @@ impl DBImpl {
             if mem_ref.approximate_memory_usage() > self.options.write_buffer_size {
                 have_compacted = true;
                 *save_manifest = true;
-                let iter = mem_ref.new_iterator();
+                let iter = mem_ref.iter();
                 versions.write_level0_files(
                     self.db_name.as_str(),
                     self.table_cache.clone(),
@@ -610,7 +660,7 @@ impl DBImpl {
             versions.write_level0_files(
                 self.db_name.as_str(),
                 self.table_cache.clone(),
-                m.new_iterator(),
+                m.iter(),
                 edit,
             )?;
         }
@@ -633,10 +683,10 @@ impl DBImpl {
                     let mut keep = true;
                     match file_type {
                         FileType::Log => {
-                            keep = number >= versions.get_log_number()
-                                || number == versions.get_prev_log_number()
+                            keep = number >= versions.log_number()
+                                || number == versions.prev_log_number()
                         }
-                        FileType::Manifest => keep = number >= versions.get_manifest_number(),
+                        FileType::Manifest => keep = number >= versions.manifest_number(),
                         FileType::Table => keep = versions.pending_outputs.contains(&number),
                         // Any temp files that are currently being written to must
                         // be recorded in pending_outputs
@@ -741,7 +791,7 @@ impl DBImpl {
         match versions.write_level0_files(
             self.db_name.as_str(),
             self.table_cache.clone(),
-            im_mem.as_ref().unwrap().new_iterator(),
+            im_mem.as_ref().unwrap().iter(),
             &mut edit,
         ) {
             Ok(()) => {
@@ -752,7 +802,7 @@ impl DBImpl {
                     ))
                 } else {
                     edit.prev_log_number = Some(0);
-                    edit.log_number = Some(versions.get_log_number());
+                    edit.log_number = Some(versions.log_number());
                     match versions.log_and_apply(&mut edit) {
                         Ok(()) => {
                             *im_mem = None;
@@ -864,7 +914,7 @@ impl DBImpl {
                         // Cleanup all redundant snapshots first
                         snapshots.gc();
                         if snapshots.is_empty() {
-                            compaction.oldest_snapshot_alive = versions.get_last_sequence();
+                            compaction.oldest_snapshot_alive = versions.last_sequence();
                         } else {
                             compaction.oldest_snapshot_alive = snapshots.oldest().sequence();
                         }

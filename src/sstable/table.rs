@@ -24,9 +24,10 @@ use crate::sstable::{BlockHandle, Footer, BLOCK_TRAILER_SIZE, FOOTER_ENCODED_LEN
 use crate::storage::File;
 use crate::util::coding::{decode_fixed_32, put_fixed_32, put_fixed_64};
 use crate::util::comparator::Comparator;
-use crate::util::crc32::{extend, unmask, value};
+use crate::util::crc32::{extend, mask, unmask, value};
 use crate::util::slice::Slice;
 use crate::util::status::{Result, Status, WickErr};
+use snap::max_compress_len;
 use std::cmp::Ordering;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -63,7 +64,6 @@ impl Table {
             size - FOOTER_ENCODED_LENGTH as u64,
         )?;
         let (footer, _) = Footer::decode_from(footer_space.as_slice())?;
-
         // Read the index block
         let index_block_contents =
             read_block(file.as_ref(), &footer.index_handle, options.paranoid_checks)?;
@@ -130,7 +130,7 @@ impl Table {
             put_fixed_64(&mut cache_key_buffer, self.cache_id);
             put_fixed_64(&mut cache_key_buffer, data_block_handle.offset);
             if let Some(cache_handle) = cache.look_up(&cache_key_buffer.as_slice()) {
-                let b = cache_handle.get_value().unwrap().clone();
+                let b = cache_handle.value().unwrap().clone();
                 cache.release(cache_handle);
                 b
             } else {
@@ -320,8 +320,8 @@ impl TableBuilder {
     }
 
     /// Adds a key/value pair to the table being constructed.
-    /// If we just have flushed a new block data before, add a index entry into the index block.
     /// If the data block reaches the limit, it will be flushed
+    /// If we just have flushed a new block data before, add an index entry into the index block.
     ///
     /// # Panics
     ///
@@ -337,9 +337,9 @@ impl TableBuilder {
                 "[table builder] new key is inconsistent with the last key in sstable"
             )
         }
-        // check iff we need to add a new entry into the index block
+        // Check iff we need to create a new index entry
         self.maybe_append_index_block(Some(key));
-        // write to filter block
+        // Update filter block
         if let Some(fb) = self.filter_block.as_mut() {
             fb.add_key(&Slice::from(key))
         }
@@ -378,6 +378,7 @@ impl TableBuilder {
                 &mut self.pending_handle,
                 &mut self.offset,
             )?;
+            self.data_block.reset();
             self.pending_index_entry = true;
             if let Err(e) = self.file.flush() {
                 return Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e)));
@@ -390,7 +391,7 @@ impl TableBuilder {
     }
 
     /// Finishes building the table and close the relative file.
-    /// if `sync` is true, the `f_flush` will be called.
+    /// if `sync` is true, the `File::flush` will be called.
     /// Stops using the file passed to the
     /// constructor after this function returns.
     ///
@@ -437,8 +438,8 @@ impl TableBuilder {
         };
         self.write_block(meta_block, &mut meta_block_handle)?;
 
-        // write index block
-        self.maybe_append_index_block(None);
+        // Write index block
+        self.maybe_append_index_block(None); // flush the last index first
         let index_block = self.index_block.finish();
         let mut index_block_handle = BlockHandle::new(0, 0);
         let (c_index_block, ct) = compress_block(index_block, self.options.compression)?;
@@ -449,7 +450,7 @@ impl TableBuilder {
             &mut index_block_handle,
             &mut self.offset,
         )?;
-
+        self.index_block.reset();
         // write footer
         let footer = Footer::new(meta_block_handle, index_block_handle).encoded();
         self.file.write(footer.as_slice())?;
@@ -496,8 +497,8 @@ impl TableBuilder {
 
     fn maybe_append_index_block(&mut self, key: Option<&[u8]>) -> bool {
         if self.pending_index_entry {
-            // We've flushed a data block to the file so omit a index entry to index block for it
-            assert!(self.data_block.is_empty(), "[table builder] the data block buffer is not empty after flushed, something wrong must happen");
+            // We've flushed a data block to the file so adding an relate index entry into index block
+            assert!(self.data_block.is_empty(), "[table builder] the data block buffer is not empty after flushed, something is wrong");
             let s = if let Some(k) = key {
                 self.cmp.separator(self.last_key.as_slice(), k)
             } else {
@@ -516,28 +517,13 @@ impl TableBuilder {
 
     fn write_block(&mut self, raw_block: &[u8], handle: &mut BlockHandle) -> Result<()> {
         let (data, compression) = compress_block(raw_block, self.options.compression)?;
-        self.write_raw_block(data.as_slice(), compression, handle)?;
-        Ok(())
-    }
-
-    // Write given block `data` with trailer to the file and update the 'handle'
-    fn write_raw_block(
-        &mut self,
-        data: &[u8],
-        compression: CompressionType,
-        handle: &mut BlockHandle,
-    ) -> Result<()> {
-        handle.set_offset(self.offset);
-        handle.set_size(data.len() as u64);
-        // write block data
-        self.file.write(data)?;
-        // write trailer
-        let mut trailer = vec![0u8; BLOCK_TRAILER_SIZE];
-        trailer[0] = compression as u8;
-        let crc = extend(value(data), &[compression as u8]);
-        put_fixed_32(&mut trailer, crc);
-        self.file.write(trailer.as_slice())?;
-        self.offset += (data.len() + BLOCK_TRAILER_SIZE) as u64;
+        write_raw_block(
+            self.file.as_mut(),
+            &data,
+            compression,
+            handle,
+            &mut self.offset,
+        )?;
         Ok(())
     }
 }
@@ -552,9 +538,9 @@ fn compress_block(
         CompressionType::SnappyCompression => {
             let mut enc = snap::Encoder::new();
             // TODO: avoid this allocation ?
-            let mut buffer = vec![];
+            let mut buffer = vec![0; max_compress_len(raw_block.len())];
             match enc.compress(raw_block, buffer.as_mut_slice()) {
-                Ok(_) => {}
+                Ok(size) => buffer.truncate(size),
                 Err(e) => {
                     return Err(WickErr::new_from_raw(
                         Status::CompressionError,
@@ -585,10 +571,11 @@ fn write_raw_block(
     handle.set_offset(*offset);
     handle.set_size(data.len() as u64);
     // write trailer
-    let mut trailer = vec![0u8; BLOCK_TRAILER_SIZE];
-    trailer[0] = compression as u8;
-    let crc = extend(value(data), &[compression as u8]);
+    let mut trailer = vec![];
+    trailer.push(compression as u8);
+    let crc = mask(extend(value(data), &[compression as u8]));
     put_fixed_32(&mut trailer, crc);
+    assert_eq!(trailer.len(), BLOCK_TRAILER_SIZE);
     file.write(trailer.as_slice())?;
     // update offset
     *offset += (data.len() + BLOCK_TRAILER_SIZE) as u64;
@@ -603,7 +590,8 @@ pub fn read_block(file: &dyn File, handle: &BlockHandle, verify_checksum: bool) 
     file.read_exact_at(buffer.as_mut_slice(), handle.offset)?;
     if verify_checksum {
         let crc = unmask(decode_fixed_32(&buffer.as_slice()[n + 1..]));
-        let actual = value(&buffer.as_slice()[..n]);
+        // Compression type is included in CRC checksum
+        let actual = value(&buffer.as_slice()[..=n]);
         if crc != actual {
             return Err(WickErr::new(
                 Status::Corruption,
@@ -611,11 +599,10 @@ pub fn read_block(file: &dyn File, handle: &BlockHandle, verify_checksum: bool) 
             ));
         }
     }
-
     let data = {
         match CompressionType::from(buffer[n]) {
             CompressionType::NoCompression => {
-                buffer.truncate(BLOCK_TRAILER_SIZE);
+                buffer.truncate(buffer.len() - BLOCK_TRAILER_SIZE);
                 buffer
             }
             CompressionType::SnappyCompression => {
