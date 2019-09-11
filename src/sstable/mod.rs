@@ -225,7 +225,7 @@ const FOOTER_ENCODED_LENGTH: usize = 2 * MAX_BLOCK_HANDLE_ENCODE_LENGTH + 8;
 
 /// `BlockHandle` is a pointer to the extent of a file that stores a data
 /// block or a meta block.
-#[derive(Eq, PartialEq, Debug)]
+#[derive(Eq, PartialEq, Debug, Clone)]
 pub struct BlockHandle {
     offset: u64,
     // NOTICE: the block trailer size is not included
@@ -367,5 +367,655 @@ mod test_footer {
         let (footer, _) = Footer::decode_from(&encoded).expect("footer decoding should work");
         assert_eq!(footer.index_handle, BlockHandle::new(401, 1000));
         assert_eq!(footer.meta_index_handle, BlockHandle::new(300, 100));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::db::format::{
+        InternalKeyComparator, ParsedInternalKey, ValueType, MAX_KEY_SEQUENCE,
+    };
+    use crate::db::{WickDB, DB};
+    use crate::iterator::{EmptyIterator, Iterator};
+    use crate::mem::{MemTable, MemoryTable};
+    use crate::options::{Options, ReadOptions};
+    use crate::sstable::block::*;
+    use crate::sstable::table::*;
+    use crate::storage::mem::MemStorage;
+    use crate::util::comparator::{BytewiseComparator, Comparator};
+    use crate::util::slice::Slice;
+    use crate::util::status::{Result, Status, WickErr};
+    use crate::{WriteBatch, WriteOptions};
+    use rand::prelude::ThreadRng;
+    use rand::Rng;
+    use std::cell::Cell;
+    use std::cmp::Ordering;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    // Return the reverse of given key
+    fn reverse(key: &[u8]) -> Vec<u8> {
+        let mut v = Vec::from(key);
+        let length = v.len();
+        for i in 0..length / 2 {
+            v.swap(i, length - i - 1)
+        }
+        v
+    }
+
+    struct ReverseComparator {
+        cmp: BytewiseComparator,
+    }
+
+    impl ReverseComparator {
+        fn new() -> Self {
+            Self {
+                cmp: BytewiseComparator::new(),
+            }
+        }
+    }
+
+    impl Comparator for ReverseComparator {
+        fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
+            self.cmp.compare(&reverse(a), &reverse(b))
+        }
+
+        fn name(&self) -> &str {
+            "wickdb.ReverseBytewiseComparator"
+        }
+
+        fn separator(&self, a: &[u8], b: &[u8]) -> Vec<u8> {
+            let s = self.cmp.separator(&reverse(a), &reverse(b));
+            reverse(&s)
+        }
+
+        fn successor(&self, key: &[u8]) -> Vec<u8> {
+            let s = self.cmp.successor(&reverse(key));
+            reverse(&s)
+        }
+    }
+
+    // Helper class for tests to unify the interface between
+    // BlockBuilder/TableBuilder and Block/Table
+    trait Constructor {
+        // Write key/value pairs in `data` into inner data structure ( Block / Table )
+        fn finish(&mut self, options: Arc<Options>, data: &[(Vec<u8>, Vec<u8>)]) -> Result<()>;
+
+        // Returns a iterator for inner data structure ( Block / Table )
+        fn iter(&self) -> Box<dyn Iterator>;
+    }
+
+    struct BlockConstructor {
+        block: Block,
+        cmp: Arc<dyn Comparator>,
+    }
+
+    impl BlockConstructor {
+        fn new(cmp: Arc<dyn Comparator>) -> Self {
+            Self {
+                block: Block::default(),
+                cmp,
+            }
+        }
+    }
+
+    impl Constructor for BlockConstructor {
+        fn finish(&mut self, options: Arc<Options>, data: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
+            let mut builder =
+                BlockBuilder::new(options.block_restart_interval, options.comparator.clone());
+            for (key, value) in data {
+                builder.add(key.as_slice(), value.as_slice())
+            }
+            let data = builder.finish();
+            let block = Block::new(Vec::from(data))?;
+            self.block = block;
+            Ok(())
+        }
+
+        fn iter(&self) -> Box<dyn Iterator> {
+            self.block.iter(self.cmp.clone())
+        }
+    }
+
+    struct TableConstructor {
+        table: Option<Arc<Table>>,
+    }
+
+    impl TableConstructor {
+        fn new(_cmp: Arc<Comparator>) -> Self {
+            Self { table: None }
+        }
+        fn approximate_offset_of(&self, key: &[u8]) -> u64 {
+            if let Some(t) = &self.table {
+                t.approximate_offset_of(key)
+            } else {
+                0
+            }
+        }
+    }
+
+    impl Constructor for TableConstructor {
+        fn finish(&mut self, options: Arc<Options>, data: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
+            let file_name = "test_table";
+            let file = options.env.create(file_name)?;
+            let mut builder = TableBuilder::new(file, options.clone());
+            for (key, value) in data {
+                builder
+                    .add(key.as_slice(), value.as_slice())
+                    .expect("TableBuilder add should work");
+            }
+            builder
+                .finish(false)
+                .expect("TableBuilder finish should work");
+            let file = options.env.open(file_name)?;
+            let file_len = file.len()?;
+            let table = Table::open(file, file_len, options.clone())?;
+            self.table = Some(Arc::new(table));
+            Ok(())
+        }
+
+        fn iter(&self) -> Box<dyn Iterator> {
+            match &self.table {
+                Some(t) => new_table_iterator(t.clone(), Rc::new(ReadOptions::default())),
+                None => Box::new(EmptyIterator::new()),
+            }
+        }
+    }
+
+    // A helper struct to convert user key into internal key for inner iterator
+    struct KeyConvertingIterator {
+        inner: Box<dyn Iterator>,
+        err: Cell<Option<WickErr>>,
+    }
+
+    impl KeyConvertingIterator {
+        fn new(iter: Box<dyn Iterator>) -> Self {
+            Self {
+                inner: iter,
+                err: Cell::new(None),
+            }
+        }
+    }
+
+    impl Iterator for KeyConvertingIterator {
+        fn valid(&self) -> bool {
+            self.inner.valid()
+        }
+
+        fn seek_to_first(&mut self) {
+            self.inner.seek_to_first()
+        }
+
+        fn seek_to_last(&mut self) {
+            self.inner.seek_to_last()
+        }
+
+        fn seek(&mut self, target: &Slice) {
+            let ikey = ParsedInternalKey::new(target.clone(), MAX_KEY_SEQUENCE, ValueType::Value);
+            self.inner.seek(&Slice::from(ikey.encode().data()))
+        }
+
+        fn next(&mut self) {
+            self.inner.next()
+        }
+
+        fn prev(&mut self) {
+            self.inner.prev()
+        }
+
+        fn key(&self) -> Slice {
+            match ParsedInternalKey::decode_from(self.inner.key()) {
+                Some(parsed_ikey) => parsed_ikey.user_key.clone(),
+                None => {
+                    self.err.set(Some(WickErr::new(
+                        Status::Corruption,
+                        Some("malformed internal key"),
+                    )));
+                    Slice::from("corrupted key")
+                }
+            }
+        }
+
+        fn value(&self) -> Slice {
+            self.inner.value()
+        }
+
+        fn status(&mut self) -> Result<()> {
+            let err = self.err.take();
+            if err.is_none() {
+                self.err.set(err);
+                self.inner.status()
+            } else {
+                Err(err.unwrap())
+            }
+        }
+    }
+
+    // A simple wrapper for entries collected in a Vec
+    struct EntryIterator {
+        current: usize,
+        data: Vec<(Vec<u8>, Vec<u8>)>,
+        cmp: Arc<dyn Comparator>,
+    }
+
+    impl EntryIterator {
+        fn new(cmp: Arc<dyn Comparator>, data: Vec<(Vec<u8>, Vec<u8>)>) -> Self {
+            Self {
+                current: 0,
+                data,
+                cmp,
+            }
+        }
+    }
+
+    impl Iterator for EntryIterator {
+        fn valid(&self) -> bool {
+            self.current < self.data.len()
+        }
+
+        fn seek_to_first(&mut self) {
+            self.current = 0
+        }
+
+        fn seek_to_last(&mut self) {
+            if self.data.is_empty() {
+                self.current = 0
+            } else {
+                self.current = self.data.len() - 1
+            }
+        }
+
+        fn seek(&mut self, target: &Slice) {
+            for (i, (key, _)) in self.data.iter().enumerate() {
+                if self.cmp.compare(key.as_slice(), target.as_slice()) != Ordering::Less {
+                    self.current = i;
+                    return;
+                }
+            }
+            self.current = self.data.len()
+        }
+
+        fn next(&mut self) {
+            assert!(self.valid());
+            self.current += 1
+        }
+
+        fn prev(&mut self) {
+            assert!(self.valid());
+            if self.current == 0 {
+                self.current = self.data.len()
+            } else {
+                self.current -= 1
+            }
+        }
+
+        fn key(&self) -> Slice {
+            if self.valid() {
+                Slice::from(self.data[self.current].0.as_slice())
+            } else {
+                Slice::default()
+            }
+        }
+
+        fn value(&self) -> Slice {
+            if self.valid() {
+                Slice::from(self.data[self.current].1.as_slice())
+            } else {
+                Slice::default()
+            }
+        }
+
+        fn status(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    struct MemTableConstructor {
+        icmp: Arc<InternalKeyComparator>,
+        memtable: MemTable,
+    }
+
+    impl MemTableConstructor {
+        fn new(cmp: Arc<dyn Comparator>) -> Self {
+            let icmp = Arc::new(InternalKeyComparator::new(cmp));
+            Self {
+                icmp: icmp.clone(),
+                memtable: MemTable::new(icmp),
+            }
+        }
+    }
+
+    impl Constructor for MemTableConstructor {
+        fn finish(&mut self, _options: Arc<Options>, data: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
+            let memtable = MemTable::new(self.icmp.clone());
+            for (seq, (key, value)) in data.iter().enumerate() {
+                memtable.add(
+                    seq as u64 + 1,
+                    ValueType::Value,
+                    key.as_slice(),
+                    value.as_slice(),
+                );
+            }
+            Ok(())
+        }
+
+        fn iter(&self) -> Box<dyn Iterator> {
+            Box::new(KeyConvertingIterator::new(self.memtable.iter()))
+        }
+    }
+
+    struct DBConstructor {
+        inner: WickDB,
+    }
+
+    impl DBConstructor {
+        fn new(cmp: Arc<dyn Comparator>) -> Self {
+            let mut options = Options::default();
+            options.env = Arc::new(MemStorage::default());
+            options.comparator = cmp;
+            options.write_buffer_size = 10000; // Something small to force merging
+            options.error_if_exists = true;
+            let db =
+                WickDB::open_db(options, "table_testdb".to_owned()).expect("could not open db");
+            Self { inner: db }
+        }
+    }
+
+    impl Constructor for DBConstructor {
+        fn finish(&mut self, _options: Arc<Options>, data: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
+            for (key, value) in data.iter() {
+                let mut batch = WriteBatch::new();
+                batch.put(key.as_slice(), value.as_slice());
+                self.inner
+                    .write(WriteOptions::default(), batch)
+                    .expect("write batch should work")
+            }
+            Ok(())
+        }
+
+        fn iter(&self) -> Box<dyn Iterator> {
+            self.inner.iter(ReadOptions::default())
+        }
+    }
+
+    struct CommonConstructor {
+        constructor: Box<dyn Constructor>,
+        // key&value pairs in order
+        data: Vec<(Vec<u8>, Vec<u8>)>,
+    }
+
+    impl CommonConstructor {
+        fn new(constructor: Box<dyn Constructor>) -> Self {
+            Self {
+                constructor,
+                data: vec![],
+            }
+        }
+        fn add(&mut self, key: Slice, value: Slice) {
+            self.data
+                .push((Vec::from(key.as_slice()), Vec::from(value.as_slice())));
+        }
+
+        // Finish constructing the data structure with all the keys that have
+        // been added so far.  Returns the keys in sorted order and stores the
+        // key/value pairs in `data`
+        fn finish(&mut self, options: Arc<Options>) -> Vec<Vec<u8>> {
+            let mut res = vec![];
+            for (key, _) in self.data.iter() {
+                res.push(key.clone())
+            }
+            let cmp = options.comparator.clone();
+            self.constructor
+                .finish(options, &self.data)
+                .expect("constructor finish should be ok");
+            // sort the data as the same order as inner data structure is
+            self.data
+                .sort_by(|(a, _), (b, _)| cmp.compare(a.as_slice(), b.as_slice()));
+            res
+        }
+    }
+
+    struct TestHarness {
+        options: Arc<Options>,
+        inner: CommonConstructor,
+        rand: ThreadRng,
+    }
+
+    impl TestHarness {
+        fn new(t: TestType, reverse_cmp: bool, restart_interval: usize) -> Self {
+            let mut options = Options::default();
+            options.env = Arc::new(MemStorage::default());
+            options.block_restart_interval = restart_interval;
+            // Use shorter block size for tests to exercise block boundary
+            // conditions more
+            options.block_size = 256;
+            options.paranoid_checks = true;
+            if reverse_cmp {
+                options.comparator = Arc::new(ReverseComparator::new());
+            }
+            let constructor: Box<dyn Constructor> = match t {
+                TestType::Table => Box::new(TableConstructor::new(options.comparator.clone())),
+                TestType::Block => Box::new(BlockConstructor::new(options.comparator.clone())),
+                TestType::Memtable => {
+                    Box::new(MemTableConstructor::new(options.comparator.clone()))
+                }
+                TestType::DB => Box::new(DBConstructor::new(options.comparator.clone())),
+            };
+            TestHarness {
+                inner: CommonConstructor::new(constructor),
+                rand: rand::thread_rng(),
+                options: Arc::new(options),
+            }
+        }
+
+        fn add(&mut self, key: &[u8], value: &[u8]) {
+            self.inner.add(Slice::from(key), Slice::from(value))
+        }
+
+        fn test_forward_scan(&self, expected: &[(Vec<u8>, Vec<u8>)]) {
+            let mut iter = self.inner.constructor.iter();
+            assert!(
+                !iter.valid(),
+                "iterator should be invalid after being initialized"
+            );
+            iter.seek_to_first();
+            for (key, value) in expected.iter() {
+                assert_eq!(
+                    format_kv(key.clone(), value.clone()),
+                    format_entry(iter.as_ref())
+                );
+                iter.next();
+            }
+            assert!(
+                !iter.valid(),
+                "iterator should be invalid after yielding all entries"
+            );
+        }
+
+        fn test_backward_scan(&self, expected: &[(Vec<u8>, Vec<u8>)]) {
+            let mut iter = self.inner.constructor.iter();
+            assert!(
+                !iter.valid(),
+                "iterator should be invalid after being initialized"
+            );
+            iter.seek_to_last();
+            for (key, value) in expected.iter().rev() {
+                assert_eq!(
+                    format_kv(key.clone(), value.clone()),
+                    format_entry(iter.as_ref())
+                );
+                iter.prev();
+            }
+            assert!(
+                !iter.valid(),
+                "iterator should be invalid after yielding all entries"
+            );
+        }
+
+        fn test_random_access(&mut self, keys: &[Vec<u8>], expected: Vec<(Vec<u8>, Vec<u8>)>) {
+            let mut iter = self.inner.constructor.iter();
+            assert!(
+                !iter.valid(),
+                "iterator should be invalid after being initialized"
+            );
+            let mut expected_iter = EntryIterator::new(self.options.comparator.clone(), expected);
+            for _ in 0..100 {
+                match self.rand.gen_range(0, 5) {
+                    // case for `next`
+                    0 => {
+                        if iter.valid() {
+                            iter.next();
+                            expected_iter.next();
+                            if iter.valid() {
+                                assert_eq!(
+                                    format_entry(iter.as_ref()),
+                                    format_entry(&expected_iter)
+                                );
+                            }
+                        }
+                    }
+                    // case for `seek_to_first`
+                    1 => {
+                        iter.seek_to_first();
+                        expected_iter.seek_to_first();
+                        if iter.valid() {
+                            assert_eq!(format_entry(iter.as_ref()), format_entry(&expected_iter));
+                        }
+                    }
+                    // case for `seek`
+                    2 => {
+                        let key = Slice::from(random_key(keys).as_slice());
+                        iter.seek(&key);
+                        expected_iter.seek(&key);
+                        if iter.valid() {
+                            assert_eq!(format_entry(iter.as_ref()), format_entry(&expected_iter));
+                        }
+                    }
+                    // case for `prev`
+                    3 => {
+                        if iter.valid() {
+                            iter.prev();
+                            expected_iter.prev();
+                            if iter.valid() {
+                                assert_eq!(
+                                    format_entry(iter.as_ref()),
+                                    format_entry(&expected_iter)
+                                );
+                            }
+                        }
+                    }
+                    // case for `seek_to_last`
+                    4 => {
+                        iter.seek_to_last();
+                        expected_iter.seek_to_last();
+                        if iter.valid() {
+                            assert_eq!(format_entry(iter.as_ref()), format_entry(&expected_iter));
+                        }
+                    }
+                    _ => { /* ignore */ }
+                }
+            }
+        }
+
+        fn do_test(&mut self) {
+            let keys = self.inner.finish(self.options.clone());
+            let expected = self.inner.data.clone();
+            self.test_forward_scan(&expected);
+            self.test_backward_scan(&expected);
+            self.test_random_access(&keys, expected);
+        }
+    }
+
+    #[inline]
+    fn format_kv(key: Vec<u8>, value: Vec<u8>) -> String {
+        unsafe {
+            format!(
+                "'{}->{}'",
+                String::from_utf8_unchecked(key),
+                String::from_utf8_unchecked(value)
+            )
+        }
+    }
+
+    // Return a String represents current entry of the given iterator
+    #[inline]
+    fn format_entry(iter: &Iterator) -> String {
+        format!("'{:?}->{:?}'", iter.key(), iter.value())
+    }
+
+    fn random_key(keys: &[Vec<u8>]) -> Vec<u8> {
+        if keys.is_empty() {
+            b"foo".to_vec()
+        } else {
+            let mut rnd = rand::thread_rng();
+            let result = keys.get(rnd.gen_range(0, keys.len())).unwrap();
+            match rnd.gen_range(0, 3) {
+                0 => result.clone(),
+                1 => {
+                    let mut cloned = result.clone();
+                    if !cloned.is_empty() && *cloned.last().unwrap() > 0u8 {
+                        let last = cloned.last_mut().unwrap();
+                        *last -= 1
+                    }
+                    cloned
+                }
+                2 => {
+                    let mut cloned = result.clone();
+                    cloned.push(0);
+                    cloned
+                }
+                _ => result.clone(),
+            }
+        }
+    }
+
+    enum TestType {
+        Table,
+        Block,
+        Memtable,
+        DB,
+    }
+
+    fn new_test_suits() -> Vec<TestHarness> {
+        let mut tests = vec![
+            (TestType::Table, false, 16),
+            //            (TestType::Table, false, 1),
+            //            (TestType::Table, false, 1024),
+            //            (TestType::Table, true, 16),
+            //            (TestType::Table, true, 1),
+            //            (TestType::Table, true, 1024),
+            //            (TestType::Block, false, 16),
+            //            (TestType::Block, false, 1),
+            //            (TestType::Block, false, 1024),
+            //            (TestType::Block, true, 16),
+            //            (TestType::Block, true, 1),
+            //            (TestType::Block, true, 1024),
+            //            // Restart interval does not matter for memtables
+            //            (TestType::Memtable, false, 16),
+            //            (TestType::Memtable, true, 16),
+            //            // Do not bother with restart interval variations for DB
+            //            (TestType::DB, false, 16),
+            //            (TestType::DB, true, 16),
+        ];
+        let mut results = vec![];
+        for (t, reverse_cmp, restart_interval) in tests.drain(..) {
+            results.push(TestHarness::new(t, reverse_cmp, restart_interval));
+        }
+        results
+    }
+
+    #[test]
+    fn test_empty_harness() {
+        for mut test in new_test_suits().drain(..) {
+            test.do_test()
+        }
+    }
+
+    #[test]
+    fn test_simple_empty_key() {
+        for mut test in new_test_suits().drain(..) {
+            test.add(b"", b"v");
+            test.do_test();
+        }
     }
 }

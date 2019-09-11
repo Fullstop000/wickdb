@@ -190,7 +190,7 @@ impl Table {
                 block_iter.seek(&Slice::from(key));
                 if block_iter.valid() {
                     match ParsedInternalKey::decode_from(block_iter.value()) {
-                        None => return Err(WickErr::new(Status::Corruption, None)),
+                        None => return Err(WickErr::new(Status::Corruption, Some("bad internal key"))),
                         Some(parsed_key) => {
                             if self
                                 .options
@@ -391,9 +391,7 @@ impl TableBuilder {
     }
 
     /// Finishes building the table and close the relative file.
-    /// if `sync` is true, the `File::flush` will be called.
-    /// Stops using the file passed to the
-    /// constructor after this function returns.
+    /// If `sync` is true, the `File::flush` will be called.
     ///
     /// # Panics
     ///
@@ -557,7 +555,7 @@ fn compress_block(
     }
 }
 
-// This func is used to avoid multiple mutable borrows caused by write_raw_block(&mut self..) above
+// Write given block data into the file with block trailer
 fn write_raw_block(
     file: &mut dyn File,
     data: &[u8],
@@ -571,6 +569,7 @@ fn write_raw_block(
     handle.set_offset(*offset);
     handle.set_size(data.len() as u64);
     // write trailer
+    // TODO: use pre-allocated buf
     let mut trailer = vec![];
     trailer.push(compression as u8);
     let crc = mask(extend(value(data), &[compression as u8]));
@@ -586,6 +585,7 @@ fn write_raw_block(
 /// If the read data does not match the checksum, return a error marked as `Status::Corruption`
 pub fn read_block(file: &dyn File, handle: &BlockHandle, verify_checksum: bool) -> Result<Vec<u8>> {
     let n = handle.size as usize;
+    // TODO: use pre-allocated buf
     let mut buffer = vec![0; n + BLOCK_TRAILER_SIZE];
     file.read_exact_at(buffer.as_mut_slice(), handle.offset)?;
     if verify_checksum {
@@ -606,6 +606,7 @@ pub fn read_block(file: &dyn File, handle: &BlockHandle, verify_checksum: bool) 
                 buffer
             }
             CompressionType::SnappyCompression => {
+                // TODO: use pre-allocated buf
                 let mut decompressed = vec![];
                 match snap::decompress_len(&buffer.as_slice()[..n]) {
                     Ok(len) => {
@@ -643,5 +644,50 @@ pub fn read_block(file: &dyn File, handle: &BlockHandle, verify_checksum: bool) 
 
 #[cfg(test)]
 mod tests {
-    // TODO: add tests case after finishing the storage
+    use crate::sstable::table::{Table, TableBuilder};
+    use crate::storage::mem::MemStorage;
+    use crate::{Options, ReadOptions, Storage};
+    use std::rc::Rc;
+    use std::sync::Arc;
+    use crate::sstable::{FOOTER_ENCODED_LENGTH, BlockHandle};
+
+    #[test]
+    fn test_build_empty_table() {
+        let s = MemStorage::default();
+        let new_file = s.create("test").expect("");
+        let opt = Arc::new(Options::default()); // no filter block on default
+        let mut tb = TableBuilder::new(new_file, opt.clone());
+        tb.finish(false).expect("");
+        let file = s.open("test").expect("");
+        let file_len = file.len().expect("");
+        let table = Table::open(file, file_len, opt.clone()).expect("");
+        assert!(table.filter_reader.is_none());
+        assert!(table.meta_block_handle.is_some());
+        let meta_bh = table.meta_block_handle.clone().unwrap();
+        assert_eq!(meta_bh.offset, 0);
+    }
+
+    #[test]
+    fn test_table_write_and_read() {
+        let s = MemStorage::default();
+        let new_file = s.create("test").expect("file create should work");
+        let opt = Arc::new(Options::default());
+        let mut tb = TableBuilder::new(new_file, opt.clone());
+        tb.add(b"", b"test").expect("TableBuilder add should work");
+        tb.finish(false).expect("TableBuilder finish should work");
+        let file = s.open("test").expect("file open should work");
+        let file_len = file.len().expect("file len should work");
+        let table = Table::open(file, file_len, opt.clone()).expect("table open should work");
+        let read_opt = Rc::new(ReadOptions {
+            verify_checksums: true,
+            fill_cache: true,
+            snapshot: None,
+        });
+        let res = table
+            .internal_get(read_opt, b"")
+            .expect("internal getting should work");
+        assert!(res.is_some());
+        let value = res.unwrap();
+        assert_eq!(value.user_key.as_str(), "test");
+    }
 }

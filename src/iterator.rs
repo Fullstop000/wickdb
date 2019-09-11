@@ -315,7 +315,6 @@ impl Iterator for ConcatenateIterator {
         if let Some(di) = &self.derived {
             di.valid()
         } else {
-            // we have a err in the origin iterator
             false
         }
     }

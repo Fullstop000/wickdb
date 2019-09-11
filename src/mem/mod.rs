@@ -129,6 +129,7 @@ impl MemoryTable for MemTable {
     fn add(&self, seq_number: u64, val_type: ValueType, key: &[u8], value: &[u8]) {
         let key_size = key.len();
         let internal_key_size = key_size + 8;
+        // TODO: use pre-allocated buf
         let mut buf = vec![];
         VarintU32::put_varint(&mut buf, internal_key_size as u32);
         buf.extend_from_slice(key);
