@@ -74,7 +74,7 @@ pub trait Iterator {
 /// An special iterator calls all `tasks` before dropping
 pub struct IterWithCleanup {
     inner_iter: Box<dyn Iterator>,
-    tasks: Vec<Box<FnMut()>>,
+    tasks: Vec<Box<dyn FnMut()>>,
 }
 
 impl IterWithCleanup {
@@ -85,7 +85,7 @@ impl IterWithCleanup {
         }
     }
 
-    pub fn register_task(&mut self, task: Box<FnMut()>) {
+    pub fn register_task(&mut self, task: Box<dyn FnMut()>) {
         self.tasks.push(task)
     }
 }

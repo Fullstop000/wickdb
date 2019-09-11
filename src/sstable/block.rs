@@ -470,7 +470,7 @@ mod tests {
     use crate::util::coding::{decode_fixed_32, put_fixed_32};
     use crate::util::comparator::BytewiseComparator;
     use crate::util::slice::Slice;
-    use crate::util::status::{Status, WickErr};
+    use crate::util::status::Status;
     use crate::util::varint::VarintU32;
     use std::sync::Arc;
 

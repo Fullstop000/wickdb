@@ -649,7 +649,6 @@ mod tests {
     use crate::{Options, ReadOptions, Storage};
     use std::rc::Rc;
     use std::sync::Arc;
-    use crate::sstable::{FOOTER_ENCODED_LENGTH, BlockHandle};
 
     #[test]
     fn test_build_empty_table() {

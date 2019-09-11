@@ -482,9 +482,11 @@ mod tests {
     }
 
     impl TableConstructor {
-        fn new(_cmp: Arc<Comparator>) -> Self {
+        fn new(_cmp: Arc<dyn Comparator>) -> Self {
             Self { table: None }
         }
+
+        #[allow(dead_code)]
         fn approximate_offset_of(&self, key: &[u8]) -> u64 {
             if let Some(t) = &self.table {
                 t.approximate_offset_of(key)
@@ -939,7 +941,7 @@ mod tests {
 
     // Return a String represents current entry of the given iterator
     #[inline]
-    fn format_entry(iter: &Iterator) -> String {
+    fn format_entry(iter: &dyn Iterator) -> String {
         format!("'{:?}->{:?}'", iter.key(), iter.value())
     }
 
@@ -979,23 +981,23 @@ mod tests {
     fn new_test_suits() -> Vec<TestHarness> {
         let mut tests = vec![
             (TestType::Table, false, 16),
-            //            (TestType::Table, false, 1),
-            //            (TestType::Table, false, 1024),
-            //            (TestType::Table, true, 16),
-            //            (TestType::Table, true, 1),
-            //            (TestType::Table, true, 1024),
-            //            (TestType::Block, false, 16),
-            //            (TestType::Block, false, 1),
-            //            (TestType::Block, false, 1024),
-            //            (TestType::Block, true, 16),
-            //            (TestType::Block, true, 1),
-            //            (TestType::Block, true, 1024),
-            //            // Restart interval does not matter for memtables
-            //            (TestType::Memtable, false, 16),
-            //            (TestType::Memtable, true, 16),
-            //            // Do not bother with restart interval variations for DB
-            //            (TestType::DB, false, 16),
-            //            (TestType::DB, true, 16),
+            (TestType::Table, false, 1),
+            (TestType::Table, false, 1024),
+            (TestType::Table, true, 16),
+            (TestType::Table, true, 1),
+            (TestType::Table, true, 1024),
+            (TestType::Block, false, 16),
+            (TestType::Block, false, 1),
+            (TestType::Block, false, 1024),
+            (TestType::Block, true, 16),
+            (TestType::Block, true, 1),
+            (TestType::Block, true, 1024),
+            // Restart interval does not matter for memtables
+            (TestType::Memtable, false, 16),
+            (TestType::Memtable, true, 16),
+            // Do not bother with restart interval variations for DB
+            (TestType::DB, false, 16),
+            (TestType::DB, true, 16),
         ];
         let mut results = vec![];
         for (t, reverse_cmp, restart_interval) in tests.drain(..) {

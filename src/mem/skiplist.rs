@@ -50,7 +50,7 @@ pub struct Node {
 impl Node {
     /// Allocates memory in the given arena for Node
     #[allow(clippy::cast_ptr_alignment)]
-    pub fn new(key: Slice, height: usize, arena: &Arena) -> *mut Node {
+    pub fn new(key: Slice, height: usize, arena: &dyn Arena) -> *mut Node {
         let size = mem::size_of::<Node>() + height * mem::size_of::<AtomicPtr<Node>>();
         let ptr = arena.allocate_aligned(size);
         unsafe {

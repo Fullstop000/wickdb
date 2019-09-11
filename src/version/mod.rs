@@ -331,7 +331,7 @@ impl Version {
         &self,
         user_key: Slice,
         internal_key: Slice,
-        mut func: Box<FnMut(usize, Arc<FileMetaData>) -> bool>,
+        mut func: Box<dyn FnMut(usize, Arc<FileMetaData>) -> bool>,
     ) {
         let ucmp = self.icmp.user_comparator.clone();
         for (level, files) in self.files.iter().enumerate() {

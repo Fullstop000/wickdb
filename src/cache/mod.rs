@@ -56,7 +56,7 @@ pub trait Cache<T> {
         key: Vec<u8>,
         value: T,
         charge: usize,
-        deleter: Option<Box<FnMut(&[u8], T)>>,
+        deleter: Option<Box<dyn FnMut(&[u8], T)>>,
     ) -> HandleRef<T>;
 
     /// If the cache has no mapping for `key`, returns `None`.
