@@ -321,9 +321,8 @@ impl VersionSet {
                     Arc::new(InternalKeyComparator::new(self.options.comparator.clone())),
                     files.clone(),
                 );
-                let factory = FileIterFactory::new(table_cache.clone());
+                let factory = FileIterFactory::new(read_opt.clone(), table_cache.clone());
                 let iter = ConcatenateIterator::new(
-                    read_opt.clone(),
                     Box::new(level_file_iter),
                     Box::new(factory),
                 );
@@ -970,17 +969,21 @@ impl VersionSet {
 }
 
 pub struct FileIterFactory {
+    options: Rc<ReadOptions>,
     table_cache: Arc<TableCache>,
 }
 
 impl FileIterFactory {
-    pub fn new(table_cache: Arc<TableCache>) -> Self {
-        Self { table_cache }
+    pub fn new(options: Rc<ReadOptions>, table_cache: Arc<TableCache>) -> Self {
+        Self { 
+            options,
+            table_cache, 
+        }
     }
 }
 
 impl DerivedIterFactory for FileIterFactory {
-    fn produce(&self, options: Rc<ReadOptions>, value: &Slice) -> Result<Box<dyn Iterator>> {
+    fn produce(&self, value: &Slice) -> Result<Box<dyn Iterator>> {
         if value.size() != 2 * FILE_META_LENGTH {
             Ok(Box::new(EmptyIterator::new_with_err(WickErr::new(
                 Status::Corruption,
@@ -989,7 +992,7 @@ impl DerivedIterFactory for FileIterFactory {
         } else {
             let file_number = decode_fixed_64(value.as_slice());
             let file_size = decode_fixed_64(&value.as_slice()[8..]);
-            Ok(self.table_cache.new_iter(options, file_number, file_size))
+            Ok(self.table_cache.new_iter(self.options.clone(), file_number, file_size))
         }
     }
 }

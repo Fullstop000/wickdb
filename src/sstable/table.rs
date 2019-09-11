@@ -235,12 +235,13 @@ impl Table {
 }
 
 pub struct TableIterFactory {
+    options: Rc<ReadOptions>,
     table: Arc<Table>,
 }
 impl DerivedIterFactory for TableIterFactory {
-    fn produce(&self, options: Rc<ReadOptions>, value: &Slice) -> Result<Box<dyn Iterator>> {
+    fn produce(&self, value: &Slice) -> Result<Box<dyn Iterator>> {
         BlockHandle::decode_from(value.as_slice())
-            .and_then(|(handle, _)| self.table.block_reader(handle, options))
+            .and_then(|(handle, _)| self.table.block_reader(handle, self.options.clone()))
     }
 }
 
@@ -253,8 +254,8 @@ impl DerivedIterFactory for TableIterFactory {
 pub fn new_table_iterator(table: Arc<Table>, options: Rc<ReadOptions>) -> Box<dyn Iterator> {
     let cmp = table.options.comparator.clone();
     let index_iter = table.index_block.iter(cmp);
-    let factory = Box::new(TableIterFactory { table });
-    Box::new(ConcatenateIterator::new(options, index_iter, factory))
+    let factory = Box::new(TableIterFactory { options, table });
+    Box::new(ConcatenateIterator::new(index_iter, factory))
 }
 
 /// Temporarily stores the contents of the table it is

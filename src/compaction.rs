@@ -213,9 +213,8 @@ impl Compaction {
                     }
                 } else {
                     let origin = LevelFileNumIterator::new(icmp.clone(), self.inputs[i].clone());
-                    let factory = FileIterFactory::new(table_cache.clone());
+                    let factory = FileIterFactory::new(read_options.clone(), table_cache.clone());
                     iter_list.push(Rc::new(RefCell::new(Box::new(ConcatenateIterator::new(
-                        read_options.clone(),
                         Box::new(origin),
                         Box::new(factory),
                     )))));
