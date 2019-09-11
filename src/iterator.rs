@@ -205,10 +205,7 @@ pub trait DerivedIterFactory {
 }
 
 impl ConcatenateIterator {
-    pub fn new(
-        origin: Box<dyn Iterator>,
-        factory: Box<dyn DerivedIterFactory>,
-    ) -> Self {
+    pub fn new(origin: Box<dyn Iterator>, factory: Box<dyn DerivedIterFactory>) -> Self {
         Self {
             origin,
             factory,

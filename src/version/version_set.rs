@@ -322,10 +322,7 @@ impl VersionSet {
                     files.clone(),
                 );
                 let factory = FileIterFactory::new(read_opt.clone(), table_cache.clone());
-                let iter = ConcatenateIterator::new(
-                    Box::new(level_file_iter),
-                    Box::new(factory),
-                );
+                let iter = ConcatenateIterator::new(Box::new(level_file_iter), Box::new(factory));
                 res.push(Box::new(iter));
             }
         }
@@ -342,7 +339,7 @@ impl VersionSet {
     ///     * After major compaction
     pub fn log_and_apply(&mut self, edit: &mut VersionEdit) -> Result<()> {
         if let Some(target_log) = edit.log_number {
-            assert!(target_log >= self.log_number && target_log< self.next_file_number,
+            assert!(target_log >= self.log_number && target_log < self.next_file_number,
                     "[version set] applying VersionEdit use a invalid log number {}, expect to be at [{}, {})", target_log, self.log_number, self.next_file_number);
         } else {
             edit.set_log_number(self.log_number);
@@ -975,9 +972,9 @@ pub struct FileIterFactory {
 
 impl FileIterFactory {
     pub fn new(options: Rc<ReadOptions>, table_cache: Arc<TableCache>) -> Self {
-        Self { 
+        Self {
             options,
-            table_cache, 
+            table_cache,
         }
     }
 }
@@ -992,7 +989,9 @@ impl DerivedIterFactory for FileIterFactory {
         } else {
             let file_number = decode_fixed_64(value.as_slice());
             let file_size = decode_fixed_64(&value.as_slice()[8..]);
-            Ok(self.table_cache.new_iter(self.options.clone(), file_number, file_size))
+            Ok(self
+                .table_cache
+                .new_iter(self.options.clone(), file_number, file_size))
         }
     }
 }

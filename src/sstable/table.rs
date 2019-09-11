@@ -190,7 +190,9 @@ impl Table {
                 block_iter.seek(&Slice::from(key));
                 if block_iter.valid() {
                     match ParsedInternalKey::decode_from(block_iter.value()) {
-                        None => return Err(WickErr::new(Status::Corruption, Some("bad internal key"))),
+                        None => {
+                            return Err(WickErr::new(Status::Corruption, Some("bad internal key")))
+                        }
                         Some(parsed_key) => {
                             if self
                                 .options
