@@ -241,7 +241,7 @@ pub struct TableIterFactory {
     table: Arc<Table>,
 }
 impl DerivedIterFactory for TableIterFactory {
-    fn produce(&self, value: &Slice) -> Result<Box<dyn Iterator>> {
+    fn derive(&self, value: &Slice) -> Result<Box<dyn Iterator>> {
         BlockHandle::decode_from(value.as_slice())
             .and_then(|(handle, _)| self.table.block_reader(handle, self.options.clone()))
     }

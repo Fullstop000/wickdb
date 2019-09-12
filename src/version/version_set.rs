@@ -980,7 +980,7 @@ impl FileIterFactory {
 }
 
 impl DerivedIterFactory for FileIterFactory {
-    fn produce(&self, value: &Slice) -> Result<Box<dyn Iterator>> {
+    fn derive(&self, value: &Slice) -> Result<Box<dyn Iterator>> {
         if value.size() != 2 * FILE_META_LENGTH {
             Ok(Box::new(EmptyIterator::new_with_err(WickErr::new(
                 Status::Corruption,
