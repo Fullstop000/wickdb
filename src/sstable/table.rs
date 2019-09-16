@@ -68,7 +68,6 @@ impl Table {
         let index_block_contents =
             read_block(file.as_ref(), &footer.index_handle, options.paranoid_checks)?;
         let index_block = Block::new(index_block_contents)?;
-
         let cache_id = if let Some(cache) = &options.block_cache {
             cache.new_id()
         } else {
@@ -91,6 +90,7 @@ impl Table {
                 options.paranoid_checks,
             ) {
                 if let Ok(meta_block) = Block::new(meta_block_contents) {
+                    t.meta_block_handle = Some(footer.meta_index_handle);
                     let mut iter = meta_block.iter(options.comparator.clone());
                     let filter_key = if let Some(fp) = &options.filter_policy {
                         "filter.".to_owned() + fp.name()
@@ -280,7 +280,7 @@ pub struct TableBuilder {
     num_entries: usize,
     closed: bool,
     filter_block: Option<FilterBlockBuilder>,
-    // indicates iff we have to add a index to index_block
+    // Indicates whether we have to add a index to index_block
     //
     // We do not emit the index entry for a block until we have seen the
     // first key for the next data block. This allows us to use shorter
@@ -334,13 +334,13 @@ impl TableBuilder {
     pub fn add(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         self.assert_not_closed();
         if self.num_entries > 0 {
-            assert_ne!(
+            assert_eq!(
                 self.cmp.compare(key, &self.last_key.as_slice()),
                 Ordering::Greater,
                 "[table builder] new key is inconsistent with the last key in sstable"
             )
         }
-        // Check iff we need to create a new index entry
+        // Check whether we need to create a new index entry
         self.maybe_append_index_block(Some(key));
         // Update filter block
         if let Some(fb) = self.filter_block.as_mut() {
@@ -647,6 +647,7 @@ pub fn read_block(file: &dyn File, handle: &BlockHandle, verify_checksum: bool) 
 
 #[cfg(test)]
 mod tests {
+    use crate::filter::bloom::BloomFilter;
     use crate::sstable::table::{Table, TableBuilder};
     use crate::storage::mem::MemStorage;
     use crate::{Options, ReadOptions, Storage};
@@ -654,7 +655,24 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn test_build_empty_table() {
+    fn test_build_empty_table_with_meta_block() {
+        let s = MemStorage::default();
+        let mut o = Options::default();
+        let bf = BloomFilter::new(16);
+        o.filter_policy = Some(Rc::new(bf));
+        let opt = Arc::new(o);
+        let new_file = s.create("test").expect("");
+        let mut tb = TableBuilder::new(new_file, opt.clone());
+        tb.finish(false).expect("");
+        let file = s.open("test").expect("");
+        let file_len = file.len().expect("");
+        let table = Table::open(file, file_len, opt.clone()).expect("");
+        assert!(table.filter_reader.is_some());
+        assert!(table.meta_block_handle.is_some());
+    }
+
+    #[test]
+    fn test_build_empty_table_without_meta_block() {
         let s = MemStorage::default();
         let new_file = s.create("test").expect("");
         let opt = Arc::new(Options::default()); // no filter block on default
@@ -664,9 +682,21 @@ mod tests {
         let file_len = file.len().expect("");
         let table = Table::open(file, file_len, opt.clone()).expect("");
         assert!(table.filter_reader.is_none());
-        assert!(table.meta_block_handle.is_some());
-        let meta_bh = table.meta_block_handle.clone().unwrap();
-        assert_eq!(meta_bh.offset, 0);
+        assert!(table.meta_block_handle.is_none()); // no filter block means no meta block
+        let read_opt = Rc::new(ReadOptions::default());
+        let res = table.internal_get(read_opt.clone(), b"test");
+        assert!(res.is_err());
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_table_add_consistency() {
+        let s = MemStorage::default();
+        let new_file = s.create("test").expect("file create should work");
+        let opt = Arc::new(Options::default());
+        let mut tb = TableBuilder::new(new_file, opt.clone());
+        tb.add(b"222", b"").expect("");
+        tb.add(b"1", b"").expect("");
     }
 
     #[test]
@@ -675,8 +705,11 @@ mod tests {
         let new_file = s.create("test").expect("file create should work");
         let opt = Arc::new(Options::default());
         let mut tb = TableBuilder::new(new_file, opt.clone());
-        tb.add(b"", b"test").expect("TableBuilder add should work");
-        tb.finish(false).expect("TableBuilder finish should work");
+        tb.add(b"", b"test")
+            .expect("TableBuilder 'add' should work");
+        tb.add(b"a", b"aa").expect("");
+        tb.add(b"b", b"bb").expect("");
+        tb.finish(false).expect("TableBuilder 'finish' should work");
         let file = s.open("test").expect("file open should work");
         let file_len = file.len().expect("file len should work");
         let table = Table::open(file, file_len, opt.clone()).expect("table open should work");
@@ -685,11 +718,23 @@ mod tests {
             fill_cache: true,
             snapshot: None,
         });
-        let res = table
-            .internal_get(read_opt, b"")
-            .expect("internal getting should work");
-        assert!(res.is_some());
-        let value = res.unwrap();
-        assert_eq!(value.user_key.as_str(), "test");
+        assert_eq!(
+            "test",
+            table
+                .internal_get(read_opt.clone(), b"")
+                .expect("")
+                .unwrap()
+                .user_key
+                .as_str()
+        );
+        assert_eq!(
+            "aa",
+            table
+                .internal_get(read_opt.clone(), b"a")
+                .expect("")
+                .unwrap()
+                .user_key
+                .as_str()
+        );
     }
 }

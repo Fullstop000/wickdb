@@ -25,6 +25,8 @@ use std::cmp::{min, Ordering};
 use std::rc::Rc;
 use std::sync::Arc;
 
+// TODO: remove all magic number
+
 /// `Block` is consist of one or more key/value entries and a block trailer.
 /// Block entry shares key prefix with its preceding key until a `restart`
 /// point reached. A block should contains at least one restart point.
@@ -544,7 +546,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "[block builder] inconsistent new key")]
+    #[should_panic]
     fn test_add_inconsistent_key() {
         let cmp = Arc::new(BytewiseComparator::new());
         let mut builder = BlockBuilder::new(2, cmp.clone());
