@@ -181,7 +181,7 @@ impl BlockIterator {
         let (not_shared, n1) = VarintU32::common_read(&src[n0 as usize..]);
         let (value_len, n2) = VarintU32::common_read(&src[(n1 + n0) as usize..]);
         let n = (n0 + n1 + n2) as u32;
-        if offset + n + shared + not_shared + value_len > self.restarts {
+        if offset + n + not_shared + value_len > self.restarts {
             self.corruption_err();
             return false;
         }
@@ -197,9 +197,8 @@ impl BlockIterator {
             self.key[i] = delta[i - shared as usize]
         }
         // update restart index
-        if shared == 0
-            && self.restart_index + 1 < self.restarts_len
-            && self.get_restart_point(self.restart_index + 1) == self.current
+        while self.restart_index + 1 < self.restarts_len
+            && self.get_restart_point(self.restart_index + 1) < self.current
         {
             self.restart_index += 1
         }
@@ -257,7 +256,7 @@ impl Iterator for BlockIterator {
             let (shared, n0) = VarintU32::common_read(src);
             let (not_shared, n1) = VarintU32::common_read(&src[n0 as usize..]);
             let (_, n2) = VarintU32::common_read(&src[(n1 + n0) as usize..]);
-            if shared != 0 {
+            if shared != 0 { // The first key from restart offset should be completely stored.
                 self.corruption_err();
                 return;
             }
@@ -542,7 +541,9 @@ mod tests {
         let k = iter.key();
         let v = iter.value();
         assert_eq!(k.as_str(), "");
-        assert_eq!(v.as_str(), "test")
+        assert_eq!(v.as_str(), "test");
+        iter.next();
+        assert!(!iter.valid());
     }
 
     #[test]
@@ -661,6 +662,7 @@ mod tests {
         let cmp = Arc::new(BytewiseComparator::new());
         let mut builder = BlockBuilder::new(2, cmp.clone());
         let tests = vec![
+            ("", "empty"),
             ("1111", "val1"),
             ("1112", "val2"),
             ("1113", "val3"),
