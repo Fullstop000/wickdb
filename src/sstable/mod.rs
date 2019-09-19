@@ -1014,7 +1014,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_simple_empty_key() {
         for mut test in new_test_suits().drain(..) {
             test.add(b"", b"v");

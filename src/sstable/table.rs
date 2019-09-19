@@ -190,21 +190,6 @@ impl Table {
                 block_iter.seek(&Slice::from(key));
                 if block_iter.valid() {
                     return Ok(Some((block_iter.key(), block_iter.value())));
-                    // match ParsedInternalKey::decode_from(block_iter.key()) {
-                    //     None => {
-                    //         return Err(WickErr::new(Status::Corruption, Some("bad internal key")))
-                    //     }
-                    //     Some(parsed_key) => {
-                    //         if self
-                    //             .options
-                    //             .comparator
-                    //             .compare(parsed_key.user_key.as_slice(), key)
-                    //             == Ordering::Equal
-                    //         {
-                    //             return Ok(Some((parsed_key, block_iter.value())));
-                    //         }
-                    //     }
-                    // }
                 }
                 block_iter.status()?;
             }

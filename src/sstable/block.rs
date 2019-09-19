@@ -128,6 +128,10 @@ pub struct BlockIterator {
     not_shared: u32, // not shared length
     value_len: u32,  // value length
     key_offset: u32, // the offset of the key in the block
+    // TODO: remmove this buffer 
+    //     Removing this buffer might be difficult becasue the key
+    //     could be formed by multiple segments which means we should
+    //     maintain predictable amount of offsets for each key.
     key: Vec<u8>,    // buffer for a completed key
 }
 
@@ -237,11 +241,13 @@ impl Iterator for BlockIterator {
     }
 
     fn seek_to_last(&mut self) {
-        // seek to the last
+        // seek to the last restart offset
         self.seek_to_restart_point(self.restarts_len - 1);
-        // keep parsing block
+        // keep parsing block util the last
         // TODO: the buffered key cost a lot waste here
-        while self.parse_block_entry() && self.next_entry_offset() < self.restarts {}
+        while self.parse_block_entry() && self.next_entry_offset() < self.restarts {
+            self.current = self.next_entry_offset()
+        }
     }
 
     // find the first entry in block with key>= target
@@ -296,18 +302,22 @@ impl Iterator for BlockIterator {
     // seek to prev restart offset and scan backwards to a restart point before current
     fn prev(&mut self) {
         let original = self.current;
+        // Find the first restart point that just less than the current offset
         while self.get_restart_point(self.restart_index) >= original {
             if self.restart_index == 0 {
                 // No more entries
                 // marked as invalid
                 self.current = self.restarts;
                 self.restart_index = self.restarts_len;
+                return;
             }
             self.restart_index -= 1
         }
         self.seek_to_restart_point(self.restart_index);
         // Loop until end of current entry hits the start of original entry
-        while self.parse_block_entry() && self.next_entry_offset() < original {}
+        while self.parse_block_entry() && self.next_entry_offset() < original {
+            self.current = self.next_entry_offset()
+        }
     }
 
     // NOTICE: All the slices return by `key()` point to the same memory so be careful

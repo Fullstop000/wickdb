@@ -277,7 +277,7 @@ impl ConcatenateIterator {
     }
 
     // Skip invalid results util finding a valid derived iter by `prev()`
-    // If found, set derived iter to the first
+    // If found, set derived iter to the last
     fn skip_backward(&mut self) {
         while self.derived.is_none() || !self.derived.as_ref().unwrap().valid() {
             if !self.origin.valid() {
@@ -287,7 +287,7 @@ impl ConcatenateIterator {
                 self.origin.prev();
                 self.init_derived_iter();
                 if let Some(i) = &mut self.derived {
-                    // init to the first
+                    // init to the last
                     i.seek_to_last();
                 }
             }
@@ -318,6 +318,7 @@ impl Iterator for ConcatenateIterator {
         if let Some(di) = self.derived.as_mut() {
             di.seek_to_first()
         }
+        // scan forward util finding the first valid entry
         self.skip_forward();
     }
 
@@ -327,6 +328,7 @@ impl Iterator for ConcatenateIterator {
         if let Some(di) = self.derived.as_mut() {
             di.seek_to_last()
         }
+        // scan backward util finding the first valid entry
         self.skip_backward();
     }
 
