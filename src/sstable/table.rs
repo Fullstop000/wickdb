@@ -15,7 +15,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-use crate::db::format::ParsedInternalKey;
 use crate::iterator::{ConcatenateIterator, DerivedIterFactory, Iterator};
 use crate::options::{CompressionType, Options, ReadOptions};
 use crate::sstable::block::{Block, BlockBuilder};
@@ -160,12 +159,13 @@ impl Table {
         Ok(block.iter(self.options.comparator.clone()))
     }
 
-    /// Gets the first entry with the key equal or greater than target, then calls the 'callback'
+    /// Gets the first entry with the key equal or greater than target.
+    /// The given `key` is a user key
     pub fn internal_get(
         &self,
         options: Rc<ReadOptions>,
         key: &[u8],
-    ) -> Result<Option<ParsedInternalKey>> {
+    ) -> Result<Option<(Slice, Slice)>> {
         let mut index_iter = self.index_block.iter(self.options.comparator.clone());
         // seek to the first 'last key' bigger than 'key'
         index_iter.seek(&Slice::from(key));
@@ -189,21 +189,22 @@ impl Table {
                 let mut block_iter = self.block_reader(data_block_handle, options)?;
                 block_iter.seek(&Slice::from(key));
                 if block_iter.valid() {
-                    match ParsedInternalKey::decode_from(block_iter.value()) {
-                        None => {
-                            return Err(WickErr::new(Status::Corruption, Some("bad internal key")))
-                        }
-                        Some(parsed_key) => {
-                            if self
-                                .options
-                                .comparator
-                                .compare(parsed_key.user_key.as_slice(), key)
-                                == Ordering::Equal
-                            {
-                                return Ok(Some(parsed_key));
-                            }
-                        }
-                    }
+                    return Ok(Some((block_iter.key(), block_iter.value())));
+                    // match ParsedInternalKey::decode_from(block_iter.key()) {
+                    //     None => {
+                    //         return Err(WickErr::new(Status::Corruption, Some("bad internal key")))
+                    //     }
+                    //     Some(parsed_key) => {
+                    //         if self
+                    //             .options
+                    //             .comparator
+                    //             .compare(parsed_key.user_key.as_slice(), key)
+                    //             == Ordering::Equal
+                    //         {
+                    //             return Ok(Some((parsed_key, block_iter.value())));
+                    //         }
+                    //     }
+                    // }
                 }
                 block_iter.status()?;
             }
@@ -496,6 +497,7 @@ impl TableBuilder {
         );
     }
 
+    // Add a key into the index block if neccessary
     fn maybe_append_index_block(&mut self, key: Option<&[u8]>) -> bool {
         if self.pending_index_entry {
             // We've flushed a data block to the file so adding an relate index entry into index block
@@ -648,8 +650,11 @@ pub fn read_block(file: &dyn File, handle: &BlockHandle, verify_checksum: bool) 
 #[cfg(test)]
 mod tests {
     use crate::filter::bloom::BloomFilter;
-    use crate::sstable::table::{Table, TableBuilder};
+    use crate::sstable::block::Block;
+    use crate::sstable::table::{read_block, Table, TableBuilder};
+    use crate::sstable::BlockHandle;
     use crate::storage::mem::MemStorage;
+    use crate::util::comparator::BytewiseComparator;
     use crate::{Options, ReadOptions, Storage};
     use std::rc::Rc;
     use std::sync::Arc;
@@ -700,15 +705,47 @@ mod tests {
     }
 
     #[test]
+    fn test_block_write_and_read() {
+        let s = MemStorage::default();
+        let new_file = s.create("test").expect("file create should work");
+        let opt = Arc::new(Options::default());
+        let mut tb = TableBuilder::new(new_file, opt.clone());
+        let test_pairs = vec![("", "test"), ("aaa", "123"), ("bbb", "456"), ("ccc", "789")];
+        for (key, val) in test_pairs.clone().drain(..) {
+            tb.data_block.add(key.as_bytes(), val.as_bytes());
+        }
+        let block = Vec::from(tb.data_block.finish());
+        let mut bh = BlockHandle::new(0, 0);
+        tb.write_block(&block, &mut bh).expect("");
+        let file = s.open("test").expect("file open should work");
+        let res = read_block(file.as_ref(), &bh, true).expect("");
+        assert_eq!(res, block);
+        let block = Block::new(res).expect("");
+        let cmp = Arc::new(BytewiseComparator::new());
+        let mut iter = block.iter(cmp);
+        iter.seek_to_first();
+        let mut result_pairs = vec![];
+        while iter.valid() {
+            result_pairs.push((iter.key().copy(), iter.value().copy()));
+            iter.next();
+        }
+        assert_eq!(result_pairs.len(), test_pairs.len());
+        for (p1, p2) in result_pairs.iter().zip(test_pairs) {
+            assert_eq!(p1.0.as_slice(), p2.0.as_bytes());
+            assert_eq!(p1.1.as_slice(), p2.1.as_bytes());
+        }
+    }
+
+    #[test]
     fn test_table_write_and_read() {
         let s = MemStorage::default();
         let new_file = s.create("test").expect("file create should work");
         let opt = Arc::new(Options::default());
         let mut tb = TableBuilder::new(new_file, opt.clone());
-        tb.add(b"", b"test")
-            .expect("TableBuilder 'add' should work");
-        tb.add(b"a", b"aa").expect("");
-        tb.add(b"b", b"bb").expect("");
+        let tests = vec![("", "test"), ("a", "aa"), ("b", "bb")];
+        for (key, val) in tests.clone().drain(..) {
+            tb.add(key.as_bytes(), val.as_bytes()).expect("");
+        }
         tb.finish(false).expect("TableBuilder 'finish' should work");
         let file = s.open("test").expect("file open should work");
         let file_len = file.len().expect("file len should work");
@@ -718,23 +755,16 @@ mod tests {
             fill_cache: true,
             snapshot: None,
         });
-        assert_eq!(
-            "test",
-            table
-                .internal_get(read_opt.clone(), b"")
-                .expect("")
-                .unwrap()
-                .user_key
-                .as_str()
-        );
-        assert_eq!(
-            "aa",
-            table
-                .internal_get(read_opt.clone(), b"a")
-                .expect("")
-                .unwrap()
-                .user_key
-                .as_str()
-        );
+        for (key, val) in tests.clone().drain(..) {
+            assert_eq!(
+                val,
+                table
+                    .internal_get(read_opt.clone(), key.as_bytes())
+                    .expect("")
+                    .unwrap()
+                    .1
+                    .as_str()
+            );
+        }
     }
 }

@@ -354,9 +354,8 @@ impl Reader {
         }
         self.end_of_buffer_offset = block_start_location;
         if block_start_location > 0 {
-            let res = self.file.seek(SeekFrom::Start(block_start_location));
-            if res.is_err() {
-                self.report_drop(block_start_location, res.unwrap_err().description());
+            if let Err(e) = self.file.seek(SeekFrom::Start(block_start_location)) {
+                self.report_drop(block_start_location, e.description());
                 return false;
             }
         }

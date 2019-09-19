@@ -49,6 +49,11 @@ impl Slice {
     }
 
     #[inline]
+    pub fn copy(&self) -> Vec<u8> {
+        Vec::from(self.as_slice())
+    }
+
+    #[inline]
     pub fn size(&self) -> usize {
         self.size
     }

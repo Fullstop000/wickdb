@@ -219,8 +219,10 @@ impl ConcatenateIterator {
 
     #[inline]
     fn maybe_save_err(old: &mut Option<WickErr>, new: Result<()>) {
-        if old.is_none() && new.is_err() {
-            mem::replace::<Option<WickErr>>(old, Some(new.unwrap_err()));
+        if old.is_none() {
+            if let Err(e) = new {
+                mem::replace::<Option<WickErr>>(old, Some(e));
+            }
         }
     }
 
@@ -369,7 +371,7 @@ impl Iterator for ConcatenateIterator {
             di.status()?
         };
         if let Some(e) = self.err.take() {
-            Err(e)?
+            return Err(e);
         }
         Ok(())
     }

@@ -256,7 +256,8 @@ impl Iterator for BlockIterator {
             let (shared, n0) = VarintU32::common_read(src);
             let (not_shared, n1) = VarintU32::common_read(&src[n0 as usize..]);
             let (_, n2) = VarintU32::common_read(&src[(n1 + n0) as usize..]);
-            if shared != 0 { // The first key from restart offset should be completely stored.
+            if shared != 0 {
+                // The first key from restart offset should be completely stored.
                 self.corruption_err();
                 return;
             }
@@ -309,6 +310,8 @@ impl Iterator for BlockIterator {
         while self.parse_block_entry() && self.next_entry_offset() < original {}
     }
 
+    // NOTICE: All the slices return by `key()` point to the same memory so be careful
+    // when call this in the loop
     fn key(&self) -> Slice {
         self.valid_or_panic();
         Slice::from(self.key.as_slice())

@@ -125,8 +125,6 @@ impl Iterator for DBIterator {
                 if !self.inner.valid() {
                     self.valid = false;
                     self.saved_key.clear();
-                } else {
-
                 }
             }
         }
