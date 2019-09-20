@@ -274,7 +274,7 @@ impl Comparator for InternalKeyComparator {
         let ua = extract_user_key(a);
         let ub = extract_user_key(b);
         // compare user key first
-        match ua.compare(&ub) {
+        match self.user_comparator.compare(ua.as_slice(), ub.as_slice()) {
             Ordering::Greater => Ordering::Greater,
             Ordering::Less => Ordering::Less,
             Ordering::Equal => {

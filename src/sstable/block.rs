@@ -128,11 +128,11 @@ pub struct BlockIterator {
     not_shared: u32, // not shared length
     value_len: u32,  // value length
     key_offset: u32, // the offset of the key in the block
-    // TODO: remmove this buffer 
+    // TODO: remmove this buffer
     //     Removing this buffer might be difficult becasue the key
     //     could be formed by multiple segments which means we should
     //     maintain predictable amount of offsets for each key.
-    key: Vec<u8>,    // buffer for a completed key
+    key: Vec<u8>, // buffer for a completed key
 }
 
 impl BlockIterator {
