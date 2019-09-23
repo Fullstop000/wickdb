@@ -466,7 +466,7 @@ impl Version {
             // beginning of range is after all files, so no overlap
             return false;
         }
-        // check iff the upper bound is overlapping
+        // check whether the upper bound is overlapping
         !self.key_is_before_file(self.files[level][index].clone(), largest_ukey)
     }
 

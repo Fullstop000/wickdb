@@ -56,7 +56,7 @@ pub struct Reader {
     // NOTICE: we probably mutate the underlying file in the FilePtr by calling `seek()` and this is not thread safe
     file: Box<dyn File>,
     reporter: Option<Box<dyn Reporter>>,
-    // iff check sum for the record
+    // We should check sum for the record or not
     checksum: bool,
     // Last Read() indicated EOF by returning < BLOCK_SIZE
     eof: bool,

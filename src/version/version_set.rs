@@ -158,7 +158,7 @@ pub struct VersionSet {
     pub compaction_stats: Vec<CompactionStats>,
     // Set of table files to protect from deletion because they are part of ongoing compaction
     pub pending_outputs: HashSet<u64>,
-    // iff should schedule a manual compaction, temporarily just for test
+    // Represent a manual compaction, temporarily just for test
     pub manual_compaction: Option<ManualCompaction>,
     // WAL writer
     pub record_writer: Option<Writer>,
