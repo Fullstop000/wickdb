@@ -419,11 +419,11 @@ impl MergingIterator {
         let mut index = self.current_index;
         for (i, child) in self.children.iter().enumerate() {
             if child.borrow().valid()
-                && (self.cmp.compare(
-                    child.borrow().key().as_slice(),
-                    smallest.as_ref().unwrap().borrow().key().as_slice(),
-                ) == Ordering::Less
-                    || smallest.is_none())
+                && (smallest.is_none()
+                    || self.cmp.compare(
+                        child.borrow().key().as_slice(),
+                        smallest.as_ref().unwrap().borrow().key().as_slice(),
+                    ) == Ordering::Less)
             {
                 smallest = Some(child.clone());
                 index = i
@@ -516,6 +516,7 @@ impl Iterator for MergingIterator {
                     if child.borrow().valid() {
                         child.borrow_mut().prev();
                     } else {
+                        // Child has no key >= current key so point to the last
                         child.borrow_mut().seek_to_last();
                     }
                 }
@@ -550,7 +551,9 @@ impl Iterator for MergingIterator {
 #[cfg(test)]
 mod tests {
     use crate::iterator::*;
+    use crate::rand::Rng;
     use crate::util::byte::*;
+    use crate::util::comparator::BytewiseComparator;
     use crate::util::slice::Slice;
     use crate::util::status::Result;
     use std::cell::RefCell;
@@ -578,6 +581,95 @@ mod tests {
         }
     }
 
+    // Divide given ordered `src` into `n` lists and then construct a `MergingIterator` with them
+    fn new_test_merging_iter(mut src: Vec<String>, n: usize) -> MergingIterator {
+        let mut children = vec![];
+        for _ in 0..n {
+            children.push(vec![]);
+        }
+        src.sort();
+        let mut rnd = rand::thread_rng();
+        for v in src.drain(..) {
+            let i = rnd.gen_range(0, n);
+            let child = children.get_mut(i).unwrap();
+            child.push(v);
+        }
+        let cmp = Arc::new(BytewiseComparator::new());
+        let iters = children
+            .drain(..)
+            .map(|mut child| {
+                child.sort();
+                Rc::new(RefCell::new(TestSimpleArrayIter::box_new(child)))
+            })
+            .collect::<Vec<_>>();
+        MergingIterator::new(cmp, iters)
+    }
+
+    struct SortedIterTestSuite<O: Iterator, S: Iterator> {
+        origin: O, // A sorted array based iterator
+        shadow: S, // The iterator to be tested
+    }
+
+    impl<O: Iterator, S: Iterator> SortedIterTestSuite<O, S> {
+        fn new(origin: O, shadow: S) -> Self {
+            Self { origin, shadow }
+        }
+
+        #[inline]
+        fn assert_valid(&self, expect: bool) {
+            assert_eq!(self.origin.valid(), expect);
+            assert_eq!(self.origin.valid(), self.shadow.valid());
+        }
+
+        #[inline]
+        fn assert_key_and_value(&self) {
+            assert_eq!(self.origin.key(), self.shadow.key());
+            assert_eq!(self.origin.value(), self.shadow.value());
+        }
+    }
+
+    impl<O: Iterator, S: Iterator> Iterator for SortedIterTestSuite<O, S> {
+        fn valid(&self) -> bool {
+            self.origin.valid() && self.shadow.valid()
+        }
+
+        fn seek_to_first(&mut self) {
+            self.origin.seek_to_first();
+            self.shadow.seek_to_first();
+        }
+        fn seek_to_last(&mut self) {
+            self.origin.seek_to_last();
+            self.shadow.seek_to_last();
+        }
+
+        fn seek(&mut self, target: &Slice) {
+            self.origin.seek(target);
+            self.shadow.seek(target);
+        }
+
+        fn next(&mut self) {
+            self.origin.next();
+            self.shadow.next();
+        }
+
+        fn prev(&mut self) {
+            self.origin.prev();
+            self.shadow.prev();
+        }
+
+        fn key(&self) -> Slice {
+            unimplemented!()
+        }
+
+        fn value(&self) -> Slice {
+            unimplemented!()
+        }
+
+        fn status(&mut self) -> Result<()> {
+            unimplemented!()
+        }
+    }
+
     #[derive(Debug)]
     struct TestSimpleArrayIter {
         inner: Vec<String>,
@@ -588,6 +680,10 @@ mod tests {
         fn new(inner: Vec<String>) -> Self {
             let current = inner.len();
             Self { inner, current }
+        }
+
+        fn box_new(inner: Vec<String>) -> Box<dyn Iterator> {
+            Box::new(Self::new(inner))
         }
 
         fn valid_or_panic(&self) {
@@ -633,6 +729,9 @@ mod tests {
             self.valid_or_panic();
             if self.current > 0 {
                 self.current -= 1
+            } else {
+                // marked as invalid
+                self.current = self.inner.len()
             }
         }
 
@@ -705,5 +804,35 @@ mod tests {
         assert_eq!(iter.key().as_str(), "a");
         iter.seek(&Slice::from("d"));
         assert!(!iter.valid());
+    }
+
+    #[test]
+    fn test_merging_iterator() {
+        let mut input = vec![];
+        for i in 1..100 {
+            input.push(i.to_string());
+        }
+        input.sort();
+        let mut tests = vec![1, 5, 10, 50];
+        for t in tests.drain(..) {
+            let merging_iter = new_test_merging_iter(input.clone(), t);
+            let origin = TestSimpleArrayIter::new(input.clone());
+            let mut suite = SortedIterTestSuite::new(origin, merging_iter);
+            suite.assert_valid(false);
+            suite.seek_to_first();
+            suite.assert_key_and_value();
+            suite.seek_to_last();
+            suite.assert_key_and_value();
+            suite.seek(&Slice::from("3"));
+            suite.assert_key_and_value();
+            suite.prev();
+            suite.assert_key_and_value();
+            suite.next();
+            suite.assert_key_and_value();
+            suite.seek(&Slice::from("0"));
+            suite.assert_key_and_value();
+            suite.seek(&Slice::from("9999"));
+            suite.assert_valid(false);
+        }
     }
 }
