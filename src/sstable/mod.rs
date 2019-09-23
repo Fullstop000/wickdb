@@ -759,17 +759,17 @@ mod tests {
         // been added so far.  Returns the keys in sorted order and stores the
         // key/value pairs in `data`
         fn finish(&mut self, options: Arc<Options>) -> Vec<Vec<u8>> {
+            let cmp = options.comparator.clone();
+            // sort the data as the same order as inner data structure is
+            self.data
+                .sort_by(|(a, _), (b, _)| cmp.compare(a.as_slice(), b.as_slice()));
             let mut res = vec![];
             for (key, _) in self.data.iter() {
                 res.push(key.clone())
             }
-            let cmp = options.comparator.clone();
             self.constructor
                 .finish(options, &self.data)
                 .expect("constructor finish should be ok");
-            // sort the data as the same order as inner data structure is
-            self.data
-                .sort_by(|(a, _), (b, _)| cmp.compare(a.as_slice(), b.as_slice()));
             res
         }
     }
@@ -991,7 +991,7 @@ mod tests {
         Block,
         Memtable,
         #[allow(dead_code)]
-        DB, // Enable DB test util fundamental components are stable
+        DB, // TODO: Enable DB test util fundamental components are stable
     }
 
     fn new_test_suits() -> Vec<TestHarness> {
@@ -1033,6 +1033,32 @@ mod tests {
     fn test_simple_empty_key() {
         for mut test in new_test_suits().drain(..) {
             test.add(b"", b"v");
+            test.do_test();
+        }
+    }
+
+    #[test]
+    fn test_single_key() {
+        for mut test in new_test_suits().drain(..) {
+            test.add(b"abc", b"v");
+            test.do_test();
+        }
+    }
+
+    #[test]
+    fn test_mutiple_key() {
+        for mut test in new_test_suits().drain(..) {
+            test.add(b"abc", b"v");
+            test.add(b"abcd", b"v");
+            test.add(b"ac", b"v2");
+            test.do_test();
+        }
+    }
+
+    #[test]
+    fn test_special_key() {
+        for mut test in new_test_suits().drain(..) {
+            test.add(b"\xff\xff", b"v");
             test.do_test();
         }
     }

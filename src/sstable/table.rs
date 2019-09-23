@@ -321,7 +321,7 @@ impl TableBuilder {
         self.assert_not_closed();
         if self.num_entries > 0 {
             assert_eq!(
-                self.cmp.compare(key, &self.last_key.as_slice()),
+                self.cmp.compare(key, self.last_key.as_slice()),
                 Ordering::Greater,
                 "[table builder] new key is inconsistent with the last key in sstable"
             )
