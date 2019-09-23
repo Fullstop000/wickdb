@@ -386,6 +386,7 @@ mod tests {
     use crate::util::slice::Slice;
     use crate::util::status::{Result, Status, WickErr};
     use crate::{WriteBatch, WriteOptions};
+    use hashbrown::HashSet;
     use rand::prelude::ThreadRng;
     use rand::Rng;
     use std::cell::Cell;
@@ -741,6 +742,7 @@ mod tests {
         constructor: Box<dyn Constructor>,
         // key&value pairs in order
         data: Vec<(Vec<u8>, Vec<u8>)>,
+        keys: HashSet<Vec<u8>>,
     }
 
     impl CommonConstructor {
@@ -748,11 +750,15 @@ mod tests {
             Self {
                 constructor,
                 data: vec![],
+                keys: HashSet::new(),
             }
         }
         fn add(&mut self, key: Slice, value: Slice) {
-            self.data
-                .push((Vec::from(key.as_slice()), Vec::from(value.as_slice())));
+            if !self.keys.contains(key.as_slice()) {
+                self.data
+                    .push((Vec::from(key.as_slice()), Vec::from(value.as_slice())));
+                self.keys.insert(Vec::from(key.as_slice()));
+            }
         }
 
         // Finish constructing the data structure with all the keys that have
@@ -760,7 +766,7 @@ mod tests {
         // key/value pairs in `data`
         fn finish(&mut self, options: Arc<Options>) -> Vec<Vec<u8>> {
             let cmp = options.comparator.clone();
-            // sort the data as the same order as inner data structure is
+            // Sort the data
             self.data
                 .sort_by(|(a, _), (b, _)| cmp.compare(a.as_slice(), b.as_slice()));
             let mut res = vec![];
@@ -889,7 +895,7 @@ mod tests {
                     }
                     // case for `seek`
                     2 => {
-                        let rkey = random_key(keys, self.reverse_cmp);
+                        let rkey = random_seek_key(keys, self.reverse_cmp);
                         let key = Slice::from(rkey.as_slice());
                         iter.seek(&key);
                         expected_iter.seek(&key);
@@ -955,7 +961,7 @@ mod tests {
         format!("'{:?}->{:?}'", iter.key(), iter.value())
     }
 
-    fn random_key(keys: &[Vec<u8>], reverse_cmp: bool) -> Vec<u8> {
+    fn random_seek_key(keys: &[Vec<u8>], reverse_cmp: bool) -> Vec<u8> {
         if keys.is_empty() {
             b"foo".to_vec()
         } else {
@@ -1022,6 +1028,32 @@ mod tests {
         results
     }
 
+    fn random_key(length: usize) -> Vec<u8> {
+        let chars = vec![
+            '0', '1', 'a', 'b', 'c', 'd', 'e', '\u{00fd}', '\u{00fe}', '\u{00ff}',
+        ];
+        let mut rnd = rand::thread_rng();
+        let mut result = vec![];
+        for _ in 0..length {
+            let i = rnd.gen_range(0, chars.len());
+            let v = chars.get(i).unwrap();
+            let mut buf = vec![0; v.len_utf8()];
+            v.encode_utf8(&mut buf);
+            result.append(&mut buf);
+        }
+        result
+    }
+
+    fn random_value(length: usize) -> Vec<u8> {
+        let mut result = vec![0u8; length];
+        let mut rnd = rand::thread_rng();
+        for i in 0..length {
+            let v = rnd.gen_range(0, 96);
+            result[i] = v as u8;
+        }
+        result
+    }
+
     #[test]
     fn test_empty_harness() {
         for mut test in new_test_suits().drain(..) {
@@ -1059,6 +1091,19 @@ mod tests {
     fn test_special_key() {
         for mut test in new_test_suits().drain(..) {
             test.add(b"\xff\xff", b"v");
+            test.do_test();
+        }
+    }
+
+    #[test]
+    fn test_randomized_key() {
+        let mut rnd = rand::thread_rng();
+        for mut test in new_test_suits().drain(..) {
+            for _ in 0..1000 {
+                let key = random_key(rnd.gen_range(1, 10));
+                let value = random_value(rnd.gen_range(1, 5));
+                test.add(&key, &value);
+            }
             test.do_test();
         }
     }
