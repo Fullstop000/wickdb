@@ -52,7 +52,7 @@ impl Writer {
     pub fn add_record(&mut self, s: &Slice) -> Result<()> {
         let data = s.as_slice();
         let mut left = s.size();
-        let mut begin = true; // indicate iff the record is a First or Middle record
+        let mut begin = true; // indicate the record is a First or Middle record
         while {
             assert!(
                 BLOCK_SIZE >= self.block_offset,
@@ -79,8 +79,7 @@ impl Writer {
             );
             let space = BLOCK_SIZE - self.block_offset - HEADER_SIZE;
             let to_write = if left < space { left } else { space };
-            // indicates iff the data exhausts a record
-            let end = to_write == left;
+            let end = to_write == left; // indicates whether the data exhausts a record
             let t = {
                 if begin && end {
                     RecordType::Full

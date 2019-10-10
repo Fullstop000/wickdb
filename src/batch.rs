@@ -215,7 +215,7 @@ mod tests {
             BytewiseComparator::new(),
         ))));
         let result = batch.insert_into(&mem);
-        let mut iter = mem.new_iterator();
+        let mut iter = mem.iter();
         iter.as_mut().seek_to_first();
         let mut s = String::new();
         let mut count = 0;

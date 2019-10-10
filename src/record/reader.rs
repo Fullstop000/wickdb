@@ -56,7 +56,7 @@ pub struct Reader {
     // NOTICE: we probably mutate the underlying file in the FilePtr by calling `seek()` and this is not thread safe
     file: Box<dyn File>,
     reporter: Option<Box<dyn Reporter>>,
-    // iff check sum for the record
+    // We should check sum for the record or not
     checksum: bool,
     // Last Read() indicated EOF by returning < BLOCK_SIZE
     eof: bool,
@@ -354,9 +354,8 @@ impl Reader {
         }
         self.end_of_buffer_offset = block_start_location;
         if block_start_location > 0 {
-            let res = self.file.seek(SeekFrom::Start(block_start_location));
-            if res.is_err() {
-                self.report_drop(block_start_location, res.unwrap_err().description());
+            if let Err(e) = self.file.seek(SeekFrom::Start(block_start_location)) {
+                self.report_drop(block_start_location, e.description());
                 return false;
             }
         }

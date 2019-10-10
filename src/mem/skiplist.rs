@@ -50,7 +50,7 @@ pub struct Node {
 impl Node {
     /// Allocates memory in the given arena for Node
     #[allow(clippy::cast_ptr_alignment)]
-    pub fn new(key: Slice, height: usize, arena: &Arena) -> *mut Node {
+    pub fn new(key: Slice, height: usize, arena: &dyn Arena) -> *mut Node {
         let size = mem::size_of::<Node>() + height * mem::size_of::<AtomicPtr<Node>>();
         let ptr = arena.allocate_aligned(size);
         unsafe {
@@ -111,24 +111,25 @@ impl Skiplist {
         }
     }
 
-    /// Insert a node into the skiplist by given key.
-    /// The key must be unique otherwise this method panic.
+    /// Insert the given key as a node into the skiplist.
+    /// The key must be unique otherwise this method panics.
     ///
     /// # NOTICE:
     ///
     /// Concurrent insertion is not thread safe but concurrent reading with a
     /// single writer is safe.
     ///
-    pub fn insert(&self, key: Slice) {
+    pub fn insert(&self, key: Vec<u8>) {
         let mut prev = [ptr::null_mut(); MAX_HEIGHT];
-        let node = self.find_greater_or_equal(&key, Some(&mut prev));
+        let slc = Slice::from(&key);
+        let node = self.find_greater_or_equal(&slc, Some(&mut prev));
         if !node.is_null() {
             unsafe {
                 assert_ne!(
-                    (&(*node)).key().compare(&key),
+                    (&(*node)).key().compare(&slc),
                     CmpOrdering::Equal,
                     "[skiplist] duplicate insertion [key={:?}] is not allowed",
-                    key
+                    &key
                 );
             }
         }
@@ -142,13 +143,13 @@ impl Skiplist {
             self.max_height.store(height, Ordering::Release);
         }
         // allocate the key
-        let k = self.arena.allocate(key.size());
+        let k = self.arena.allocate(key.len());
         unsafe {
-            copy_nonoverlapping(key.as_ptr(), k, key.size());
+            copy_nonoverlapping(key.as_ptr(), k, key.len());
         }
         // allocate the node
         let new_node = Node::new(
-            Slice::new(k as *const u8, key.size()),
+            Slice::new(k as *const u8, key.len()),
             height,
             self.arena.as_ref(),
         );
@@ -283,6 +284,9 @@ impl Iterator for SkiplistIterator {
     #[inline]
     fn seek_to_last(&mut self) {
         self.node = self.skl.find_last();
+        if self.node == self.skl.head {
+            self.node = ptr::null_mut();
+        }
     }
 
     /// Advance to the first node with a key >= target
@@ -303,8 +307,12 @@ impl Iterator for SkiplistIterator {
     /// Advance to the previous position
     #[inline]
     fn prev(&mut self) {
+        self.panic_valid();
         let key = self.key();
         self.node = self.skl.find_less_than(&key);
+        if self.node == self.skl.head {
+            self.node = ptr::null_mut();
+        }
     }
 
     /// Return the key of node in current position
@@ -524,7 +532,7 @@ mod tests {
         let inputs = vec!["key1", "key3", "key5", "key7", "key9"];
         let skl = new_test_skl();
         for key in inputs.clone().drain(..) {
-            skl.insert(Slice::from(key));
+            skl.insert(Vec::from(key));
         }
 
         let mut node = skl.head;
@@ -548,42 +556,61 @@ mod tests {
         let mut inputs = vec!["key1", "key1"];
         let skl = new_test_skl();
         for key in inputs.drain(..) {
-            skl.insert(Slice::from(key));
+            skl.insert(Vec::from(key));
         }
     }
 
-    // this is a e2e test for all methods in SkiplistIterator
     #[test]
-    fn test_basic() {
+    fn test_empty_skiplist_iterator() {
+        let skl = new_test_skl();
+        let iter = SkiplistIterator::new(Arc::new(skl));
+        assert!(!iter.valid());
+    }
+
+    // An e2e test for all methods in SkiplistIterator
+    #[test]
+    fn test_skiplist_basic() {
         let skl = new_test_skl();
         let inputs = vec!["key1", "key11", "key13", "key3", "key5", "key7", "key9"];
         for key in inputs.clone().drain(..) {
-            skl.insert(Slice::from(key))
+            skl.insert(Vec::from(key))
         }
-        let mut skl_iterator = SkiplistIterator::new(Arc::new(skl));
-        assert_eq!(ptr::null_mut(), skl_iterator.node,);
+        let mut iter = SkiplistIterator::new(Arc::new(skl));
+        assert_eq!(ptr::null_mut(), iter.node,);
 
-        skl_iterator.seek_to_first();
-        assert_eq!("key1", skl_iterator.key().as_str());
+        iter.seek_to_first();
+        assert_eq!("key1", iter.key().as_str());
         for key in inputs.clone().drain(..) {
-            if !skl_iterator.valid() {
+            if !iter.valid() {
                 break;
             }
-            assert_eq!(key, skl_iterator.key().as_str());
-            skl_iterator.next();
+            assert_eq!(key, iter.key().as_str());
+            iter.next();
         }
+        assert!(!iter.valid());
 
-        skl_iterator.seek_to_first();
-        skl_iterator.next();
-        skl_iterator.prev();
-        assert_eq!(inputs[0], skl_iterator.key().as_str());
-        skl_iterator.seek_to_first();
-        skl_iterator.seek_to_last();
-        assert_eq!(inputs[inputs.len() - 1], skl_iterator.key().as_str());
-        skl_iterator.seek(&Slice::from("key7"));
-        assert_eq!("key7", skl_iterator.key().as_str());
-        skl_iterator.seek(&Slice::from("key4"));
-        assert_eq!("key5", skl_iterator.key().as_str());
+        iter.seek_to_first();
+        iter.next();
+        iter.prev();
+        assert_eq!(inputs[0], iter.key().as_str());
+        iter.seek_to_first();
+        iter.seek_to_last();
+        for key in inputs.clone().drain(..).rev() {
+            if !iter.valid() {
+                break;
+            }
+            assert_eq!(key, iter.key().as_str());
+            iter.prev();
+        }
+        assert!(!iter.valid());
+        iter.seek(&Slice::from("key7"));
+        assert_eq!("key7", iter.key().as_str());
+        iter.seek(&Slice::from("key4"));
+        assert_eq!("key5", iter.key().as_str());
+        iter.seek(&Slice::from(""));
+        assert_eq!("key1", iter.key().as_str());
+        iter.seek(&Slice::from("llllllllllllllll"));
+        assert!(!iter.valid());
     }
 
     const K: usize = 4;
@@ -710,7 +737,7 @@ mod tests {
             let key = make_key(k as u64, g as u64);
             let mut bytes = vec![];
             put_fixed_64(&mut bytes, key);
-            self.list.insert(Slice::from(&bytes));
+            self.list.insert(bytes);
             self.current.set(k, g);
         }
 

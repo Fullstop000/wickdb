@@ -64,7 +64,7 @@ impl<T: 'static + Clone> Cache<T> for SharedLRUCache<T> {
         key: Vec<u8>,
         value: T,
         charge: usize,
-        deleter: Option<Box<FnMut(&[u8], T)>>,
+        deleter: Option<Box<dyn FnMut(&[u8], T)>>,
     ) -> HandleRef<T> {
         let s = self.shard(key.as_slice());
         self.shards[s].insert(key, value, charge, deleter)
@@ -107,7 +107,7 @@ impl<T: 'static + Clone> Cache<T> for SharedLRUCache<T> {
 /// Exact node in the `LRUCache`
 pub struct LRUHandle<T: Clone> {
     value: Option<T>,
-    deleter: Option<Box<FnMut(&[u8], T)>>,
+    deleter: Option<Box<dyn FnMut(&[u8], T)>>,
     prev: *mut LRUHandle<T>,
     next: *mut LRUHandle<T>,
     hash: u32, // Hash of key; used for fast sharding and comparisons
@@ -126,7 +126,7 @@ impl<T: Clone> Drop for LRUHandle<T> {
 }
 
 impl<T: Clone> CacheHandle<T> for LRUHandle<T> {
-    fn get_value(&self) -> Option<T> {
+    fn value(&self) -> Option<T> {
         match &self.value {
             Some(v) => Some(v.clone()),
             None => None,
@@ -138,7 +138,7 @@ impl<T: Clone> LRUHandle<T> {
     pub fn new(
         key: Box<[u8]>,
         value: T,
-        deleter: Option<Box<FnMut(&[u8], T)>>,
+        deleter: Option<Box<dyn FnMut(&[u8], T)>>,
         charge: usize,
     ) -> LRUHandle<T> {
         let hash = hash(key.as_ref(), 0);
@@ -310,7 +310,7 @@ impl<T: 'static + Clone> Cache<T> for LRUCache<T> {
         key: Vec<u8>,
         value: T,
         charge: usize,
-        deleter: Option<Box<FnMut(&[u8], T)>>,
+        deleter: Option<Box<dyn FnMut(&[u8], T)>>,
     ) -> HandleRef<T> {
         let mut mutex_data = self.mutex.lock().unwrap();
         let handle = LRUHandle::new(key.clone().into_boxed_slice(), value, deleter, charge);
@@ -431,7 +431,7 @@ mod tests {
             put_fixed_32(&mut k, key);
             match self.cache.look_up(k.as_slice()) {
                 Some(h) => {
-                    let v = h.get_value().unwrap();
+                    let v = h.value().unwrap();
                     self.cache.release(h);
                     Some(v)
                 }
@@ -483,14 +483,14 @@ mod tests {
         pub fn assert_inside_handle(&self, key: u32, want: u32) -> HandleRef<u32> {
             let encoded = encoded_u32(key);
             let h = self.cache.look_up(encoded.as_slice()).unwrap();
-            assert_eq!(want, h.get_value().unwrap());
+            assert_eq!(want, h.value().unwrap());
             h
         }
     }
     fn deleter_factory(
         deleted_keys: Rc<RefCell<Vec<u32>>>,
         deleted_values: Rc<RefCell<Vec<u32>>>,
-    ) -> Box<FnMut(&[u8], u32)> {
+    ) -> Box<dyn FnMut(&[u8], u32)> {
         Box::new(move |k, v| {
             let key = decode_fixed_32(k);
             deleted_keys.borrow_mut().push(key);

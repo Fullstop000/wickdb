@@ -18,7 +18,6 @@
 use crate::cache::lru::SharedLRUCache;
 use crate::cache::{Cache, HandleRef};
 use crate::db::filename::{generate_filename, FileType};
-use crate::db::format::ParsedInternalKey;
 use crate::iterator::{EmptyIterator, IterWithCleanup, Iterator};
 use crate::options::{Options, ReadOptions};
 use crate::sstable::table::{new_table_iterator, Table};
@@ -79,15 +78,15 @@ impl TableCache {
         key: &Slice,
         file_number: u64,
         file_size: u64,
-    ) -> Result<Option<ParsedInternalKey>> {
+    ) -> Result<Option<(Slice, Slice)>> {
         let handle = self.find_table(file_number, file_size)?;
         // every value should be valid so unwrap is safe here
-        let parsed_key = handle
-            .get_value()
+        let res = handle
+            .value()
             .unwrap()
             .internal_get(options, key.as_slice())?;
         self.cache.release(handle);
-        Ok(parsed_key)
+        Ok(res)
     }
 
     /// Create an iterator for the specified `file_number` (the corresponding
@@ -105,7 +104,7 @@ impl TableCache {
     ) -> Box<dyn Iterator> {
         match self.find_table(file_number, file_size) {
             Ok(h) => {
-                let table = h.get_value().unwrap();
+                let table = h.value().unwrap();
                 let mut iter = IterWithCleanup::new(new_table_iterator(table, options));
                 let cache = self.cache.clone();
                 iter.register_task(Box::new(move || cache.release(h.clone())));

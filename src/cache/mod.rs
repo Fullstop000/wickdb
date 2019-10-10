@@ -22,7 +22,7 @@ pub mod lru;
 /// The `Handle` is a simple trait for the value in Cache
 pub trait Handle<T> {
     /// Returns the value the Handle pointing to
-    fn get_value(&self) -> Option<T>;
+    fn value(&self) -> Option<T>;
 }
 
 /// A `Cache` is an interface that maps keys to values.
@@ -56,7 +56,7 @@ pub trait Cache<T> {
         key: Vec<u8>,
         value: T,
         charge: usize,
-        deleter: Option<Box<FnMut(&[u8], T)>>,
+        deleter: Option<Box<dyn FnMut(&[u8], T)>>,
     ) -> HandleRef<T>;
 
     /// If the cache has no mapping for `key`, returns `None`.

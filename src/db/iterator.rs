@@ -125,8 +125,6 @@ impl Iterator for DBIterator {
                 if !self.inner.valid() {
                     self.valid = false;
                     self.saved_key.clear();
-                } else {
-
                 }
             }
         }
@@ -193,7 +191,7 @@ impl DBIterator {
         ucmp: Arc<dyn Comparator>,
     ) -> Self {
         Self {
-            valid: true,
+            valid: false,
             db: db.clone(),
             ucmp,
             sequence,
