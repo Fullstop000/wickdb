@@ -109,7 +109,7 @@ impl Compaction {
             grand_parent_index: 0,
             seen_key: false,
             overlapped_bytes: 0,
-            level_ptrs: vec![],
+            level_ptrs,
             oldest_snapshot_alive: 0,
             outputs: vec![],
             builder: None,
