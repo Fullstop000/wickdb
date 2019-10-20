@@ -233,7 +233,7 @@ impl Options {
     #[allow(unused_must_use)]
     fn apply_logger(&mut self) {
         if let Some(logger) = self.logger.take() {
-            let static_logger: &'static Log = Box::leak(logger);
+            let static_logger: &'static dyn Log = Box::leak(logger);
             log::set_logger(static_logger);
             log::set_max_level(self.logger_level);
             info!("Logger initialized");

@@ -25,6 +25,8 @@ use std::cmp::{min, Ordering};
 use std::rc::Rc;
 use std::sync::Arc;
 
+// TODO: remove all magic number
+
 /// `Block` is consist of one or more key/value entries and a block trailer.
 /// Block entry shares key prefix with its preceding key until a `restart`
 /// point reached. A block should contains at least one restart point.
@@ -126,7 +128,11 @@ pub struct BlockIterator {
     not_shared: u32, // not shared length
     value_len: u32,  // value length
     key_offset: u32, // the offset of the key in the block
-    key: Vec<u8>,    // buffer for a completed key
+    // TODO: remmove this buffer
+    //     Removing this buffer might be difficult becasue the key
+    //     could be formed by multiple segments which means we should
+    //     maintain predictable amount of offsets for each key.
+    key: Vec<u8>, // buffer for a completed key
 }
 
 impl BlockIterator {
@@ -179,7 +185,7 @@ impl BlockIterator {
         let (not_shared, n1) = VarintU32::common_read(&src[n0 as usize..]);
         let (value_len, n2) = VarintU32::common_read(&src[(n1 + n0) as usize..]);
         let n = (n0 + n1 + n2) as u32;
-        if offset + n + shared + not_shared + value_len > self.restarts {
+        if offset + n + not_shared + value_len > self.restarts {
             self.corruption_err();
             return false;
         }
@@ -195,9 +201,8 @@ impl BlockIterator {
             self.key[i] = delta[i - shared as usize]
         }
         // update restart index
-        if shared == 0
-            && self.restart_index + 1 < self.restarts_len
-            && self.get_restart_point(self.restart_index + 1) == self.current
+        while self.restart_index + 1 < self.restarts_len
+            && self.get_restart_point(self.restart_index + 1) < self.current
         {
             self.restart_index += 1
         }
@@ -236,11 +241,13 @@ impl Iterator for BlockIterator {
     }
 
     fn seek_to_last(&mut self) {
-        // seek to the last
+        // seek to the last restart offset
         self.seek_to_restart_point(self.restarts_len - 1);
-        // keep parsing block
+        // keep parsing block util the last
         // TODO: the buffered key cost a lot waste here
-        while self.parse_block_entry() && self.next_entry_offset() < self.restarts {}
+        while self.parse_block_entry() && self.next_entry_offset() < self.restarts {
+            self.current = self.next_entry_offset()
+        }
     }
 
     // find the first entry in block with key>= target
@@ -256,6 +263,7 @@ impl Iterator for BlockIterator {
             let (not_shared, n1) = VarintU32::common_read(&src[n0 as usize..]);
             let (_, n2) = VarintU32::common_read(&src[(n1 + n0) as usize..]);
             if shared != 0 {
+                // The first key from restart offset should be completely stored.
                 self.corruption_err();
                 return;
             }
@@ -294,20 +302,26 @@ impl Iterator for BlockIterator {
     // seek to prev restart offset and scan backwards to a restart point before current
     fn prev(&mut self) {
         let original = self.current;
+        // Find the first restart point that just less than the current offset
         while self.get_restart_point(self.restart_index) >= original {
             if self.restart_index == 0 {
                 // No more entries
                 // marked as invalid
                 self.current = self.restarts;
                 self.restart_index = self.restarts_len;
+                return;
             }
             self.restart_index -= 1
         }
         self.seek_to_restart_point(self.restart_index);
         // Loop until end of current entry hits the start of original entry
-        while self.parse_block_entry() && self.next_entry_offset() < original {}
+        while self.parse_block_entry() && self.next_entry_offset() < original {
+            self.current = self.next_entry_offset()
+        }
     }
 
+    // NOTICE: All the slices return by `key()` point to the same memory so be careful
+    // when call this in the loop
     fn key(&self) -> Slice {
         self.valid_or_panic();
         Slice::from(self.key.as_slice())
@@ -470,7 +484,7 @@ mod tests {
     use crate::util::coding::{decode_fixed_32, put_fixed_32};
     use crate::util::comparator::BytewiseComparator;
     use crate::util::slice::Slice;
-    use crate::util::status::{Status, WickErr};
+    use crate::util::status::Status;
     use crate::util::varint::VarintU32;
     use std::sync::Arc;
 
@@ -540,11 +554,13 @@ mod tests {
         let k = iter.key();
         let v = iter.value();
         assert_eq!(k.as_str(), "");
-        assert_eq!(v.as_str(), "test")
+        assert_eq!(v.as_str(), "test");
+        iter.next();
+        assert!(!iter.valid());
     }
 
     #[test]
-    #[should_panic(expected = "[block builder] inconsistent new key")]
+    #[should_panic]
     fn test_add_inconsistent_key() {
         let cmp = Arc::new(BytewiseComparator::new());
         let mut builder = BlockBuilder::new(2, cmp.clone());
@@ -659,6 +675,7 @@ mod tests {
         let cmp = Arc::new(BytewiseComparator::new());
         let mut builder = BlockBuilder::new(2, cmp.clone());
         let tests = vec![
+            ("", "empty"),
             ("1111", "val1"),
             ("1112", "val2"),
             ("1113", "val3"),

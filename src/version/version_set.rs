@@ -158,7 +158,7 @@ pub struct VersionSet {
     pub compaction_stats: Vec<CompactionStats>,
     // Set of table files to protect from deletion because they are part of ongoing compaction
     pub pending_outputs: HashSet<u64>,
-    // iff should schedule a manual compaction, temporarily just for test
+    // Represent a manual compaction, temporarily just for test
     pub manual_compaction: Option<ManualCompaction>,
     // WAL writer
     pub record_writer: Option<Writer>,
@@ -321,12 +321,8 @@ impl VersionSet {
                     Arc::new(InternalKeyComparator::new(self.options.comparator.clone())),
                     files.clone(),
                 );
-                let factory = FileIterFactory::new(table_cache.clone());
-                let iter = ConcatenateIterator::new(
-                    read_opt.clone(),
-                    Box::new(level_file_iter),
-                    Box::new(factory),
-                );
+                let factory = FileIterFactory::new(read_opt.clone(), table_cache.clone());
+                let iter = ConcatenateIterator::new(Box::new(level_file_iter), Box::new(factory));
                 res.push(Box::new(iter));
             }
         }
@@ -343,7 +339,7 @@ impl VersionSet {
     ///     * After major compaction
     pub fn log_and_apply(&mut self, edit: &mut VersionEdit) -> Result<()> {
         if let Some(target_log) = edit.log_number {
-            assert!(target_log >= self.log_number && target_log< self.next_file_number,
+            assert!(target_log >= self.log_number && target_log < self.next_file_number,
                     "[version set] applying VersionEdit use a invalid log number {}, expect to be at [{}, {})", target_log, self.log_number, self.next_file_number);
         } else {
             edit.set_log_number(self.log_number);
@@ -970,17 +966,21 @@ impl VersionSet {
 }
 
 pub struct FileIterFactory {
+    options: Rc<ReadOptions>,
     table_cache: Arc<TableCache>,
 }
 
 impl FileIterFactory {
-    pub fn new(table_cache: Arc<TableCache>) -> Self {
-        Self { table_cache }
+    pub fn new(options: Rc<ReadOptions>, table_cache: Arc<TableCache>) -> Self {
+        Self {
+            options,
+            table_cache,
+        }
     }
 }
 
 impl DerivedIterFactory for FileIterFactory {
-    fn produce(&self, options: Rc<ReadOptions>, value: &Slice) -> Result<Box<dyn Iterator>> {
+    fn derive(&self, value: &Slice) -> Result<Box<dyn Iterator>> {
         if value.size() != 2 * FILE_META_LENGTH {
             Ok(Box::new(EmptyIterator::new_with_err(WickErr::new(
                 Status::Corruption,
@@ -989,7 +989,9 @@ impl DerivedIterFactory for FileIterFactory {
         } else {
             let file_number = decode_fixed_64(value.as_slice());
             let file_size = decode_fixed_64(&value.as_slice()[8..]);
-            Ok(self.table_cache.new_iter(options, file_number, file_size))
+            Ok(self
+                .table_cache
+                .new_iter(self.options.clone(), file_number, file_size))
         }
     }
 }

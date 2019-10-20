@@ -358,7 +358,7 @@ pub struct DBImpl {
     // all relative methods are using immutable borrowing,
     // we still need to mutate the field `mem` and `im_mem` in few situations.
     mem: ShardedLock<MemTable>,
-    im_mem: ShardedLock<Option<MemTable>>, // iff the memtable is compacted
+    im_mem: ShardedLock<Option<MemTable>>, // There is a compacted immutable table or not
     // Have we encountered a background error in paranoid mode
     bg_error: RwLock<Option<WickErr>>,
     // Whether the db is closing

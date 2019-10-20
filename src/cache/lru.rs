@@ -64,7 +64,7 @@ impl<T: 'static + Clone> Cache<T> for SharedLRUCache<T> {
         key: Vec<u8>,
         value: T,
         charge: usize,
-        deleter: Option<Box<FnMut(&[u8], T)>>,
+        deleter: Option<Box<dyn FnMut(&[u8], T)>>,
     ) -> HandleRef<T> {
         let s = self.shard(key.as_slice());
         self.shards[s].insert(key, value, charge, deleter)
@@ -107,7 +107,7 @@ impl<T: 'static + Clone> Cache<T> for SharedLRUCache<T> {
 /// Exact node in the `LRUCache`
 pub struct LRUHandle<T: Clone> {
     value: Option<T>,
-    deleter: Option<Box<FnMut(&[u8], T)>>,
+    deleter: Option<Box<dyn FnMut(&[u8], T)>>,
     prev: *mut LRUHandle<T>,
     next: *mut LRUHandle<T>,
     hash: u32, // Hash of key; used for fast sharding and comparisons
@@ -138,7 +138,7 @@ impl<T: Clone> LRUHandle<T> {
     pub fn new(
         key: Box<[u8]>,
         value: T,
-        deleter: Option<Box<FnMut(&[u8], T)>>,
+        deleter: Option<Box<dyn FnMut(&[u8], T)>>,
         charge: usize,
     ) -> LRUHandle<T> {
         let hash = hash(key.as_ref(), 0);
@@ -310,7 +310,7 @@ impl<T: 'static + Clone> Cache<T> for LRUCache<T> {
         key: Vec<u8>,
         value: T,
         charge: usize,
-        deleter: Option<Box<FnMut(&[u8], T)>>,
+        deleter: Option<Box<dyn FnMut(&[u8], T)>>,
     ) -> HandleRef<T> {
         let mut mutex_data = self.mutex.lock().unwrap();
         let handle = LRUHandle::new(key.clone().into_boxed_slice(), value, deleter, charge);
@@ -490,7 +490,7 @@ mod tests {
     fn deleter_factory(
         deleted_keys: Rc<RefCell<Vec<u32>>>,
         deleted_values: Rc<RefCell<Vec<u32>>>,
-    ) -> Box<FnMut(&[u8], u32)> {
+    ) -> Box<dyn FnMut(&[u8], u32)> {
         Box::new(move |k, v| {
             let key = decode_fixed_32(k);
             deleted_keys.borrow_mut().push(key);

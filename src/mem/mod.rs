@@ -72,7 +72,7 @@ pub trait MemoryTable {
 // KeyComparator is a wrapper for InternalKeyComparator. It will convert the input mem key
 // to the internal key before comparing.
 struct KeyComparator {
-    cmp: Arc<InternalKeyComparator>,
+    icmp: Arc<InternalKeyComparator>,
 }
 
 impl Comparator for KeyComparator {
@@ -80,25 +80,26 @@ impl Comparator for KeyComparator {
         let ia = extract_varint32_encoded_slice(&mut Slice::from(a));
         let ib = extract_varint32_encoded_slice(&mut Slice::from(b));
         if ia.is_empty() || ib.is_empty() {
+            // Use memcmp directly
             ia.compare(&ib)
         } else {
-            self.cmp.compare(ia.as_slice(), ib.as_slice())
+            self.icmp.compare(ia.as_slice(), ib.as_slice())
         }
     }
 
     fn name(&self) -> &str {
-        self.cmp.name()
+        self.icmp.name()
     }
 
     fn separator(&self, a: &[u8], b: &[u8]) -> Vec<u8> {
         let ia = extract_varint32_encoded_slice(&mut Slice::from(a));
         let ib = extract_varint32_encoded_slice(&mut Slice::from(b));
-        self.cmp.separator(ia.as_slice(), ib.as_slice())
+        self.icmp.separator(ia.as_slice(), ib.as_slice())
     }
 
     fn successor(&self, key: &[u8]) -> Vec<u8> {
         let ia = extract_varint32_encoded_slice(&mut Slice::from(key));
-        self.cmp.successor(ia.as_slice())
+        self.icmp.successor(ia.as_slice())
     }
 }
 
@@ -109,9 +110,9 @@ pub struct MemTable {
 }
 
 impl MemTable {
-    pub fn new(cmp: Arc<InternalKeyComparator>) -> Self {
+    pub fn new(icmp: Arc<InternalKeyComparator>) -> Self {
         let arena = BlockArena::new();
-        let kcmp = Arc::new(KeyComparator { cmp });
+        let kcmp = Arc::new(KeyComparator { icmp });
         let table = Arc::new(Skiplist::new(kcmp.clone(), Box::new(arena)));
         Self { cmp: kcmp, table }
     }
@@ -134,8 +135,7 @@ impl MemoryTable for MemTable {
         buf.extend_from_slice(key);
         put_fixed_64(&mut buf, (seq_number << 8) | val_type as u64);
         VarintU32::put_varint_prefixed_slice(&mut buf, value);
-        // TODO: remove redundant copying
-        self.table.insert(Slice::from(buf.as_slice()))
+        self.table.insert(buf);
     }
 
     fn get(&self, key: &LookupKey) -> Option<Result<Slice>> {
@@ -146,7 +146,7 @@ impl MemoryTable for MemTable {
         if iter.valid() {
             let internal_key = iter.key();
             // only check the user key here
-            match self.cmp.cmp.user_comparator.compare(
+            match self.cmp.icmp.user_comparator.compare(
                 Slice::new(internal_key.as_ptr(), internal_key.size() - 8).as_slice(),
                 key.user_key().as_slice(),
             ) {

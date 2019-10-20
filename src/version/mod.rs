@@ -25,7 +25,7 @@ use crate::table_cache::TableCache;
 use crate::util::coding::put_fixed_64;
 use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
-use crate::util::status::Result;
+use crate::util::status::{Result, Status, WickErr};
 use crate::version::version_edit::FileMetaData;
 use crate::version::version_set::VersionSet;
 use std::cell::RefCell;
@@ -161,13 +161,29 @@ impl Version {
                 seek_stats.seek_file = Some(file.clone());
                 match table_cache.get(opt.clone(), &ikey, file.number, file.file_size)? {
                     None => continue, // keep searching
-                    Some(parsed_key) => match parsed_key.value_type {
-                        ValueType::Value => {
-                            return Ok((Some(parsed_key.user_key.clone()), seek_stats))
+                    Some((encoded_key, value)) => {
+                        match ParsedInternalKey::decode_from(encoded_key) {
+                            None => {
+                                return Err(WickErr::new(
+                                    Status::Corruption,
+                                    Some("bad internal key"),
+                                ))
+                            }
+                            Some(parsed_key) => {
+                                if self.options.comparator.compare(
+                                    parsed_key.user_key.as_slice(),
+                                    key.user_key().as_slice(),
+                                ) == CmpOrdering::Equal
+                                {
+                                    match parsed_key.value_type {
+                                        ValueType::Value => return Ok((Some(value), seek_stats)),
+                                        ValueType::Deletion => return Ok((None, seek_stats)),
+                                        _ => {}
+                                    }
+                                }
+                            }
                         }
-                        ValueType::Deletion => return Ok((None, seek_stats)),
-                        _ => {}
-                    },
+                    }
                 }
             }
         }
@@ -331,7 +347,7 @@ impl Version {
         &self,
         user_key: Slice,
         internal_key: Slice,
-        mut func: Box<FnMut(usize, Arc<FileMetaData>) -> bool>,
+        mut func: Box<dyn FnMut(usize, Arc<FileMetaData>) -> bool>,
     ) {
         let ucmp = self.icmp.user_comparator.clone();
         for (level, files) in self.files.iter().enumerate() {
@@ -450,7 +466,7 @@ impl Version {
             // beginning of range is after all files, so no overlap
             return false;
         }
-        // check iff the upper bound is overlapping
+        // check whether the upper bound is overlapping
         !self.key_is_before_file(self.files[level][index].clone(), largest_ukey)
     }
 

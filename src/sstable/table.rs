@@ -15,7 +15,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-use crate::db::format::ParsedInternalKey;
 use crate::iterator::{ConcatenateIterator, DerivedIterFactory, Iterator};
 use crate::options::{CompressionType, Options, ReadOptions};
 use crate::sstable::block::{Block, BlockBuilder};
@@ -68,7 +67,6 @@ impl Table {
         let index_block_contents =
             read_block(file.as_ref(), &footer.index_handle, options.paranoid_checks)?;
         let index_block = Block::new(index_block_contents)?;
-
         let cache_id = if let Some(cache) = &options.block_cache {
             cache.new_id()
         } else {
@@ -91,6 +89,7 @@ impl Table {
                 options.paranoid_checks,
             ) {
                 if let Ok(meta_block) = Block::new(meta_block_contents) {
+                    t.meta_block_handle = Some(footer.meta_index_handle);
                     let mut iter = meta_block.iter(options.comparator.clone());
                     let filter_key = if let Some(fp) = &options.filter_policy {
                         "filter.".to_owned() + fp.name()
@@ -160,12 +159,13 @@ impl Table {
         Ok(block.iter(self.options.comparator.clone()))
     }
 
-    /// Gets the first entry with the key equal or greater than target, then calls the 'callback'
+    /// Gets the first entry with the key equal or greater than target.
+    /// The given `key` is a user key
     pub fn internal_get(
         &self,
         options: Rc<ReadOptions>,
         key: &[u8],
-    ) -> Result<Option<ParsedInternalKey>> {
+    ) -> Result<Option<(Slice, Slice)>> {
         let mut index_iter = self.index_block.iter(self.options.comparator.clone());
         // seek to the first 'last key' bigger than 'key'
         index_iter.seek(&Slice::from(key));
@@ -189,19 +189,7 @@ impl Table {
                 let mut block_iter = self.block_reader(data_block_handle, options)?;
                 block_iter.seek(&Slice::from(key));
                 if block_iter.valid() {
-                    match ParsedInternalKey::decode_from(block_iter.value()) {
-                        None => return Err(WickErr::new(Status::Corruption, None)),
-                        Some(parsed_key) => {
-                            if self
-                                .options
-                                .comparator
-                                .compare(parsed_key.user_key.as_slice(), key)
-                                == Ordering::Equal
-                            {
-                                return Ok(Some(parsed_key));
-                            }
-                        }
-                    }
+                    return Ok(Some((block_iter.key(), block_iter.value())));
                 }
                 block_iter.status()?;
             }
@@ -235,12 +223,13 @@ impl Table {
 }
 
 pub struct TableIterFactory {
+    options: Rc<ReadOptions>,
     table: Arc<Table>,
 }
 impl DerivedIterFactory for TableIterFactory {
-    fn produce(&self, options: Rc<ReadOptions>, value: &Slice) -> Result<Box<dyn Iterator>> {
+    fn derive(&self, value: &Slice) -> Result<Box<dyn Iterator>> {
         BlockHandle::decode_from(value.as_slice())
-            .and_then(|(handle, _)| self.table.block_reader(handle, options))
+            .and_then(|(handle, _)| self.table.block_reader(handle, self.options.clone()))
     }
 }
 
@@ -253,8 +242,8 @@ impl DerivedIterFactory for TableIterFactory {
 pub fn new_table_iterator(table: Arc<Table>, options: Rc<ReadOptions>) -> Box<dyn Iterator> {
     let cmp = table.options.comparator.clone();
     let index_iter = table.index_block.iter(cmp);
-    let factory = Box::new(TableIterFactory { table });
-    Box::new(ConcatenateIterator::new(options, index_iter, factory))
+    let factory = Box::new(TableIterFactory { options, table });
+    Box::new(ConcatenateIterator::new(index_iter, factory))
 }
 
 /// Temporarily stores the contents of the table it is
@@ -277,7 +266,7 @@ pub struct TableBuilder {
     num_entries: usize,
     closed: bool,
     filter_block: Option<FilterBlockBuilder>,
-    // indicates iff we have to add a index to index_block
+    // Indicates whether we have to add a index to index_block
     //
     // We do not emit the index entry for a block until we have seen the
     // first key for the next data block. This allows us to use shorter
@@ -331,13 +320,13 @@ impl TableBuilder {
     pub fn add(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         self.assert_not_closed();
         if self.num_entries > 0 {
-            assert_ne!(
-                self.cmp.compare(key, &self.last_key.as_slice()),
+            assert_eq!(
+                self.cmp.compare(key, self.last_key.as_slice()),
                 Ordering::Greater,
                 "[table builder] new key is inconsistent with the last key in sstable"
             )
         }
-        // Check iff we need to create a new index entry
+        // Check whether we need to create a new index entry
         self.maybe_append_index_block(Some(key));
         // Update filter block
         if let Some(fb) = self.filter_block.as_mut() {
@@ -391,9 +380,7 @@ impl TableBuilder {
     }
 
     /// Finishes building the table and close the relative file.
-    /// if `sync` is true, the `File::flush` will be called.
-    /// Stops using the file passed to the
-    /// constructor after this function returns.
+    /// If `sync` is true, the `File::flush` will be called.
     ///
     /// # Panics
     ///
@@ -495,6 +482,7 @@ impl TableBuilder {
         );
     }
 
+    // Add a key into the index block if neccessary
     fn maybe_append_index_block(&mut self, key: Option<&[u8]>) -> bool {
         if self.pending_index_entry {
             // We've flushed a data block to the file so adding an relate index entry into index block
@@ -557,7 +545,7 @@ fn compress_block(
     }
 }
 
-// This func is used to avoid multiple mutable borrows caused by write_raw_block(&mut self..) above
+// Write given block data into the file with block trailer
 fn write_raw_block(
     file: &mut dyn File,
     data: &[u8],
@@ -571,6 +559,7 @@ fn write_raw_block(
     handle.set_offset(*offset);
     handle.set_size(data.len() as u64);
     // write trailer
+    // TODO: use pre-allocated buf
     let mut trailer = vec![];
     trailer.push(compression as u8);
     let crc = mask(extend(value(data), &[compression as u8]));
@@ -586,6 +575,7 @@ fn write_raw_block(
 /// If the read data does not match the checksum, return a error marked as `Status::Corruption`
 pub fn read_block(file: &dyn File, handle: &BlockHandle, verify_checksum: bool) -> Result<Vec<u8>> {
     let n = handle.size as usize;
+    // TODO: use pre-allocated buf
     let mut buffer = vec![0; n + BLOCK_TRAILER_SIZE];
     file.read_exact_at(buffer.as_mut_slice(), handle.offset)?;
     if verify_checksum {
@@ -606,6 +596,7 @@ pub fn read_block(file: &dyn File, handle: &BlockHandle, verify_checksum: bool) 
                 buffer
             }
             CompressionType::SnappyCompression => {
+                // TODO: use pre-allocated buf
                 let mut decompressed = vec![];
                 match snap::decompress_len(&buffer.as_slice()[..n]) {
                     Ok(len) => {
@@ -643,5 +634,122 @@ pub fn read_block(file: &dyn File, handle: &BlockHandle, verify_checksum: bool) 
 
 #[cfg(test)]
 mod tests {
-    // TODO: add tests case after finishing the storage
+    use crate::filter::bloom::BloomFilter;
+    use crate::sstable::block::Block;
+    use crate::sstable::table::{read_block, Table, TableBuilder};
+    use crate::sstable::BlockHandle;
+    use crate::storage::mem::MemStorage;
+    use crate::util::comparator::BytewiseComparator;
+    use crate::{Options, ReadOptions, Storage};
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_build_empty_table_with_meta_block() {
+        let s = MemStorage::default();
+        let mut o = Options::default();
+        let bf = BloomFilter::new(16);
+        o.filter_policy = Some(Rc::new(bf));
+        let opt = Arc::new(o);
+        let new_file = s.create("test").expect("");
+        let mut tb = TableBuilder::new(new_file, opt.clone());
+        tb.finish(false).expect("");
+        let file = s.open("test").expect("");
+        let file_len = file.len().expect("");
+        let table = Table::open(file, file_len, opt.clone()).expect("");
+        assert!(table.filter_reader.is_some());
+        assert!(table.meta_block_handle.is_some());
+    }
+
+    #[test]
+    fn test_build_empty_table_without_meta_block() {
+        let s = MemStorage::default();
+        let new_file = s.create("test").expect("");
+        let opt = Arc::new(Options::default()); // no filter block on default
+        let mut tb = TableBuilder::new(new_file, opt.clone());
+        tb.finish(false).expect("");
+        let file = s.open("test").expect("");
+        let file_len = file.len().expect("");
+        let table = Table::open(file, file_len, opt.clone()).expect("");
+        assert!(table.filter_reader.is_none());
+        assert!(table.meta_block_handle.is_none()); // no filter block means no meta block
+        let read_opt = Rc::new(ReadOptions::default());
+        let res = table.internal_get(read_opt.clone(), b"test");
+        assert!(res.is_err());
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_table_add_consistency() {
+        let s = MemStorage::default();
+        let new_file = s.create("test").expect("file create should work");
+        let opt = Arc::new(Options::default());
+        let mut tb = TableBuilder::new(new_file, opt.clone());
+        tb.add(b"222", b"").expect("");
+        tb.add(b"1", b"").expect("");
+    }
+
+    #[test]
+    fn test_block_write_and_read() {
+        let s = MemStorage::default();
+        let new_file = s.create("test").expect("file create should work");
+        let opt = Arc::new(Options::default());
+        let mut tb = TableBuilder::new(new_file, opt.clone());
+        let test_pairs = vec![("", "test"), ("aaa", "123"), ("bbb", "456"), ("ccc", "789")];
+        for (key, val) in test_pairs.clone().drain(..) {
+            tb.data_block.add(key.as_bytes(), val.as_bytes());
+        }
+        let block = Vec::from(tb.data_block.finish());
+        let mut bh = BlockHandle::new(0, 0);
+        tb.write_block(&block, &mut bh).expect("");
+        let file = s.open("test").expect("file open should work");
+        let res = read_block(file.as_ref(), &bh, true).expect("");
+        assert_eq!(res, block);
+        let block = Block::new(res).expect("");
+        let cmp = Arc::new(BytewiseComparator::new());
+        let mut iter = block.iter(cmp);
+        iter.seek_to_first();
+        let mut result_pairs = vec![];
+        while iter.valid() {
+            result_pairs.push((iter.key().copy(), iter.value().copy()));
+            iter.next();
+        }
+        assert_eq!(result_pairs.len(), test_pairs.len());
+        for (p1, p2) in result_pairs.iter().zip(test_pairs) {
+            assert_eq!(p1.0.as_slice(), p2.0.as_bytes());
+            assert_eq!(p1.1.as_slice(), p2.1.as_bytes());
+        }
+    }
+
+    #[test]
+    fn test_table_write_and_read() {
+        let s = MemStorage::default();
+        let new_file = s.create("test").expect("file create should work");
+        let opt = Arc::new(Options::default());
+        let mut tb = TableBuilder::new(new_file, opt.clone());
+        let tests = vec![("", "test"), ("a", "aa"), ("b", "bb")];
+        for (key, val) in tests.clone().drain(..) {
+            tb.add(key.as_bytes(), val.as_bytes()).expect("");
+        }
+        tb.finish(false).expect("TableBuilder 'finish' should work");
+        let file = s.open("test").expect("file open should work");
+        let file_len = file.len().expect("file len should work");
+        let table = Table::open(file, file_len, opt.clone()).expect("table open should work");
+        let read_opt = Rc::new(ReadOptions {
+            verify_checksums: true,
+            fill_cache: true,
+            snapshot: None,
+        });
+        for (key, val) in tests.clone().drain(..) {
+            assert_eq!(
+                val,
+                table
+                    .internal_get(read_opt.clone(), key.as_bytes())
+                    .expect("")
+                    .unwrap()
+                    .1
+                    .as_str()
+            );
+        }
+    }
 }
