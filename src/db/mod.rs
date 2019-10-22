@@ -1208,6 +1208,7 @@ pub(crate) fn build_table<'a>(
                 break;
             }
             prev_key = key;
+            iter.next();
         }
         if status.is_ok() {
             meta.smallest = Rc::new(InternalKey::decoded_from(smallest_key.as_slice()));
