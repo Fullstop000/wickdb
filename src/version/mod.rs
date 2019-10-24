@@ -140,8 +140,8 @@ impl Version {
                     {
                         files_to_seek.push(f.clone());
                     }
-                    files_to_seek.sort_by(|a, b| b.number.cmp(&a.number))
                 }
+                files_to_seek.sort_by(|a, b| b.number.cmp(&a.number));
             } else {
                 let index = Self::find_file(self.icmp.clone(), self.files[level].as_slice(), &ikey);
                 if index >= files.len() {
