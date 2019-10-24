@@ -1,0 +1,10 @@
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: null
+        base: auto
+        if_no_uploads: error
+        if_not_found: success
+        if_ci_failed: error

@@ -11,17 +11,17 @@ rust:
   - stable
   - nightly
 
-# Dependencies of kcov, used by coverage
 addons:
   apt:
     packages:
       - libcurl4-openssl-dev
       - libelf-dev
       - libdw-dev
+      - cmake
+      - gcc
+      - libbfd-dev
       - binutils-dev
-      - cmake # also required for cargo-update
-    sources:
-      - kalakris-cmake
+      - libiberty-dev
 
 matrix:
   allow_failures:
@@ -31,12 +31,10 @@ matrix:
 install:
   - if [[ $TRAVIS_RUST_VERSION == "stable" ]]; then rustup component add rustfmt; fi
   - if [[ $TRAVIS_RUST_VERSION == "stable" ]]; then rustup component add clippy; fi
+  - if [ $TRAVIS_OS_NAME = osx ]; then pip install six; fi
 
 before_script:
-  - export PATH=$HOME/.cargo/bin:$PATH
-  - cargo install cargo-update || echo "cargo-update already installed"
-  - cargo install cargo-travis || echo "cargo-travis already installed"
-  - cargo install-update -a # update outdated cached binaries
+  - export PATH=/usr/bin/:$HOME/.cargo/bin:$PATH
 
 script:
   - if [[ $TRAVIS_RUST_VERSION == "stable" ]]; then cargo fmt -- --check; fi
@@ -45,8 +43,19 @@ script:
   - cargo test --verbose --all
 
 after_success:
-  # measure code coverage and upload to coveralls.io
-  - cargo coveralls
+  - wget https://github.com/SimonKagstrom/kcov/archive/master.tar.gz
+  - tar xzf master.tar.gz
+  - cd kcov-master
+  - mkdir build
+  - cd build
+  - cmake ..
+  - make
+  - make install DESTDIR=../../kcov-build
+  - cd ../..
+  - rm -rf kcov-master
+  - for file in target/debug/wickdb-*; do [ -x "${file}" ] || continue; mkdir -p "target/cov/$(basename $file)"; ./kcov-build/usr/local/bin/kcov --exclude-pattern=/.cargo,/usr/lib --verify "target/cov/$(basename $file)" "$file"; done
+  - bash <(curl -s https://codecov.io/bash)
+  - echo "Uploaded code coverage"
 env:
   global:
     - RUST_BACKTRACE=1
