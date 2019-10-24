@@ -140,7 +140,6 @@ impl Version {
                     {
                         files_to_seek.push(f.clone());
                     }
-                    
                 }
                 files_to_seek.sort_by(|a, b| b.number.cmp(&a.number));
             } else {
