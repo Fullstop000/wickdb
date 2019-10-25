@@ -12,8 +12,8 @@
 // limitations under the License.
 
 use crate::storage::{File, Storage};
+use crate::util::collection::HashMap;
 use crate::util::status::{Result, Status, WickErr};
-use hashbrown::HashMap;
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -248,8 +248,8 @@ mod tests {
     use super::{InmemFile, MemStorage};
     use crate::storage::{File, Storage};
     use crate::util::coding::put_fixed_32;
+    use crate::util::collection::HashSet;
     use crate::util::status::Status;
-    use hashbrown::HashSet;
     use std::error::Error;
 
     #[test]
@@ -364,7 +364,7 @@ mod tests {
         assert!(!env.exists("test2"));
         assert!(env.list("").expect("'list' should work").is_empty());
 
-        let mut tmp_names = HashSet::new();
+        let mut tmp_names = HashSet::default();
         for i in 0..1000 {
             env.create(i.to_string().as_str())
                 .expect("'create' should work");

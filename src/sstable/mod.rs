@@ -382,11 +382,11 @@ mod tests {
     use crate::sstable::block::*;
     use crate::sstable::table::*;
     use crate::storage::mem::MemStorage;
+    use crate::util::collection::HashSet;
     use crate::util::comparator::{BytewiseComparator, Comparator};
     use crate::util::slice::Slice;
     use crate::util::status::{Result, Status, WickErr};
     use crate::{WriteBatch, WriteOptions};
-    use hashbrown::HashSet;
     use rand::prelude::ThreadRng;
     use rand::Rng;
     use std::cell::Cell;
@@ -750,7 +750,7 @@ mod tests {
             Self {
                 constructor,
                 data: vec![],
-                keys: HashSet::new(),
+                keys: HashSet::default(),
             }
         }
         fn add(&mut self, key: Slice, value: Slice) {
