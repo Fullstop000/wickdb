@@ -16,6 +16,7 @@
 // found in the LICENSE file.
 
 use crate::db::format::InternalKey;
+use crate::util::collection::HashSet;
 use crate::util::slice::Slice;
 use crate::util::status::{Result, Status, WickErr};
 use crate::util::varint::{VarintU32, VarintU64};
@@ -23,7 +24,6 @@ use crate::version::version_edit::Tag::{
     CompactPointer, Comparator, DeletedFile, LastSequence, LogNumber, NewFile, NextFileNumber,
     PrevLogNumber, Unknown,
 };
-use hashbrown::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::mem;
 use std::rc::Rc;
@@ -124,7 +124,7 @@ impl VersionEdit {
             prev_log_number: None,
             next_file_number: None,
             last_sequence: None,
-            deleted_files: HashSet::new(),
+            deleted_files: HashSet::default(),
             new_files: Vec::new(),
             compaction_pointers: Vec::new(),
         }

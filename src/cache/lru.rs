@@ -16,7 +16,7 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
 use crate::cache::{Cache, Handle as CacheHandle, HandleRef};
-use hashbrown::hash_map::HashMap;
+use std::collections::HashMap;
 
 use std::mem;
 use std::ptr;
