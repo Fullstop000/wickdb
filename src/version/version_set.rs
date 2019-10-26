@@ -27,6 +27,7 @@ use crate::snapshot::{Snapshot, SnapshotList};
 use crate::sstable::table::TableBuilder;
 use crate::table_cache::TableCache;
 use crate::util::coding::decode_fixed_64;
+use crate::util::collection::HashSet;
 use crate::util::comparator::{BytewiseComparator, Comparator};
 use crate::util::reporter::LogReporter;
 use crate::util::slice::Slice;
@@ -34,7 +35,6 @@ use crate::util::status::{Result, Status, WickErr};
 use crate::version::version_edit::{FileMetaData, VersionEdit};
 use crate::version::{LevelFileNumIterator, Version, FILE_META_LENGTH};
 use crate::ReadOptions;
-use hashbrown::HashSet;
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::vec_deque::VecDeque;
 use std::path::MAIN_SEPARATOR;
@@ -63,7 +63,7 @@ impl VersionBuilder {
         let mut levels = Vec::with_capacity(max_levels);
         for _ in 0..max_levels {
             levels.push(LevelState {
-                deleted_files: HashSet::new(),
+                deleted_files: HashSet::default(),
                 added_files: vec![],
             })
         }
@@ -197,7 +197,7 @@ impl VersionSet {
         Self {
             snapshots: SnapshotList::new(),
             compaction_stats,
-            pending_outputs: HashSet::new(),
+            pending_outputs: HashSet::default(),
             manual_compaction: None,
             db_name,
             record_writer: None,

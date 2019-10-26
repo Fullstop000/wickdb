@@ -164,7 +164,7 @@ impl InternalKey {
     #[inline]
     pub fn user_key(&self) -> &[u8] {
         let length = self.data.len();
-        &self.data.as_slice()[length - 8..]
+        &self.data.as_slice()[..length - 8]
     }
 
     /// Returns a `ParsedInternalKey`
@@ -398,6 +398,7 @@ mod tests {
 
     fn assert_encoded_decoded(key: &str, seq: u64, vt: ValueType) {
         let encoded = InternalKey::new(&Slice::from(key), seq, vt);
+        assert_eq!(key.as_bytes(), encoded.user_key());
         let decoded = encoded.parsed().expect("");
         assert_eq!(key, decoded.user_key.as_str());
         assert_eq!(seq, decoded.seq);
