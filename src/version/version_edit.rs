@@ -435,9 +435,9 @@ mod tests {
 
     fn assert_encode_decode(edit: &VersionEdit) {
         let mut encoded = vec![];
-        edit.encode_to(&mut encoded);  
+        edit.encode_to(&mut encoded);
         let mut parsed = VersionEdit::new(7);
-        parsed.decoded_from(encoded.as_slice()).expect(""); 
+        parsed.decoded_from(encoded.as_slice()).expect("");
         let mut encoded2 = vec![];
         parsed.encode_to(&mut encoded2);
         assert_eq!(encoded, encoded2)
@@ -480,7 +480,7 @@ mod tests {
         let mut edit = VersionEdit::new(7);
         let filename = String::from("Hello");
         edit.set_comparator_name(filename);
-<<<<<<< HEAD
+
         assert_eq!("Hello", edit.comparator_name.unwrap().as_str());
     }
 
@@ -489,25 +489,17 @@ mod tests {
         let mut edit = VersionEdit::new(7);
         let log_num = u64::max_value();
         edit.set_log_number(log_num);
+
         assert_eq!(edit.log_number.unwrap(), log_num);
-=======
-        assert_eq!("Hello",edit.comparator_name.unwrap().as_str());
-    }
 
-
-    #[test]
-    fn test_set_log_number()  {
-        let mut edit = VersionEdit::new(7);
-        let log_num =u64::max_value();
-        edit.set_log_number(log_num);
-        assert_eq!(edit.log_number.unwrap(),log_num);
->>>>>>> add some set_*** testcase in version_edit
     }
 
     #[test]
     fn test_set_prev_log_number() {
         let mut edit = VersionEdit::new(7);
-<<<<<<< HEAD
+
+        let prev_log_num =u64::max_value();
+
         let prev_log_num = u64::max_value();
         edit.set_prev_log_number(prev_log_num);
         assert_eq!(edit.prev_log_number.unwrap(), prev_log_num);
@@ -527,26 +519,8 @@ mod tests {
         let last_sequence = u64::max_value();
         edit.set_last_sequence(last_sequence);
         assert_eq!(edit.last_sequence.unwrap(), last_sequence);
-=======
-        let prev_log_num =u64::max_value();
-        edit.set_prev_log_number(prev_log_num);
-        assert_eq!(edit.prev_log_number.unwrap(),prev_log_num);
+
     }
 
-    #[test]
-    fn test_set_next_file(){
-        let mut edit = VersionEdit::new(7);
-        let next_file =u64::max_value();
-        edit.set_next_file(next_file);
-        assert_eq!(edit.next_file_number.unwrap(),next_file);
-    }
-
-    #[test]
-    fn test_set_last_sequence()  {
-        let mut edit = VersionEdit::new(7);
-        let last_sequence =u64::max_value();
-        edit.set_last_sequence(last_sequence);
-        assert_eq!(edit.last_sequence.unwrap(),last_sequence);
->>>>>>> add some set_*** testcase in version_edit
-    }
+    
 }
