@@ -513,5 +513,4 @@ mod tests {
         edit.set_last_sequence(last_sequence);
         assert_eq!(edit.last_sequence.unwrap(), last_sequence);
     }
-
 }
