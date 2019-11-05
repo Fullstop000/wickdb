@@ -228,7 +228,7 @@ impl Version {
         let mut left = 0;
         let mut right = files.len();
         while left < right {
-            let mid = left + right / 2;
+            let mid = (left + right) / 2;
             let f = &files[mid];
             if icmp.compare(f.largest.data(), ikey.as_slice()) == CmpOrdering::Less {
                 // Key at "mid.largest" is < "target".  Therefore all
@@ -637,3 +637,4 @@ impl Iterator for LevelFileNumIterator {
         Ok(())
     }
 }
+
