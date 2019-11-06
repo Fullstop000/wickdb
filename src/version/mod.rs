@@ -698,6 +698,7 @@ impl Iterator for LevelFileNumIterator {
         Ok(())
     }
 }
+<<<<<<< HEAD
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -781,3 +782,5 @@ mod tests {
         }
     }
 }
+=======
+>>>>>>> cargo fmt
