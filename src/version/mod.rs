@@ -225,7 +225,7 @@ impl Version {
         files: &[Arc<FileMetaData>],
         ikey: &Slice,
     ) -> usize {
-        let mut left = 0;
+        let mut left = 0_usize;
         let mut right = files.len();
         while left < right {
             let mid = (left + right) / 2;
@@ -635,5 +635,72 @@ impl Iterator for LevelFileNumIterator {
 
     fn status(&mut self) -> Result<()> {
         Ok(())
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::format::{InternalKey, InternalKeyComparator, ValueType};
+    use crate::util::comparator::BytewiseComparator;
+    use crate::util::slice::Slice;
+
+    struct FileMetaDatas {
+        pub files: Vec<Arc<FileMetaData>>,
+    }
+
+    //find_file需要files，这个files是&[Arc],因此需要的是
+
+    impl FileMetaDatas {
+        fn new() -> Self {
+            let files: Vec<Arc<FileMetaData>> = Vec::new();
+            Self { files }
+        }
+
+        fn generate(&mut self, smallest: &Slice, largest: &Slice) {
+            let mut file = FileMetaData::default();
+            file.number = (self.files.len() + 1) as u64;
+            file.smallest = Rc::new(InternalKey::new(smallest, 100, ValueType::Value));
+            file.largest = Rc::new(InternalKey::new(largest, 100, ValueType::Value));
+            self.files.push(Arc::new(file));
+        }
+
+        fn find(&self, key: &Slice) -> usize {
+            let target = Slice::from(InternalKey::new(key, 100, ValueType::Value).data());
+            let bcmp = Arc::new(InternalKeyComparator::new(Arc::new(
+                BytewiseComparator::new(),
+            )));
+
+            Version::find_file(bcmp, &self.files, &target)
+        }
+    }
+
+    #[test]
+    fn test_find_file() {
+        let mut file_metas = FileMetaDatas::new();
+        assert_eq!(0, file_metas.find(&Slice::from("Foo")));
+
+        file_metas.generate(&Slice::from("p"), &Slice::from("q"));
+        assert_eq!(0, file_metas.find(&Slice::from("a")));
+        assert_eq!(0, file_metas.find(&Slice::from("p")));
+        assert_eq!(0, file_metas.find(&Slice::from("q")));
+        assert_eq!(1, file_metas.find(&Slice::from("q1")));
+        assert_eq!(1, file_metas.find(&Slice::from("z")));
+    }
+
+    #[test]
+    fn test_find_files2() {
+        let mut file_metas = FileMetaDatas::new();
+        file_metas.generate(&Slice::from("150"), &Slice::from("200"));
+        file_metas.generate(&Slice::from("200"), &Slice::from("250"));
+        file_metas.generate(&Slice::from("300"), &Slice::from("350"));
+        file_metas.generate(&Slice::from("400"), &Slice::from("450"));
+        assert_eq!(0, file_metas.find(&Slice::from("100")));
+        assert_eq!(0, file_metas.find(&Slice::from("150")));
+        assert_eq!(1, file_metas.find(&Slice::from("201")));
+        assert_eq!(2, file_metas.find(&Slice::from("251")));
+        assert_eq!(2, file_metas.find(&Slice::from("301")));
+        assert_eq!(2, file_metas.find(&Slice::from("350")));
+        assert_eq!(3, file_metas.find(&Slice::from("351")));
+        assert_eq!(4, file_metas.find(&Slice::from("451")));
     }
 }
