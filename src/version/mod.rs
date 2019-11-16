@@ -699,6 +699,9 @@ impl Iterator for LevelFileNumIterator {
     }
 }
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> add testcases for Version::find_file
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -706,6 +709,7 @@ mod tests {
     use crate::util::comparator::BytewiseComparator;
     use crate::util::slice::Slice;
 
+<<<<<<< HEAD
     struct FindFileTests {
         pub files: Vec<Arc<FileMetaData>>,
         cmp: InternalKeyComparator,
@@ -717,24 +721,52 @@ mod tests {
             let cmp = InternalKeyComparator::new(Arc::new(BytewiseComparator::default()));
 
             Self { files, cmp }
+=======
+    struct FileMetaDatas {
+        pub files: Vec<Arc<FileMetaData>>,
+    }
+
+    //find_file需要files，这个files是&[Arc],因此需要的是
+
+    impl FileMetaDatas {
+        fn new() -> Self {
+            let files: Vec<Arc<FileMetaData>> = Vec::new();
+            Self { files }
+>>>>>>> add testcases for Version::find_file
         }
 
         fn generate(&mut self, smallest: &Slice, largest: &Slice) {
             let mut file = FileMetaData::default();
+<<<<<<< HEAD
             file.number = self.files.len() as u64 + 1;
             file.smallest = InternalKey::new(smallest.as_slice(), 100, ValueType::Value);
             file.largest = InternalKey::new(largest.as_slice(), 100, ValueType::Value);
+=======
+            file.number = (self.files.len() + 1) as u64;
+            file.smallest = Rc::new(InternalKey::new(smallest, 100, ValueType::Value));
+            file.largest = Rc::new(InternalKey::new(largest, 100, ValueType::Value));
+>>>>>>> add testcases for Version::find_file
             self.files.push(Arc::new(file));
         }
 
         fn find(&self, key: &Slice) -> usize {
+<<<<<<< HEAD
             let ikey = InternalKey::new(key.as_slice(), 100, ValueType::Value);
             let target = Slice::from(ikey.data());
             Version::find_file(self.cmp.clone(), &self.files, &target.as_slice())
+=======
+            let target = Slice::from(InternalKey::new(key, 100, ValueType::Value).data());
+            let bcmp = Arc::new(InternalKeyComparator::new(Arc::new(
+                BytewiseComparator::new(),
+            )));
+
+            Version::find_file(bcmp, &self.files, &target)
+>>>>>>> add testcases for Version::find_file
         }
     }
 
     #[test]
+<<<<<<< HEAD
     fn test_find_file_with_single_file() {
         let mut test_suites = FindFileTests::new();
         assert_eq!(0, test_suites.find(&Slice::from("Foo")));
@@ -784,3 +816,34 @@ mod tests {
 }
 =======
 >>>>>>> cargo fmt
+=======
+    fn test_find_file() {
+        let mut file_metas = FileMetaDatas::new();
+        assert_eq!(0, file_metas.find(&Slice::from("Foo")));
+
+        file_metas.generate(&Slice::from("p"), &Slice::from("q"));
+        assert_eq!(0, file_metas.find(&Slice::from("a")));
+        assert_eq!(0, file_metas.find(&Slice::from("p")));
+        assert_eq!(0, file_metas.find(&Slice::from("q")));
+        assert_eq!(1, file_metas.find(&Slice::from("q1")));
+        assert_eq!(1, file_metas.find(&Slice::from("z")));
+    }
+
+    #[test]
+    fn test_find_files2() {
+        let mut file_metas = FileMetaDatas::new();
+        file_metas.generate(&Slice::from("150"), &Slice::from("200"));
+        file_metas.generate(&Slice::from("200"), &Slice::from("250"));
+        file_metas.generate(&Slice::from("300"), &Slice::from("350"));
+        file_metas.generate(&Slice::from("400"), &Slice::from("450"));
+        assert_eq!(0, file_metas.find(&Slice::from("100")));
+        assert_eq!(0, file_metas.find(&Slice::from("150")));
+        assert_eq!(1, file_metas.find(&Slice::from("201")));
+        assert_eq!(2, file_metas.find(&Slice::from("251")));
+        assert_eq!(2, file_metas.find(&Slice::from("301")));
+        assert_eq!(2, file_metas.find(&Slice::from("350")));
+        assert_eq!(3, file_metas.find(&Slice::from("351")));
+        assert_eq!(4, file_metas.find(&Slice::from("451")));
+    }
+}
+>>>>>>> add testcases for Version::find_file
