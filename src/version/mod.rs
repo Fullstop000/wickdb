@@ -726,8 +726,7 @@ mod tests {
         pub files: Vec<Arc<FileMetaData>>,
     }
 
-    //find_file需要files，这个files是&[Arc],因此需要的是
-
+    
     impl FileMetaDatas {
         fn new() -> Self {
             let files: Vec<Arc<FileMetaData>> = Vec::new();
