@@ -648,7 +648,6 @@ mod tests {
         pub files: Vec<Arc<FileMetaData>>,
     }
 
-    
     impl FileMetaDatas {
         fn new() -> Self {
             let files: Vec<Arc<FileMetaData>> = Vec::new();
@@ -657,7 +656,7 @@ mod tests {
 
         fn generate(&mut self, smallest: &Slice, largest: &Slice) {
             let mut file = FileMetaData::default();
-            file.number = (self.files.len() + 1) as u64;
+            file.number = self.files.len() as u64 + 1;
             file.smallest = Rc::new(InternalKey::new(smallest, 100, ValueType::Value));
             file.largest = Rc::new(InternalKey::new(largest, 100, ValueType::Value));
             self.files.push(Arc::new(file));
