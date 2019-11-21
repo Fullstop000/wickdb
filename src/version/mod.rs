@@ -644,14 +644,19 @@ mod tests {
     use crate::util::comparator::BytewiseComparator;
     use crate::util::slice::Slice;
 
-    struct FileMetaDatas {
+    struct FindFileTests {
         pub files: Vec<Arc<FileMetaData>>,
+        cmp: Arc<InternalKeyComparator>,
     }
 
-    impl FileMetaDatas {
+    impl FindFileTests {
         fn new() -> Self {
             let files: Vec<Arc<FileMetaData>> = Vec::new();
-            Self { files }
+            let cmp = Arc::new(InternalKeyComparator::new(Arc::new(
+                BytewiseComparator::new(),
+            )));
+
+            Self { files, cmp }
         }
 
         fn generate(&mut self, smallest: &Slice, largest: &Slice) {
@@ -664,41 +669,55 @@ mod tests {
 
         fn find(&self, key: &Slice) -> usize {
             let target = Slice::from(InternalKey::new(key, 100, ValueType::Value).data());
-            let bcmp = Arc::new(InternalKeyComparator::new(Arc::new(
-                BytewiseComparator::new(),
-            )));
-
-            Version::find_file(bcmp, &self.files, &target)
+            Version::find_file(self.cmp.clone(), &self.files, &target)
         }
     }
 
     #[test]
-    fn test_find_file() {
-        let mut file_metas = FileMetaDatas::new();
-        assert_eq!(0, file_metas.find(&Slice::from("Foo")));
-
-        file_metas.generate(&Slice::from("p"), &Slice::from("q"));
-        assert_eq!(0, file_metas.find(&Slice::from("a")));
-        assert_eq!(0, file_metas.find(&Slice::from("p")));
-        assert_eq!(0, file_metas.find(&Slice::from("q")));
-        assert_eq!(1, file_metas.find(&Slice::from("q1")));
-        assert_eq!(1, file_metas.find(&Slice::from("z")));
+    fn test_find_file_with_single_file() {
+        let mut test_suites = FindFileTests::new();
+        assert_eq!(0, test_suites.find(&Slice::from("Foo")));
+        test_suites.generate(&Slice::from("p"), &Slice::from("q"));
+        let test_cases = vec![(0, "a"), (0, "p"), (0, "q"), (1, "q1"), (1, "z")];
+        for (expected, input) in test_cases {
+            assert_eq!(
+                expected,
+                test_suites.find(&Slice::from(input)),
+                "input {}",
+                input
+            );
+        }
     }
 
     #[test]
-    fn test_find_files2() {
-        let mut file_metas = FileMetaDatas::new();
-        file_metas.generate(&Slice::from("150"), &Slice::from("200"));
-        file_metas.generate(&Slice::from("200"), &Slice::from("250"));
-        file_metas.generate(&Slice::from("300"), &Slice::from("350"));
-        file_metas.generate(&Slice::from("400"), &Slice::from("450"));
-        assert_eq!(0, file_metas.find(&Slice::from("100")));
-        assert_eq!(0, file_metas.find(&Slice::from("150")));
-        assert_eq!(1, file_metas.find(&Slice::from("201")));
-        assert_eq!(2, file_metas.find(&Slice::from("251")));
-        assert_eq!(2, file_metas.find(&Slice::from("301")));
-        assert_eq!(2, file_metas.find(&Slice::from("350")));
-        assert_eq!(3, file_metas.find(&Slice::from("351")));
-        assert_eq!(4, file_metas.find(&Slice::from("451")));
+    fn test_find_files_with_various_files() {
+        let mut test_suites = FindFileTests::new();
+        let files = vec![
+            ("150", "200"),
+            ("200", "250"),
+            ("300", "350"),
+            ("400", "450"),
+        ];
+        for (start, end) in files {
+            test_suites.generate(&Slice::from(start), &Slice::from(end));
+        }
+        let test_cases = vec![
+            (0, "100"),
+            (0, "150"),
+            (1, "201"),
+            (2, "251"),
+            (2, "301"),
+            (2, "350"),
+            (3, "351"),
+            (4, "451"),
+        ];
+        for (expected, input) in test_cases {
+            assert_eq!(
+                expected,
+                test_suites.find(&Slice::from(input)),
+                "input {}",
+                input
+            );
+        }
     }
 }
