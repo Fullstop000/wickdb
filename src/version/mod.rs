@@ -713,7 +713,13 @@ mod tests {
     impl FindFileTests {
         fn new() -> Self {
             let files: Vec<Arc<FileMetaData>> = Vec::new();
+<<<<<<< HEAD
             let cmp = InternalKeyComparator::new(Arc::new(BytewiseComparator::default()));
+=======
+            let cmp = Arc::new(InternalKeyComparator::new(Arc::new(
+                BytewiseComparator::new(),
+            )));
+>>>>>>> re-arrange tests
 
             Self { files, cmp }
         }
