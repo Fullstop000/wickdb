@@ -11,22 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crc::crc32::{checksum_castagnoli, make_table, update};
+use crc32c::{crc32c, crc32c_append};
 
 const MASK_DELTA: u32 = 0xa282ead8;
-const CASTAGNOLI_POLY: u32 = 0x82f63b78;
-
-lazy_static! {
-    static ref TABLE32: [u32; 256] = make_table(CASTAGNOLI_POLY);
-}
 
 /// Returns a `u32` crc checksum for give data
 pub fn value(data: &[u8]) -> u32 {
-    checksum_castagnoli(data)
+    crc32c(data)
 }
 
 pub fn extend(crc: u32, data: &[u8]) -> u32 {
-    update(crc, &TABLE32, data)
+    crc32c_append(crc, data)
 }
 
 /// Return a masked representation of crc.
