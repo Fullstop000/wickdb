@@ -22,7 +22,7 @@ pub trait Arena {
     fn allocate(&self, chunk: usize) -> *mut u8;
 
     /// Allocate memory with the normal alignment guarantees provided by underlying allocator.
-    /// NOTE: the implementation is aligned with usize ( 32 or 64)
+    /// NOTE: the implementation is aligned with usize (32 or 64)
     fn allocate_aligned(&self, aligned: usize) -> *mut u8;
 
     /// Return the size of memory that has been allocated.
