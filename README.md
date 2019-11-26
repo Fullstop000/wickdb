@@ -3,6 +3,7 @@
 [![Build Status](https://travis-ci.org/Fullstop000/wickdb.svg?branch=master)](https://travis-ci.org/Fullstop000/wickdb)
 [![codecov](https://codecov.io/gh/Fullstop000/wickdb/branch/master/graph/badge.svg)](https://codecov.io/gh/Fullstop000/wickdb)
 <a href="https://www.repostatus.org/#wip"><img src="https://www.repostatus.org/badges/latest/wip.svg" alt="Project Status: WIP – Initial development is in progress, but there has not yet been a stable, usable release suitable for the public." /></a>
+[![dependency status](https://deps.rs/repo/github/Fullstop000/wickdb/status.svg)](https://deps.rs/repo/github/Fullstop000/wickdb)
 [![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2FFullstop000%2Fwickdb.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2FFullstop000%2Fwickdb?ref=badge_shield)
 
 You can find a simple worked example in `examples`. 
@@ -59,7 +60,7 @@ cargo watch -s "cargo check --tests"
 
 There're so many `TODO`s in current implementation and you can pick either of them to do something.
 
-This crate is still at early stage so any PR or Issue is welcomed !.
+This crate is still at early stage so any PRs or issues are welcomed!.
 
 ## License
 [![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2FFullstop000%2Fwickdb.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2FFullstop000%2Fwickdb?ref=badge_large)
