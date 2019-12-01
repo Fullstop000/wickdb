@@ -111,12 +111,9 @@ pub struct MemTable {
 
 impl MemTable {
     pub fn new(icmp: Arc<InternalKeyComparator>) -> Self {
-        println!("mem table");
         let arena = BlockArena::new();
         let kcmp = Arc::new(KeyComparator { icmp });
-        println!("mem table here");
         let table = Arc::new(Skiplist::new(kcmp.clone(), Box::new(arena)));
-
         Self { cmp: kcmp, table }
     }
 }

@@ -56,23 +56,14 @@ impl Node {
         unsafe {
             let (node_part, nexts_part) =
                 slice::from_raw_parts_mut(ptr, size).split_at_mut(mem::size_of::<Node>());
-            println!("before");
             let node = node_part.as_mut_ptr() as *mut Node;
-            println!("after");
             let nexts = Vec::from_raw_parts(
                 nexts_part.as_mut_ptr() as *mut AtomicPtr<Node>,
                 height,
                 height,
             );
-            println!("asdlfkj");
-            println!("lets see {:?}", (*node).key);
-            println!("survived");
-            let n: &mut Node = &mut (*node);
-            println!("deref node");
-            n.key = key;
-            println!("boom a boom");
+            (*node).key = key;
             (*node).next_nodes = nexts.into_boxed_slice();
-            println!("boom");
             node
         }
     }

@@ -40,7 +40,6 @@ impl Slice {
             let slice = unsafe { slice::from_raw_parts(data, size) };
             Bytes::copy_from_slice(&slice[..])
         } else {
-            println!("empty slice");
             Bytes::new()
         };
 
@@ -49,7 +48,6 @@ impl Slice {
 
     #[inline]
     pub fn as_slice(&self) -> &[u8] {
-        println!("as_slice");
         &self.data[..]
     }
 
@@ -79,7 +77,6 @@ impl Slice {
 
     #[inline]
     pub fn as_ptr(&self) -> *const u8 {
-        println!("as_ptr");
         if !self.data.is_empty() {
             self.data[..].as_ptr()
         } else {
@@ -94,13 +91,11 @@ impl Slice {
 
     #[inline]
     pub fn clear(&mut self) {
-        println!("clear");
         self.data.clear()
     }
 
     #[inline]
     pub fn as_str(&self) -> &str {
-        println!("as str");
         if self.is_empty() {
             ""
         } else {
@@ -132,7 +127,6 @@ impl Index<usize> for Slice {
 
     /// Return the ith byte in the referenced data
     fn index(&self, index: usize) -> &u8 {
-        println!("index");
         assert!(
             index < self.data.len(),
             "[slice] out of range. Slice size is [{}] but try to get [{}]",
@@ -146,7 +140,6 @@ impl Index<usize> for Slice {
 
 impl Hash for Slice {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        println!("hash");
         let hash = hash(self.as_slice(), 0xbc9f1d34);
         state.write_u32(hash);
         state.finish();
