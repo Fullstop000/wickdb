@@ -14,6 +14,7 @@ snap = "0.2.5"
 crc32c = "0.4.0"
 fs2 = "0.4.3"
 fxhash = "0.2.1"
+bytes = "0.5"
 
 [dev-dependencies]
 criterion = "0.3.0"

@@ -17,6 +17,7 @@
 
 use super::byte::compare;
 use crate::util::hash::hash;
+use bytes::Bytes;
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -30,22 +31,26 @@ use std::slice;
 /// deallocated.
 #[derive(Clone, Eq)]
 pub struct Slice {
-    data: *const u8,
-    size: usize,
+    data: Bytes,
 }
 
 impl Slice {
     pub fn new(data: *const u8, size: usize) -> Self {
-        Self { data, size }
+        let data = if !data.is_null() {
+            let slice = unsafe { slice::from_raw_parts(data, size) };
+            Bytes::copy_from_slice(&slice[..])
+        } else {
+            println!("empty slice");
+            Bytes::new()
+        };
+
+        Self { data }
     }
 
     #[inline]
     pub fn as_slice(&self) -> &[u8] {
-        if !self.data.is_null() {
-            unsafe { slice::from_raw_parts(self.data, self.size) }
-        } else {
-            panic!("try to convert a empty(invalid) Slice as a &[u8] ")
-        }
+        println!("as_slice");
+        &self.data[..]
     }
 
     #[inline]
@@ -55,30 +60,31 @@ impl Slice {
 
     #[inline]
     pub fn size(&self) -> usize {
-        self.size
+        self.data.len()
     }
 
     #[inline]
     pub fn remove_prefix(&mut self, n: usize) {
-        if n >= self.size {
-            self.data = ptr::null();
-            self.size = 0;
+        if n >= self.data.len() {
+            self.data.clear();
         } else {
-            unsafe {
-                self.data = self.data.add(n);
-            }
-            self.size -= n;
+            self.data.split_to(n);
         }
     }
 
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.data.is_null() || self.size == 0
+        self.data.is_empty()
     }
 
     #[inline]
     pub fn as_ptr(&self) -> *const u8 {
-        self.data
+        println!("as_ptr");
+        if !self.data.is_empty() {
+            self.data[..].as_ptr()
+        } else {
+            ptr::null()
+        }
     }
 
     #[inline]
@@ -88,12 +94,13 @@ impl Slice {
 
     #[inline]
     pub fn clear(&mut self) {
-        self.data = ptr::null();
-        self.size = 0;
+        println!("clear");
+        self.data.clear()
     }
 
     #[inline]
     pub fn as_str(&self) -> &str {
+        println!("as str");
         if self.is_empty() {
             ""
         } else {
@@ -125,18 +132,21 @@ impl Index<usize> for Slice {
 
     /// Return the ith byte in the referenced data
     fn index(&self, index: usize) -> &u8 {
+        println!("index");
         assert!(
-            index < self.size,
+            index < self.data.len(),
             "[slice] out of range. Slice size is [{}] but try to get [{}]",
-            self.size,
+            self.data.len(),
             index
         );
-        unsafe { &*self.data.add(index) }
+
+        &self.data[index]
     }
 }
 
 impl Hash for Slice {
     fn hash<H: Hasher>(&self, state: &mut H) {
+        println!("hash");
         let hash = hash(self.as_slice(), 0xbc9f1d34);
         state.write_u32(hash);
         state.finish();

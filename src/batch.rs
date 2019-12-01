@@ -211,10 +211,13 @@ mod tests {
     use std::sync::Arc;
 
     fn print_contents(batch: &WriteBatch) -> String {
+        println!("was here");
         let mem = MemTable::new(Arc::new(InternalKeyComparator::new(Arc::new(
             BytewiseComparator::new(),
         ))));
+        println!("was here");
         let result = batch.insert_into(&mem);
+        println!("here");
         let mut iter = mem.iter();
         iter.as_mut().seek_to_first();
         let mut s = String::new();
@@ -291,11 +294,17 @@ mod tests {
         b1.set_sequence(200);
         b2.set_sequence(300);
         b1.append(b2.clone());
+
+        println!("b1");
         assert_eq!("", print_contents(&b1));
+
         b2.put("a".as_bytes(), "va".as_bytes());
+
         b1.append(b2.clone());
         assert_eq!("Put(a, va)@200|", print_contents(&b1));
+
         b2.clear();
+
         b2.put("b".as_bytes(), "vb".as_bytes());
         b1.append(b2.clone());
         assert_eq!("Put(a, va)@200|Put(b, vb)@201|", print_contents(&b1));
