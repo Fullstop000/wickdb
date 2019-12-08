@@ -20,7 +20,7 @@ pub mod skiplist;
 
 use crate::db::format::{InternalKeyComparator, LookupKey, ValueType};
 use crate::iterator::Iterator;
-use crate::mem::arena::BlockArena;
+use crate::mem::arena::{Arena, BlockArena};
 use crate::mem::skiplist::{Skiplist, SkiplistIterator};
 use crate::util::coding::{decode_fixed_64, put_fixed_64};
 use crate::util::comparator::Comparator;
@@ -29,6 +29,7 @@ use crate::util::status::Status;
 use crate::util::status::{Result, WickErr};
 use crate::util::varint::VarintU32;
 use std::cmp::Ordering;
+use std::rc::Rc;
 use std::sync::Arc;
 
 pub trait MemoryTable {
@@ -71,7 +72,8 @@ pub trait MemoryTable {
 
 // KeyComparator is a wrapper for InternalKeyComparator. It will convert the input mem key
 // to the internal key before comparing.
-struct KeyComparator {
+#[derive(Clone)]
+pub struct KeyComparator {
     icmp: Arc<InternalKeyComparator>,
 }
 
@@ -105,15 +107,15 @@ impl Comparator for KeyComparator {
 
 /// In-memory write buffer
 pub struct MemTable {
-    cmp: Arc<KeyComparator>,
-    table: Arc<Skiplist>,
+    cmp: KeyComparator,
+    table: Rc<Skiplist<KeyComparator, BlockArena>>,
 }
 
 impl MemTable {
     pub fn new(icmp: Arc<InternalKeyComparator>) -> Self {
         let arena = BlockArena::new();
-        let kcmp = Arc::new(KeyComparator { icmp });
-        let table = Arc::new(Skiplist::new(kcmp.clone(), Box::new(arena)));
+        let kcmp = KeyComparator { icmp };
+        let table = Rc::new(Skiplist::new(kcmp.clone(), arena));
         Self { cmp: kcmp, table }
     }
 }
@@ -168,11 +170,11 @@ impl MemoryTable for MemTable {
 }
 
 pub struct MemTableIterator {
-    iter: SkiplistIterator,
+    iter: SkiplistIterator<KeyComparator, BlockArena>,
 }
 
 impl MemTableIterator {
-    pub fn new(table: Arc<Skiplist>) -> Self {
+    pub fn new(table: Rc<Skiplist<KeyComparator, BlockArena>>) -> Self {
         let iter = SkiplistIterator::new(table);
         Self { iter }
     }
