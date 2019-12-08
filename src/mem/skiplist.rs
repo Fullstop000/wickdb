@@ -24,8 +24,8 @@ use rand::random;
 use std::cmp::Ordering as CmpOrdering;
 use std::intrinsics::copy_nonoverlapping;
 use std::ptr;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
-use std::sync::Arc;
 use std::{mem, slice};
 
 const BRANCHING: u32 = 4;
@@ -50,7 +50,7 @@ pub struct Node {
 impl Node {
     /// Allocates memory in the given arena for Node
     #[allow(clippy::cast_ptr_alignment)]
-    pub fn new(key: Slice, height: usize, arena: &dyn Arena) -> *mut Node {
+    pub fn new<A: Arena>(key: Slice, height: usize, arena: &A) -> *mut Node {
         let size = mem::size_of::<Node>() + height * mem::size_of::<AtomicPtr<Node>>();
         let ptr = arena.allocate_aligned(size);
         unsafe {
@@ -84,24 +84,24 @@ impl Node {
     }
 }
 
-/// A skiplist with an memory based arena. The skiplist
+/// A skiplist with a memory based arena. The skiplist
 /// should be thread safe for reading
-pub struct Skiplist {
+pub struct Skiplist<C: Comparator, A: Arena> {
     // current max height
     // Should be handled atomically
     pub max_height: AtomicUsize,
-    // comparator is used to compare the key of node
-    pub comparator: Arc<dyn Comparator>,
     // head node
     pub head: *mut Node,
     // arena contains all the nodes data
-    pub arena: Box<dyn Arena>,
+    pub arena: A,
+    // comparator is used to compare the key of node
+    comparator: C,
 }
 
-impl Skiplist {
+impl<C: Comparator, A: Arena> Skiplist<C, A> {
     /// Create a new Skiplist with the given arena capacity
-    pub fn new(cmp: Arc<dyn Comparator>, mut arena: Box<dyn Arena>) -> Self {
-        let head = Node::new(Slice::default(), MAX_HEIGHT, arena.as_mut());
+    pub fn new(cmp: C, mut arena: A) -> Self {
+        let head = Node::new(Slice::default(), MAX_HEIGHT, &mut arena);
         Skiplist {
             comparator: cmp,
             // init height is 1 ( ignore the height of head )
@@ -148,11 +148,7 @@ impl Skiplist {
             copy_nonoverlapping(key.as_ptr(), k, key.len());
         }
         // allocate the node
-        let new_node = Node::new(
-            Slice::new(k as *const u8, key.len()),
-            height,
-            self.arena.as_ref(),
-        );
+        let new_node = Node::new(Slice::new(k as *const u8, key.len()), height, &self.arena);
         unsafe {
             for i in 1..=height {
                 (*new_node).set_next(i, (*(prev[i - 1])).get_next(i));
@@ -260,12 +256,12 @@ impl Skiplist {
 }
 
 /// Iteration over the contents of a skip list
-pub struct SkiplistIterator {
-    skl: Arc<Skiplist>,
+pub struct SkiplistIterator<C: Comparator, A: Arena> {
+    skl: Rc<Skiplist<C, A>>,
     pub(super) node: *mut Node,
 }
 
-impl Iterator for SkiplistIterator {
+impl<C: Comparator, A: Arena> Iterator for SkiplistIterator<C, A> {
     /// Returns true whether the iterator is positioned at a valid node
     #[inline]
     fn valid(&self) -> bool {
@@ -332,8 +328,8 @@ impl Iterator for SkiplistIterator {
     }
 }
 
-impl SkiplistIterator {
-    pub fn new(skl: Arc<Skiplist>) -> Self {
+impl<C: Comparator, A: Arena> SkiplistIterator<C, A> {
+    pub fn new(skl: Rc<Skiplist<C, A>>) -> Self {
         Self {
             skl,
             node: ptr::null_mut(),
@@ -372,17 +368,16 @@ mod tests {
     use rand::RngCore;
     use std::cmp::Ordering as CmpOrdering;
     use std::sync::atomic::AtomicBool;
-    use std::sync::{Condvar, Mutex};
+    use std::sync::{Arc, Condvar, Mutex};
     use std::{ptr, thread};
 
-    fn new_test_skl() -> Skiplist {
-        Skiplist::new(
-            Arc::new(BytewiseComparator::new()),
-            Box::new(BlockArena::new()),
-        )
+    fn new_test_skl() -> Skiplist<BytewiseComparator, BlockArena> {
+        Skiplist::new(BytewiseComparator::new(), BlockArena::new())
     }
 
-    fn construct_skl_from_nodes(mut nodes: Vec<(Slice, usize)>) -> Skiplist {
+    fn construct_skl_from_nodes(
+        mut nodes: Vec<(Slice, usize)>,
+    ) -> Skiplist<BytewiseComparator, BlockArena> {
         if nodes.is_empty() {
             return new_test_skl();
         }
@@ -391,7 +386,7 @@ mod tests {
         let mut prev_nodes = vec![skl.head; MAX_HEIGHT];
         let mut max_height = 1;
         for (key, height) in nodes.drain(..) {
-            let n = Node::new(key, height, skl.arena.as_mut());
+            let n = Node::new(key, height, &mut skl.arena);
             for (h, prev_node) in prev_nodes[0..height].iter().enumerate() {
                 unsafe {
                     (**prev_node).set_next(h + 1, n);
@@ -432,7 +427,7 @@ mod tests {
         assert_eq!(true, skl.key_is_less_than_or_equal(&key, ptr::null_mut()));
 
         for (node_key, expected) in tests {
-            let node = Node::new(Slice::from(node_key.as_slice()), 1, skl.arena.as_ref());
+            let node = Node::new(Slice::from(node_key.as_slice()), 1, &skl.arena);
             assert_eq!(expected, skl.key_is_less_than_or_equal(&key, node))
         }
     }
@@ -563,7 +558,7 @@ mod tests {
     #[test]
     fn test_empty_skiplist_iterator() {
         let skl = new_test_skl();
-        let iter = SkiplistIterator::new(Arc::new(skl));
+        let iter = SkiplistIterator::new(Rc::new(skl));
         assert!(!iter.valid());
     }
 
@@ -575,7 +570,7 @@ mod tests {
         for key in inputs.clone().drain(..) {
             skl.insert(Vec::from(key))
         }
-        let mut iter = SkiplistIterator::new(Arc::new(skl));
+        let mut iter = SkiplistIterator::new(Rc::new(skl));
         assert_eq!(ptr::null_mut(), iter.node,);
 
         iter.seek_to_first();
@@ -716,7 +711,7 @@ mod tests {
     // at iterator construction time.
     struct ConcurrencyTest {
         current: State,
-        list: Arc<Skiplist>,
+        list: Rc<Skiplist<U64Comparator, BlockArena>>,
     }
 
     unsafe impl Send for ConcurrencyTest {}
@@ -727,7 +722,7 @@ mod tests {
             let arena = BlockArena::new();
             Self {
                 current: State::new(),
-                list: Arc::new(Skiplist::new(Arc::new(U64Comparator {}), Box::new(arena))),
+                list: Rc::new(Skiplist::new(U64Comparator {}, arena)),
             }
         }
 
