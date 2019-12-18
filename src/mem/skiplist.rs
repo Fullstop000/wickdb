@@ -100,8 +100,8 @@ pub struct Skiplist<C: Comparator, A: Arena> {
 
 impl<C: Comparator, A: Arena> Skiplist<C, A> {
     /// Create a new Skiplist with the given arena capacity
-    pub fn new(cmp: C, mut arena: A) -> Self {
-        let head = Node::new(Slice::default(), MAX_HEIGHT, &mut arena);
+    pub fn new(cmp: C, arena: A) -> Self {
+        let head = Node::new(Slice::default(), MAX_HEIGHT, &arena);
         Skiplist {
             comparator: cmp,
             // init height is 1 ( ignore the height of head )
@@ -372,7 +372,7 @@ mod tests {
     use std::{ptr, thread};
 
     fn new_test_skl() -> Skiplist<BytewiseComparator, BlockArena> {
-        Skiplist::new(BytewiseComparator::new(), BlockArena::new())
+        Skiplist::new(BytewiseComparator::default(), BlockArena::default())
     }
 
     fn construct_skl_from_nodes(
@@ -719,7 +719,7 @@ mod tests {
 
     impl ConcurrencyTest {
         pub fn new() -> Self {
-            let arena = BlockArena::new();
+            let arena = BlockArena::default();
             Self {
                 current: State::new(),
                 list: Rc::new(Skiplist::new(U64Comparator {}, arena)),

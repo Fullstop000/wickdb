@@ -61,16 +61,11 @@ pub trait Comparator: Send + Sync {
     fn successor(&self, key: &[u8]) -> Vec<u8>;
 }
 
+#[derive(Default)]
 pub struct BytewiseComparator {}
 
 unsafe impl Send for BytewiseComparator {}
 unsafe impl Sync for BytewiseComparator {}
-
-impl BytewiseComparator {
-    pub fn new() -> BytewiseComparator {
-        BytewiseComparator {}
-    }
-}
 
 impl Comparator for BytewiseComparator {
     #[inline]
@@ -137,7 +132,7 @@ mod tests {
             ("1111", "12345", "1111"),
             ("1111", "13345", "12"),
         ];
-        let c = BytewiseComparator::new();
+        let c = BytewiseComparator::default();
         for (a, b, expect) in tests.drain(..) {
             let res = c.separator(a.as_bytes(), b.as_bytes());
             assert_eq!(String::from_utf8(res).unwrap().as_str(), expect);
@@ -152,7 +147,7 @@ mod tests {
     #[test]
     fn test_bytewise_comparator_successor() {
         let mut tests = vec![("", ""), ("111", "2"), ("222", "3")];
-        let c = BytewiseComparator::new();
+        let c = BytewiseComparator::default();
         for (input, expect) in tests.drain(..) {
             let res = c.successor(input.as_bytes());
             assert_eq!(String::from_utf8(res).unwrap().as_str(), expect);

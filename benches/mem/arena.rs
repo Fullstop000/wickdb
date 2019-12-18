@@ -11,7 +11,7 @@ fn bench_allocate(c: &mut Criterion) {
             size,
             |b: &mut Bencher, size| {
                 b.iter_batched(
-                    || BlockArena::new(),
+                    || BlockArena::default(),
                     |arena| arena.allocate(*size),
                     BatchSize::PerIteration,
                 );
@@ -28,7 +28,7 @@ fn bench_allocate_aligned(c: &mut Criterion) {
             size,
             |b: &mut Bencher, size| {
                 b.iter_batched(
-                    || BlockArena::new(),
+                    || BlockArena::default(),
                     |arena| arena.allocate_aligned(*size),
                     BatchSize::PerIteration,
                 );

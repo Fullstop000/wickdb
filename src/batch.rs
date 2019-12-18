@@ -212,7 +212,7 @@ mod tests {
 
     fn print_contents(batch: &WriteBatch) -> String {
         let mem = MemTable::new(Arc::new(InternalKeyComparator::new(Arc::new(
-            BytewiseComparator::new(),
+            BytewiseComparator::default(),
         ))));
         let result = batch.insert_into(&mem);
         let mut iter = mem.iter();

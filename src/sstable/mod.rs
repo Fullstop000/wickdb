@@ -411,7 +411,7 @@ mod tests {
     impl ReverseComparator {
         fn new() -> Self {
             Self {
-                cmp: BytewiseComparator::new(),
+                cmp: BytewiseComparator::default(),
             }
         }
     }

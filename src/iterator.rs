@@ -594,7 +594,7 @@ mod tests {
             let child = children.get_mut(i).unwrap();
             child.push(v);
         }
-        let cmp = Arc::new(BytewiseComparator::new());
+        let cmp = Arc::new(BytewiseComparator::default());
         let iters = children
             .drain(..)
             .map(|mut child| {

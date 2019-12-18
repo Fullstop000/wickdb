@@ -114,7 +114,7 @@ impl VersionBuilder {
     pub fn apply_to_new(&mut self) -> Version {
         // TODO: config this to the option
         let icmp = Arc::new(InternalKeyComparator::new(Arc::new(
-            BytewiseComparator::new(),
+            BytewiseComparator::default(),
         )));
         let mut v = Version::new(self.base.options.clone(), icmp.clone());
         for (level, (mut base_files, delta)) in self

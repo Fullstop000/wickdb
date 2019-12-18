@@ -490,7 +490,7 @@ mod tests {
 
     fn new_test_block() -> Vec<u8> {
         let mut samples = vec!["1", "12", "123", "abc", "abd", "acd", "bbb"];
-        let cmp = Arc::new(BytewiseComparator::new());
+        let cmp = Arc::new(BytewiseComparator::default());
         let mut builder = BlockBuilder::new(3, cmp.clone());
         for key in samples.drain(..) {
             builder.add(key.as_bytes(), key.as_bytes());
@@ -519,7 +519,7 @@ mod tests {
 
     #[test]
     fn test_new_empty_block() {
-        let cmp = Arc::new(BytewiseComparator::new());
+        let cmp = Arc::new(BytewiseComparator::default());
         let mut builder = BlockBuilder::new(2, cmp.clone());
         let data = builder.finish();
         let length = data.len();
@@ -543,7 +543,7 @@ mod tests {
 
     #[test]
     fn test_simple_empty_key() {
-        let cmp = Arc::new(BytewiseComparator::new());
+        let cmp = Arc::new(BytewiseComparator::default());
         let mut builder = BlockBuilder::new(2, cmp.clone());
         builder.add(b"", b"test");
         let data = builder.finish();
@@ -562,7 +562,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_add_inconsistent_key() {
-        let cmp = Arc::new(BytewiseComparator::new());
+        let cmp = Arc::new(BytewiseComparator::default());
         let mut builder = BlockBuilder::new(2, cmp.clone());
         builder.add(b"ffffff", b"");
         builder.add(b"a", b"");
@@ -570,7 +570,7 @@ mod tests {
 
     #[test]
     fn test_write_entries() {
-        let cmp = Arc::new(BytewiseComparator::new());
+        let cmp = Arc::new(BytewiseComparator::default());
         let mut builder = BlockBuilder::new(2, cmp.clone());
         assert!(builder.last_key.is_empty());
         // Basic key
@@ -617,7 +617,7 @@ mod tests {
     #[test]
     fn test_write_restarts() {
         let samples = vec!["1", "12", "123", "abc", "abd", "acd", "bbb"];
-        let cmp = Arc::new(BytewiseComparator::new());
+        let cmp = Arc::new(BytewiseComparator::default());
         let mut tests = vec![
             (1, vec![0, 4, 9, 15, 21, 27, 33], 39),
             (2, vec![0, 8, 20, 31], 37),
@@ -635,7 +635,7 @@ mod tests {
 
     #[test]
     fn test_block_iter() {
-        let cmp = Arc::new(BytewiseComparator::new());
+        let cmp = Arc::new(BytewiseComparator::default());
         // keys ["1", "12", "123", "abc", "abd", "acd", "bbb"]
         let data = new_test_block();
         let restarts_len = Block::restarts_len(&data);
@@ -672,7 +672,7 @@ mod tests {
 
     #[test]
     fn test_read_write() {
-        let cmp = Arc::new(BytewiseComparator::new());
+        let cmp = Arc::new(BytewiseComparator::default());
         let mut builder = BlockBuilder::new(2, cmp.clone());
         let tests = vec![
             ("", "empty"),

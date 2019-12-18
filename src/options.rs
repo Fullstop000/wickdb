@@ -255,7 +255,7 @@ impl Options {
 impl Default for Options {
     fn default() -> Self {
         Options {
-            comparator: Arc::new(BytewiseComparator::new()),
+            comparator: Arc::new(BytewiseComparator::default()),
             create_if_missing: true,
             error_if_exists: false,
             paranoid_checks: false,

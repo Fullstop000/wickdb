@@ -706,7 +706,7 @@ mod tests {
         let res = read_block(file.as_ref(), &bh, true).expect("");
         assert_eq!(res, block);
         let block = Block::new(res).expect("");
-        let cmp = Arc::new(BytewiseComparator::new());
+        let cmp = Arc::new(BytewiseComparator::default());
         let mut iter = block.iter(cmp);
         iter.seek_to_first();
         let mut result_pairs = vec![];

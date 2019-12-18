@@ -113,7 +113,7 @@ pub struct MemTable {
 
 impl MemTable {
     pub fn new(icmp: Arc<InternalKeyComparator>) -> Self {
-        let arena = BlockArena::new();
+        let arena = BlockArena::default();
         let kcmp = KeyComparator { icmp };
         let table = Rc::new(Skiplist::new(kcmp.clone(), arena));
         Self { cmp: kcmp, table }
@@ -241,7 +241,7 @@ mod tests {
 
     fn new_mem_table() -> MemTable {
         let icmp = Arc::new(InternalKeyComparator::new(Arc::new(
-            BytewiseComparator::new(),
+            BytewiseComparator::default(),
         )));
         MemTable::new(icmp)
     }
