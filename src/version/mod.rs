@@ -404,13 +404,13 @@ impl Version {
             let stats_clone = stats.clone();
             let matches_clone = matches.clone();
             self.for_each_overlapping(
-                pkey.user_key.clone(),
+                pkey.user_key,
                 internal_key,
                 Box::new(move |level, file| {
                     *matches_clone.borrow_mut() += 1;
                     if *matches_clone.borrow() == 1 {
                         // Remember first match
-                        stats_clone.borrow_mut().seek_file = Some(file.clone());
+                        stats_clone.borrow_mut().seek_file = Some(file);
                         stats_clone.borrow_mut().seek_file_level = Some(level);
                     }
                     *matches_clone.borrow() < 2

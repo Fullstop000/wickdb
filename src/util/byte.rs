@@ -39,15 +39,7 @@ pub fn compare(b1: &[u8], b2: &[u8]) -> Ordering {
         // FIXME: this may fail in ubuntu
         match result {
             Some(x) if x > 0 => Ordering::Greater,
-            Some(x) if x == 0 => {
-                if b1.len() < b2.len() {
-                    Ordering::Less
-                } else if b1.len() == b2.len() {
-                    Ordering::Equal
-                } else {
-                    Ordering::Greater
-                }
-            }
+            Some(x) if x == 0 => b1.len().cmp(&b2.len()),
             Some(x) if x < 0 => Ordering::Less,
             Some(_) | None => panic!("invalid memcmp returning"),
         }

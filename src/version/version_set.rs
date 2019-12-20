@@ -457,7 +457,7 @@ impl VersionSet {
             }
         }
         let mut c = Compaction::new(self.options.clone(), level);
-        c.input_version = Some(version.clone());
+        c.input_version = Some(version);
         c.inputs[0] = overlapping_inputs;
         Some(self.setup_other_inputs(c))
     }
@@ -788,11 +788,8 @@ impl VersionSet {
         let current = &self.current();
         // re-calculate the range
         let (smallest, mut largest) = c.base_range(&self.icmp);
-        c.inputs[0] = current.get_overlapping_inputs(
-            c.level + 1,
-            Some(smallest.clone()),
-            Some(largest.clone()),
-        );
+        c.inputs[0] =
+            current.get_overlapping_inputs(c.level + 1, Some(smallest), Some(largest.clone()));
         let (mut all_smallest, mut all_largest) = c.total_range(&self.icmp);
 
         // See if we can grow the number of inputs in "level" without
@@ -818,7 +815,7 @@ impl VersionSet {
                 // TODO: use a more sufficient way to checking expanding in L(n+1) ?
                 let expanded1 = current.get_overlapping_inputs(
                     c.level + 1,
-                    Some(new_smallest.clone()),
+                    Some(new_smallest),
                     Some(new_largest.clone()),
                 );
                 // the L(n+1) compacting files shouldn't be expanded
@@ -857,7 +854,7 @@ impl VersionSet {
         // to be applied so that if the compaction fails, we will try a different
         // key range next time
         c.edit.compaction_pointers.push((c.level, largest.clone()));
-        self.compaction_pointer[c.level] = largest.clone();
+        self.compaction_pointer[c.level] = largest;
         c
     }
 
@@ -906,7 +903,7 @@ impl VersionSet {
         largest_key: &InternalKey,
     ) -> Option<Arc<FileMetaData>> {
         let ucmp = &self.icmp.user_comparator;
-        let current = self.current().clone();
+        let current = self.current();
         let level_files = &current.files[level];
         let mut smallest_boundary_file: Option<Arc<FileMetaData>> = None;
         for f in level_files.iter() {

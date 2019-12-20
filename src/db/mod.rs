@@ -395,7 +395,7 @@ impl DBImpl {
                 o.clone(),
                 o.table_cache_size(),
             )),
-            versions: Mutex::new(VersionSet::new(db_name.clone(), o.clone())),
+            versions: Mutex::new(VersionSet::new(db_name, o.clone())),
             background_work_finished_signal: Condvar::new(),
             background_compaction_scheduled: AtomicBool::new(false),
             do_compaction: crossbeam_channel::unbounded(),
