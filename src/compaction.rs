@@ -197,26 +197,23 @@ impl Compaction {
         } else {
             2
         };
-        let mut iter_list = Vec::with_capacity(space);
+        let mut iter_list: Vec<Box<dyn Iterator>> = Vec::with_capacity(space);
         for (i, input) in self.inputs.iter().enumerate() {
             if !input.is_empty() {
                 if self.level + i == 0 {
                     // level0
                     for file in self.inputs[CompactionInputsRelation::Source as usize].iter() {
                         // all the level0 tables are guaranteed being added into the table_cache via minor compaction
-                        iter_list.push(table_cache.clone().new_iter(
+                        iter_list.push(Box::new(table_cache.clone().new_iter(
                             read_options.clone(),
                             file.number,
                             file.file_size,
-                        ));
+                        )));
                     }
                 } else {
                     let origin = LevelFileNumIterator::new(icmp.clone(), self.inputs[i].clone());
                     let factory = FileIterFactory::new(read_options.clone(), table_cache.clone());
-                    iter_list.push(Box::new(ConcatenateIterator::new(
-                        Box::new(origin),
-                        Box::new(factory),
-                    )));
+                    iter_list.push(Box::new(ConcatenateIterator::new(origin, factory)));
                 }
             }
         }

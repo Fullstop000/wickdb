@@ -474,7 +474,7 @@ mod tests {
         }
 
         fn iter(&self) -> Box<dyn Iterator> {
-            self.block.iter(self.cmp.clone())
+            Box::new(self.block.iter(self.cmp.clone()))
         }
     }
 
@@ -519,7 +519,10 @@ mod tests {
 
         fn iter(&self) -> Box<dyn Iterator> {
             match &self.table {
-                Some(t) => new_table_iterator(t.clone(), Rc::new(ReadOptions::default())),
+                Some(t) => Box::new(new_table_iterator(
+                    t.clone(),
+                    Rc::new(ReadOptions::default()),
+                )),
                 None => Box::new(EmptyIterator::new()),
             }
         }

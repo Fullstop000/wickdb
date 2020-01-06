@@ -18,9 +18,10 @@
 use crate::cache::lru::SharedLRUCache;
 use crate::cache::{Cache, HandleRef};
 use crate::db::filename::{generate_filename, FileType};
-use crate::iterator::{EmptyIterator, IterWithCleanup, Iterator};
+use crate::iterator::{ConcatenateIterator, IterWithCleanup};
 use crate::options::{Options, ReadOptions};
-use crate::sstable::table::{new_table_iterator, Table};
+use crate::sstable::block::BlockIterator;
+use crate::sstable::table::{new_table_iterator, Table, TableIterFactory};
 use crate::storage::Storage;
 use crate::util::slice::Slice;
 use crate::util::status::Result;
@@ -101,16 +102,16 @@ impl TableCache {
         options: Rc<ReadOptions>,
         file_number: u64,
         file_size: u64,
-    ) -> Box<dyn Iterator> {
+    ) -> IterWithCleanup<ConcatenateIterator<BlockIterator, TableIterFactory>> {
         match self.find_table(file_number, file_size) {
             Ok(h) => {
                 let table = h.value().unwrap();
                 let mut iter = IterWithCleanup::new(new_table_iterator(table, options));
                 let cache = self.cache.clone();
                 iter.register_task(Box::new(move || cache.release(h.clone())));
-                Box::new(iter)
+                iter
             }
-            Err(e) => Box::new(EmptyIterator::new_with_err(e)),
+            Err(e) => IterWithCleanup::new_with_err(e),
         }
     }
 }

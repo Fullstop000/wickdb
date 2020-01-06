@@ -19,12 +19,14 @@ use crate::compaction::{Compaction, CompactionStats, ManualCompaction};
 use crate::db::build_table;
 use crate::db::filename::{generate_filename, parse_filename, update_current, FileType};
 use crate::db::format::{InternalKey, InternalKeyComparator};
-use crate::iterator::{ConcatenateIterator, DerivedIterFactory, EmptyIterator, Iterator};
+use crate::iterator::{ConcatenateIterator, DerivedIterFactory, IterWithCleanup, Iterator};
 use crate::options::Options;
 use crate::record::reader::Reader;
 use crate::record::writer::Writer;
 use crate::snapshot::{Snapshot, SnapshotList};
+use crate::sstable::block::BlockIterator;
 use crate::sstable::table::TableBuilder;
+use crate::sstable::table::TableIterFactory;
 use crate::table_cache::TableCache;
 use crate::util::coding::decode_fixed_64;
 use crate::util::collection::HashSet;
@@ -306,10 +308,14 @@ impl VersionSet {
         table_cache: Arc<TableCache>,
     ) -> Vec<Box<dyn Iterator>> {
         let version = self.current();
-        let mut res = vec![];
+        let mut res: Vec<Box<dyn Iterator>> = vec![];
         // Merge all level zero files together since they may overlap
         for file in version.files[0].iter() {
-            res.push(table_cache.new_iter(read_opt.clone(), file.number, file.file_size));
+            res.push(Box::new(table_cache.new_iter(
+                read_opt.clone(),
+                file.number,
+                file.file_size,
+            )));
         }
 
         // For levels > 0, we can use a concatenating iterator that sequentially
@@ -322,7 +328,7 @@ impl VersionSet {
                     files.clone(),
                 );
                 let factory = FileIterFactory::new(read_opt.clone(), table_cache.clone());
-                let iter = ConcatenateIterator::new(Box::new(level_file_iter), Box::new(factory));
+                let iter = ConcatenateIterator::new(level_file_iter, factory);
                 res.push(Box::new(iter));
             }
         }
@@ -977,12 +983,14 @@ impl FileIterFactory {
 }
 
 impl DerivedIterFactory for FileIterFactory {
-    fn derive(&self, value: &Slice) -> Result<Box<dyn Iterator>> {
+    type Iter = IterWithCleanup<ConcatenateIterator<BlockIterator, TableIterFactory>>;
+
+    fn derive(&self, value: &Slice) -> Result<Self::Iter> {
         if value.size() != 2 * FILE_META_LENGTH {
-            Ok(Box::new(EmptyIterator::new_with_err(WickErr::new(
+            Err(WickErr::new(
                 Status::Corruption,
                 Some("file reader invoked with unexpected value"),
-            ))))
+            ))
         } else {
             let file_number = decode_fixed_64(value.as_slice());
             let file_size = decode_fixed_64(&value.as_slice()[8..]);
