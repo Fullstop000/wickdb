@@ -38,7 +38,6 @@ use crate::version::version_edit::{FileMetaData, VersionEdit};
 use crate::version::version_set::VersionSet;
 use crossbeam_channel::{Receiver, Sender};
 use crossbeam_utils::sync::ShardedLock;
-use std::cell::RefCell;
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::vec_deque::VecDeque;
 use std::mem;
@@ -108,9 +107,9 @@ impl DB for WickDB {
             self.inner.versions.lock().unwrap().last_sequence()
         };
         let mut children = vec![];
-        children.push(Rc::new(RefCell::new(self.inner.mem.read().unwrap().iter())));
+        children.push(self.inner.mem.read().unwrap().iter());
         if let Some(im_mem) = self.inner.im_mem.read().unwrap().as_ref() {
-            children.push(Rc::new(RefCell::new(im_mem.iter())));
+            children.push(im_mem.iter());
         }
         let mut table_iters = self
             .inner
@@ -118,16 +117,9 @@ impl DB for WickDB {
             .lock()
             .unwrap()
             .current_iters(Rc::new(read_opt), self.inner.table_cache.clone());
-        for iter in table_iters.drain(..) {
-            children.push(Rc::new(RefCell::new(iter)));
-        }
+        children.append(&mut table_iters);
         let iter = MergingIterator::new(self.inner.internal_comparator.clone(), children);
-        Box::new(DBIterator::new(
-            Box::new(iter),
-            self.inner.clone(),
-            sequence,
-            ucmp,
-        ))
+        Box::new(DBIterator::new(iter, self.inner.clone(), sequence, ucmp))
     }
 
     fn delete(&self, options: WriteOptions, key: Slice) -> Result<()> {

@@ -18,10 +18,8 @@
 use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
 use crate::util::status::{Result, WickErr};
-use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::mem;
-use std::rc::Rc;
 use std::sync::Arc;
 
 /// A common trait for iterating all the key/value entries.
@@ -384,6 +382,7 @@ pub enum IterDirection {
     Forward,
     Reverse,
 }
+
 /// Return an iterator that provided the union of the data in
 /// `children[0..n-1]` with the correct order.
 /// This iterator performs just like a `merge sort` to its children.
@@ -392,92 +391,101 @@ pub enum IterDirection {
 pub struct MergingIterator {
     cmp: Arc<dyn Comparator>,
     direction: IterDirection,
-    children: Vec<Rc<RefCell<Box<dyn Iterator>>>>,
+    children: Vec<Box<dyn Iterator>>,
     current_index: usize, // index in 'children' of current iterator
-    current: Option<Rc<RefCell<Box<dyn Iterator>>>>,
 }
 
 impl MergingIterator {
-    pub fn new(cmp: Arc<dyn Comparator>, children: Vec<Rc<RefCell<Box<dyn Iterator>>>>) -> Self {
+    pub fn new(cmp: Arc<dyn Comparator>, children: Vec<Box<dyn Iterator>>) -> Self {
         let len = children.len();
         Self {
             cmp,
             direction: IterDirection::Forward,
             children,
             current_index: len,
-            current: None,
         }
     }
 
     fn valid_or_panic(&self) {
-        assert!(self.current.is_some())
+        assert!(self.current_index < self.children.len());
     }
 
     // Find the iterator with the smallest 'key' and set it as current
     fn find_smallest(&mut self) {
-        let mut smallest: Option<Rc<RefCell<Box<dyn Iterator>>>> = None;
+        let mut smallest: Option<Slice> = None;
         let mut index = self.current_index;
         for (i, child) in self.children.iter().enumerate() {
-            if child.borrow().valid()
+            if child.valid()
                 && (smallest.is_none()
                     || self.cmp.compare(
-                        child.borrow().key().as_slice(),
-                        smallest.as_ref().unwrap().borrow().key().as_slice(),
+                        child.key().as_slice(),
+                        smallest.as_ref().unwrap().as_slice(),
                     ) == Ordering::Less)
             {
-                smallest = Some(child.clone());
+                smallest = Some(child.key());
                 index = i
             }
         }
         self.current_index = index;
-        self.current = smallest
     }
 
     // Find the iterator with the largest 'key' and set it as current
     fn find_largest(&mut self) {
-        let mut largest: Option<Rc<RefCell<Box<dyn Iterator>>>> = None;
+        let mut largest: Option<Slice> = None;
         let mut index = self.current_index;
         for (i, child) in self.children.iter().enumerate() {
-            if child.borrow().valid()
+            if child.valid()
                 && (largest.is_none()
-                    || self.cmp.compare(
-                        child.borrow().key().as_slice(),
-                        largest.as_ref().unwrap().borrow().key().as_slice(),
-                    ) == Ordering::Greater)
+                    || self
+                        .cmp
+                        .compare(child.key().as_slice(), largest.as_ref().unwrap().as_slice())
+                        == Ordering::Greater)
             {
-                largest = Some(child.clone());
+                largest = Some(child.key());
                 index = i
             }
         }
         self.current_index = index;
-        self.current = largest
+    }
+
+    fn get_current(&self) -> &dyn Iterator {
+        self.children.get(self.current_index).unwrap().as_ref()
+    }
+
+    fn get_current_mut(&mut self) -> &mut dyn Iterator {
+        self.children.get_mut(self.current_index).unwrap().as_mut()
     }
 }
 
 impl Iterator for MergingIterator {
     fn valid(&self) -> bool {
-        self.current.is_some() && self.current.as_ref().unwrap().borrow().valid()
+        let i = self.current_index;
+        if i < self.children.len() {
+            self.get_current().valid()
+        } else {
+            false
+        }
     }
 
     fn seek_to_first(&mut self) {
-        for child in self.children.iter() {
-            child.borrow_mut().seek_to_first()
+        for child in self.children.iter_mut() {
+            child.seek_to_first()
         }
         self.find_smallest();
         self.direction = IterDirection::Forward;
     }
 
     fn seek_to_last(&mut self) {
-        for child in self.children.iter() {
-            child.borrow_mut().seek_to_last()
+        for child in self.children.iter_mut() {
+            child.seek_to_last()
         }
         self.find_largest();
         self.direction = IterDirection::Reverse;
     }
 
     fn seek(&mut self, target: &Slice) {
-        for child in self.children.iter() {
-            child.borrow_mut().seek(target)
+        for child in self.children.iter_mut() {
+            child.seek(target)
         }
         self.find_smallest();
         self.direction = IterDirection::Forward;
@@ -487,22 +495,20 @@ impl Iterator for MergingIterator {
         self.valid_or_panic();
         if self.direction != IterDirection::Forward {
             let key = self.key();
-            for (i, child) in self.children.iter().enumerate() {
+            for (i, child) in self.children.iter_mut().enumerate() {
                 if i != self.current_index {
-                    child.borrow_mut().seek(&key);
-                    if child.borrow().valid()
-                        && self
-                            .cmp
-                            .compare(key.as_slice(), child.borrow().key().as_slice())
+                    child.seek(&key);
+                    if child.valid()
+                        && self.cmp.compare(key.as_slice(), child.key().as_slice())
                             == Ordering::Equal
                     {
-                        child.borrow_mut().next();
+                        child.next();
                     }
                 }
             }
             self.direction = IterDirection::Forward;
         }
-        self.current.as_mut().unwrap().borrow_mut().next();
+        self.get_current_mut().next();
         self.find_smallest();
     }
 
@@ -510,36 +516,36 @@ impl Iterator for MergingIterator {
         self.valid_or_panic();
         if self.direction != IterDirection::Reverse {
             let key = self.key();
-            for (i, child) in self.children.iter().enumerate() {
+            for (i, child) in self.children.iter_mut().enumerate() {
                 if i != self.current_index {
-                    child.borrow_mut().seek(&key);
-                    if child.borrow().valid() {
-                        child.borrow_mut().prev();
+                    child.seek(&key);
+                    if child.valid() {
+                        child.prev();
                     } else {
                         // Child has no key >= current key so point to the last
-                        child.borrow_mut().seek_to_last();
+                        child.seek_to_last();
                     }
                 }
             }
             self.direction = IterDirection::Reverse;
         }
-        self.current.as_mut().unwrap().borrow_mut().prev();
+        self.get_current_mut().prev();
         self.find_largest();
     }
 
     fn key(&self) -> Slice {
         self.valid_or_panic();
-        self.current.as_ref().unwrap().borrow().key()
+        self.get_current().key()
     }
 
     fn value(&self) -> Slice {
         self.valid_or_panic();
-        self.current.as_ref().unwrap().borrow().value()
+        self.get_current().value()
     }
 
     fn status(&mut self) -> Result<()> {
-        for child in self.children.iter() {
-            let status = child.borrow_mut().status();
+        for child in self.children.iter_mut() {
+            let status = child.status();
             if status.is_err() {
                 return status;
             }
@@ -588,7 +594,7 @@ mod tests {
         }
         src.sort();
         let mut rnd = rand::thread_rng();
-        for v in src.drain(..) {
+        for v in src {
             let i = rnd.gen_range(0, n);
             let child = children.get_mut(i).unwrap();
             child.push(v);
@@ -598,7 +604,7 @@ mod tests {
             .drain(..)
             .map(|mut child| {
                 child.sort();
-                Rc::new(RefCell::new(TestSimpleArrayIter::box_new(child)))
+                TestSimpleArrayIter::box_new(child)
             })
             .collect::<Vec<_>>();
         MergingIterator::new(cmp, iters)

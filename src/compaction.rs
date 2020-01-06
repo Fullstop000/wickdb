@@ -25,7 +25,6 @@ use crate::util::slice::Slice;
 use crate::version::version_edit::{FileMetaData, VersionEdit};
 use crate::version::version_set::{FileIterFactory, VersionSet};
 use crate::version::{LevelFileNumIterator, Version};
-use std::cell::RefCell;
 use std::cmp::Ordering as CmpOrdering;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -205,19 +204,19 @@ impl Compaction {
                     // level0
                     for file in self.inputs[CompactionInputsRelation::Source as usize].iter() {
                         // all the level0 tables are guaranteed being added into the table_cache via minor compaction
-                        iter_list.push(Rc::new(RefCell::new(table_cache.clone().new_iter(
+                        iter_list.push(table_cache.clone().new_iter(
                             read_options.clone(),
                             file.number,
                             file.file_size,
-                        ))));
+                        ));
                     }
                 } else {
                     let origin = LevelFileNumIterator::new(icmp.clone(), self.inputs[i].clone());
                     let factory = FileIterFactory::new(read_options.clone(), table_cache.clone());
-                    iter_list.push(Rc::new(RefCell::new(Box::new(ConcatenateIterator::new(
+                    iter_list.push(Box::new(ConcatenateIterator::new(
                         Box::new(origin),
                         Box::new(factory),
-                    )))));
+                    )));
                 }
             }
         }
