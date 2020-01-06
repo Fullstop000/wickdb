@@ -16,7 +16,6 @@
 // See https://github.com/rust-lang/rust-clippy/issues/1608
 #![allow(clippy::redundant_closure)]
 
-extern crate libc;
 #[macro_use]
 extern crate log;
 extern crate crc32c;

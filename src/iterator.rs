@@ -552,7 +552,6 @@ impl Iterator for MergingIterator {
 mod tests {
     use crate::iterator::*;
     use crate::rand::Rng;
-    use crate::util::byte::*;
     use crate::util::comparator::BytewiseComparator;
     use crate::util::slice::Slice;
     use crate::util::status::Result;
@@ -709,7 +708,7 @@ mod tests {
         fn seek(&mut self, target: &Slice) {
             let mut current = self.inner.len() + 1;
             for (i, s) in self.inner.iter().enumerate() {
-                match compare(s.as_bytes(), target.as_slice()) {
+                match s.as_bytes().cmp(target.as_slice()) {
                     Ordering::Equal | Ordering::Greater => {
                         current = i;
                         break;

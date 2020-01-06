@@ -15,7 +15,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use crate::util::byte::compare;
 use std::cmp::{min, Ordering};
 
 /// A Comparator object provides a total order across `Slice` that are
@@ -70,7 +69,7 @@ unsafe impl Sync for BytewiseComparator {}
 impl Comparator for BytewiseComparator {
     #[inline]
     fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
-        compare(a, b)
+        a.cmp(b)
     }
 
     #[inline]

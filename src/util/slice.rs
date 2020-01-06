@@ -15,7 +15,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-use super::byte::compare;
 use crate::util::hash::hash;
 use std::cmp::Ordering;
 use std::fmt;
@@ -83,7 +82,7 @@ impl Slice {
 
     #[inline]
     pub fn compare(&self, other: &Slice) -> Ordering {
-        compare(self.as_slice(), other.as_slice())
+        self.as_slice().cmp(other.as_slice())
     }
 
     #[inline]
