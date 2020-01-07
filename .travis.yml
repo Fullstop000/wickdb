@@ -69,8 +69,8 @@ after_success:
                 LATEST=$MT;
             fi
         done
-        mkdir -p "target/cov/$(basename $LATEST)";
-        ./kcov-build/usr/local/bin/kcov --exclude-pattern=/.cargo,/usr/lib --verify "target/cov/$(basename $LATEST)" "$LATEST"; 
+        mkdir -p "target/cov/$(basename $TARGET)";
+        ./kcov-build/usr/local/bin/kcov --exclude-pattern=/.cargo,/usr/lib --verify "target/cov/$(basename $TARGET)" "$TARGET"; 
         bash <(curl -s https://codecov.io/bash)
         echo "Uploaded code coverage";
      fi
