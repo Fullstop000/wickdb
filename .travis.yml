@@ -65,12 +65,13 @@ after_success:
             do [ -x "${file}" ] || continue; 
             MT=`stat -c %Y $file`
             if [ $MT -ge $LATEST ]; then 
-                TARGET=$(basename $file) 
+                TARGET=$file 
                 LATEST=$MT;
             fi
         done
-        mkdir -p "target/cov/$(basename $TARGET)";
-        ./kcov-build/usr/local/bin/kcov --exclude-pattern=/.cargo,/usr/lib --verify "target/cov/$(basename $TARGET)" "$TARGET"; 
+        COV_DIR="target/cov/$(basename $TARGET)"
+        mkdir -p $COV_DIR
+        ./kcov-build/usr/local/bin/kcov --exclude-pattern=/.cargo,/usr/lib --verify $COV_DIR "$TARGET"
         bash <(curl -s https://codecov.io/bash)
         echo "Uploaded code coverage";
      fi
