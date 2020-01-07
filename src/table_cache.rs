@@ -30,19 +30,20 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 /// A `TableCache` is the cache for the sst files and the sstable in them
-pub struct TableCache {
-    env: Arc<dyn Storage>,
-    db_name: String,
+#[derive(Clone)]
+pub struct TableCache<S: Storage + Clone> {
+    storage: S,
+    db_name: &'static str,
     options: Arc<Options>,
     // the key of cache is the file number
     cache: Arc<dyn Cache<Arc<Table>>>,
 }
 
-impl TableCache {
-    pub fn new(db_name: String, options: Arc<Options>, size: usize) -> Self {
+impl<S: Storage + Clone> TableCache<S> {
+    pub fn new(db_name: &'static str, options: Arc<Options>, size: usize, storage: S) -> Self {
         let cache = Arc::new(SharedLRUCache::<Arc<Table>>::new(size));
         Self {
-            env: options.env.clone(),
+            storage,
             db_name,
             options,
             cache,
@@ -56,9 +57,8 @@ impl TableCache {
         match self.cache.look_up(key.as_slice()) {
             Some(handle) => Ok(handle),
             None => {
-                let filename =
-                    generate_filename(self.db_name.as_str(), FileType::Table, file_number);
-                let table_file = self.env.open(filename.as_str())?;
+                let filename = generate_filename(self.db_name, FileType::Table, file_number);
+                let table_file = self.storage.open(filename.as_str())?;
                 let table = Table::open(table_file, file_size, self.options.clone())?;
                 Ok(self.cache.insert(key, Arc::new(table), 1, None))
             }

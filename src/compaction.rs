@@ -19,11 +19,12 @@ use crate::db::format::{InternalKey, InternalKeyComparator};
 use crate::iterator::{ConcatenateIterator, Iterator, MergingIterator};
 use crate::options::{Options, ReadOptions};
 use crate::sstable::table::TableBuilder;
+use crate::storage::Storage;
 use crate::table_cache::TableCache;
 use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
 use crate::version::version_edit::{FileMetaData, VersionEdit};
-use crate::version::version_set::{FileIterFactory, VersionSet};
+use crate::version::version_set::{total_file_size, FileIterFactory};
 use crate::version::{LevelFileNumIterator, Version};
 use std::cmp::Ordering as CmpOrdering;
 use std::rc::Rc;
@@ -167,7 +168,7 @@ impl Compaction {
     pub fn is_trivial_move(&self) -> bool {
         self.inputs[CompactionInputsRelation::Source as usize].len() == 1
             && self.inputs[CompactionInputsRelation::Parent as usize].is_empty()
-            && VersionSet::total_file_size(self.grand_parents.as_slice())
+            && total_file_size(self.grand_parents.as_slice())
                 <= self.options.max_grandparent_overlap_bytes()
     }
 
@@ -180,10 +181,10 @@ impl Compaction {
     /// Entry format:
     ///     key: internal key
     ///     value: value of user key
-    pub fn new_input_iterator(
+    pub fn new_input_iterator<S: Storage + Clone + 'static>(
         &self,
         icmp: Arc<InternalKeyComparator>,
-        table_cache: Arc<TableCache>,
+        table_cache: TableCache<S>,
     ) -> impl Iterator {
         let read_options = Rc::new(ReadOptions {
             verify_checksums: self.options.paranoid_checks,
@@ -204,7 +205,7 @@ impl Compaction {
                     // level0
                     for file in self.inputs[CompactionInputsRelation::Source as usize].iter() {
                         // all the level0 tables are guaranteed being added into the table_cache via minor compaction
-                        iter_list.push(Box::new(table_cache.clone().new_iter(
+                        iter_list.push(Box::new(table_cache.new_iter(
                             read_options.clone(),
                             file.number,
                             file.file_size,

@@ -51,7 +51,7 @@ pub use iterator::Iterator;
 pub use log::{LevelFilter, Log};
 pub use options::{CompressionType, Options, ReadOptions, WriteOptions};
 pub use sstable::block::Block;
-pub use storage::{File, Storage};
+pub use storage::*;
 pub use util::comparator::{BytewiseComparator, Comparator};
 pub use util::slice::Slice;
 pub use util::status::{Result, Status, WickErr};

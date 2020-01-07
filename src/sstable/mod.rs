@@ -382,6 +382,7 @@ mod tests {
     use crate::sstable::block::*;
     use crate::sstable::table::*;
     use crate::storage::mem::MemStorage;
+    use crate::storage::Storage;
     use crate::util::collection::HashSet;
     use crate::util::comparator::{BytewiseComparator, Comparator};
     use crate::util::slice::Slice;
@@ -440,7 +441,12 @@ mod tests {
     // BlockBuilder/TableBuilder and Block/Table
     trait Constructor {
         // Write key/value pairs in `data` into inner data structure
-        fn finish(&mut self, options: Arc<Options>, data: &[(Vec<u8>, Vec<u8>)]) -> Result<()>;
+        fn finish(
+            &mut self,
+            options: Arc<Options>,
+            storage: &dyn Storage,
+            data: &[(Vec<u8>, Vec<u8>)],
+        ) -> Result<()>;
 
         // Returns a iterator for inner data structure
         fn iter(&self) -> Box<dyn Iterator>;
@@ -461,7 +467,12 @@ mod tests {
     }
 
     impl Constructor for BlockConstructor {
-        fn finish(&mut self, options: Arc<Options>, data: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
+        fn finish(
+            &mut self,
+            options: Arc<Options>,
+            _storage: &dyn Storage,
+            data: &[(Vec<u8>, Vec<u8>)],
+        ) -> Result<()> {
             let mut builder =
                 BlockBuilder::new(options.block_restart_interval, options.comparator.clone());
             for (key, value) in data {
@@ -498,9 +509,14 @@ mod tests {
     }
 
     impl Constructor for TableConstructor {
-        fn finish(&mut self, options: Arc<Options>, data: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
+        fn finish(
+            &mut self,
+            options: Arc<Options>,
+            storage: &dyn Storage,
+            data: &[(Vec<u8>, Vec<u8>)],
+        ) -> Result<()> {
             let file_name = "test_table";
-            let file = options.env.create(file_name)?;
+            let file = storage.create(file_name)?;
             let mut builder = TableBuilder::new(file, options.clone());
             for (key, value) in data {
                 builder
@@ -510,7 +526,7 @@ mod tests {
             builder
                 .finish(false)
                 .expect("TableBuilder finish should work");
-            let file = options.env.open(file_name)?;
+            let file = storage.open(file_name)?;
             let file_len = file.len()?;
             let table = Table::open(file, file_len, options.clone())?;
             self.table = Some(Arc::new(table));
@@ -690,7 +706,12 @@ mod tests {
     }
 
     impl Constructor for MemTableConstructor {
-        fn finish(&mut self, _options: Arc<Options>, data: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
+        fn finish(
+            &mut self,
+            _options: Arc<Options>,
+            _storage: &dyn Storage,
+            data: &[(Vec<u8>, Vec<u8>)],
+        ) -> Result<()> {
             for (seq, (key, value)) in data.iter().enumerate() {
                 self.inner.add(
                     seq as u64 + 1,
@@ -708,24 +729,28 @@ mod tests {
     }
 
     struct DBConstructor {
-        inner: WickDB,
+        inner: WickDB<MemStorage>,
     }
 
     impl DBConstructor {
         fn new(cmp: Arc<dyn Comparator>) -> Self {
             let mut options = Options::default();
-            options.env = Arc::new(MemStorage::default());
+            let env = MemStorage::default();
             options.comparator = cmp;
             options.write_buffer_size = 10000; // Something small to force merging
             options.error_if_exists = true;
-            let db =
-                WickDB::open_db(options, "table_testdb".to_owned()).expect("could not open db");
+            let db = WickDB::open_db(options, "table_testdb", env).expect("could not open db");
             Self { inner: db }
         }
     }
 
     impl Constructor for DBConstructor {
-        fn finish(&mut self, _options: Arc<Options>, data: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
+        fn finish(
+            &mut self,
+            _options: Arc<Options>,
+            _storage: &dyn Storage,
+            data: &[(Vec<u8>, Vec<u8>)],
+        ) -> Result<()> {
             for (key, value) in data.iter() {
                 let mut batch = WriteBatch::new();
                 batch.put(key.as_slice(), value.as_slice());
@@ -742,6 +767,7 @@ mod tests {
     }
 
     struct CommonConstructor {
+        storage: MemStorage,
         constructor: Box<dyn Constructor>,
         // key&value pairs in order
         data: Vec<(Vec<u8>, Vec<u8>)>,
@@ -749,8 +775,9 @@ mod tests {
     }
 
     impl CommonConstructor {
-        fn new(constructor: Box<dyn Constructor>) -> Self {
+        fn new(storage: MemStorage, constructor: Box<dyn Constructor>) -> Self {
             Self {
+                storage,
                 constructor,
                 data: vec![],
                 keys: HashSet::default(),
@@ -777,7 +804,7 @@ mod tests {
                 res.push(key.clone())
             }
             self.constructor
-                .finish(options, &self.data)
+                .finish(options, &self.storage, &self.data)
                 .expect("constructor finish should be ok");
             res
         }
@@ -793,7 +820,6 @@ mod tests {
     impl TestHarness {
         fn new(t: TestType, reverse_cmp: bool, restart_interval: usize) -> Self {
             let mut options = Options::default();
-            options.env = Arc::new(MemStorage::default());
             options.block_restart_interval = restart_interval;
             // Use shorter block size for tests to exercise block boundary
             // conditions more
@@ -810,8 +836,9 @@ mod tests {
                 }
                 TestType::DB => Box::new(DBConstructor::new(options.comparator.clone())),
             };
+            let storage = MemStorage::default();
             TestHarness {
-                inner: CommonConstructor::new(constructor),
+                inner: CommonConstructor::new(storage, constructor),
                 reverse_cmp,
                 rand: rand::thread_rng(),
                 options: Arc::new(options),

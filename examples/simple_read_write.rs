@@ -11,16 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use wickdb::file::FileStorage;
 use wickdb::Options;
 use wickdb::ReadOptions;
 use wickdb::Slice;
 use wickdb::WickDB;
 use wickdb::WriteOptions;
 use wickdb::DB;
+
 fn main() {
     let options = Options::default();
-    let db_name = "./test_db".to_owned();
-    let db = WickDB::open_db(options, db_name).expect("could not open db");
+    let storage = FileStorage::default();
+    let db = WickDB::open_db(options, "./test_db", storage).expect("could not open db");
     db.put(
         WriteOptions::default(),
         Slice::from("key1"),
