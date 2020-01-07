@@ -59,11 +59,18 @@ after_success:
         make install DESTDIR=../../kcov-build
         cd ../..
         rm -rf kcov-master
+        LATEST="0"
+        TARGET=""
         for file in target/debug/wickdb-*; 
             do [ -x "${file}" ] || continue; 
-            mkdir -p "target/cov/$(basename $file)";
-            ./kcov-build/usr/local/bin/kcov --exclude-pattern=/.cargo,/usr/lib --verify "target/cov/$(basename $file)" "$file"; 
+            MT=`stat -c %Y $file`
+            if [ $MT -ge $LATEST ]; then 
+                TARGET=$(basename $file) 
+                LATEST=$MT;
+            fi
         done
+        mkdir -p "target/cov/$(basename $LATEST)";
+        ./kcov-build/usr/local/bin/kcov --exclude-pattern=/.cargo,/usr/lib --verify "target/cov/$(basename $LATEST)" "$LATEST"; 
         bash <(curl -s https://codecov.io/bash)
         echo "Uploaded code coverage";
      fi
