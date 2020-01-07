@@ -15,6 +15,7 @@ use crate::db::format::ValueType;
 use crate::db::format::{extract_user_key, ParsedInternalKey, VALUE_TYPE_FOR_SEEK};
 use crate::db::DBImpl;
 use crate::iterator::Iterator;
+use crate::storage::Storage;
 use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
 use crate::util::status::{Result, Status, WickErr};
@@ -37,9 +38,9 @@ enum Direction {
 /// `DBIterator` combines multiple entries for the same userkey found in the DB
 /// representation into a single entry while accounting for sequence
 /// numbers, deletion markers, overwrites, etc
-pub struct DBIterator<I: Iterator> {
+pub struct DBIterator<I: Iterator, S: Storage + Clone + 'static> {
     valid: bool,
-    db: Arc<DBImpl>,
+    db: Arc<DBImpl<S>>,
     ucmp: Arc<dyn Comparator>,
     // The newest sequence acquired.
     // Any key newer than this will be ignored
@@ -61,7 +62,7 @@ pub struct DBIterator<I: Iterator> {
     saved_value: Slice,
 }
 
-impl<I: Iterator> Iterator for DBIterator<I> {
+impl<I: Iterator, S: Storage + Clone> Iterator for DBIterator<I, S> {
     fn valid(&self) -> bool {
         self.valid
     }
@@ -183,8 +184,8 @@ impl<I: Iterator> Iterator for DBIterator<I> {
     }
 }
 
-impl<I: Iterator> DBIterator<I> {
-    pub fn new(iter: I, db: Arc<DBImpl>, sequence: u64, ucmp: Arc<dyn Comparator>) -> Self {
+impl<I: Iterator, S: Storage + Clone> DBIterator<I, S> {
+    pub fn new(iter: I, db: Arc<DBImpl<S>>, sequence: u64, ucmp: Arc<dyn Comparator>) -> Self {
         Self {
             valid: false,
             db: db.clone(),

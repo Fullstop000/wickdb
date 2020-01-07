@@ -27,6 +27,7 @@ use crate::snapshot::{Snapshot, SnapshotList};
 use crate::sstable::block::BlockIterator;
 use crate::sstable::table::TableBuilder;
 use crate::sstable::table::TableIterFactory;
+use crate::storage::Storage;
 use crate::table_cache::TableCache;
 use crate::util::coding::decode_fixed_64;
 use crate::util::collection::HashSet;
@@ -75,7 +76,7 @@ impl VersionBuilder {
     /// Add the given VersionEdit for later applying
     /// 'vset.compaction_pointers' will be updated
     /// same as `apply` in C++ implementation
-    pub fn accumulate(&mut self, edit: &VersionEdit, vset: &mut VersionSet) {
+    pub fn accumulate<S: Storage + Clone>(&mut self, edit: &VersionEdit, vset: &mut VersionSet<S>) {
         // update compcation pointers
         for (level, key) in edit.compaction_pointers.iter() {
             vset.compaction_pointer[*level] = key.clone();
@@ -153,7 +154,7 @@ impl VersionBuilder {
 }
 
 /// The collection of all the Versions produced
-pub struct VersionSet {
+pub struct VersionSet<S: Storage + Clone> {
     // Snapshots that clients might be acquiring
     pub snapshots: SnapshotList,
     // The compaction stats for every level
@@ -166,7 +167,8 @@ pub struct VersionSet {
     pub record_writer: Option<Writer>,
 
     // db path
-    db_name: String,
+    db_name: &'static str,
+    storage: S,
     options: Arc<Options>,
     icmp: Arc<InternalKeyComparator>,
 
@@ -188,10 +190,10 @@ pub struct VersionSet {
     compaction_pointer: Vec<Rc<InternalKey>>,
 }
 
-unsafe impl Send for VersionSet {}
+unsafe impl<S: Storage + Clone> Send for VersionSet<S> {}
 
-impl VersionSet {
-    pub fn new(db_name: String, options: Arc<Options>) -> Self {
+impl<S: Storage + Clone + 'static> VersionSet<S> {
+    pub fn new(db_name: &'static str, options: Arc<Options>, storage: S) -> Self {
         let mut compaction_stats = vec![];
         for _ in 0..options.max_levels {
             compaction_stats.push(CompactionStats::new());
@@ -202,6 +204,7 @@ impl VersionSet {
             pending_outputs: HashSet::default(),
             manual_compaction: None,
             db_name,
+            storage,
             record_writer: None,
             options: options.clone(),
             icmp: Arc::new(InternalKeyComparator::new(options.comparator.clone())),
@@ -305,7 +308,7 @@ impl VersionSet {
     pub fn current_iters(
         &self,
         read_opt: Rc<ReadOptions>,
-        table_cache: Arc<TableCache>,
+        table_cache: TableCache<S>,
     ) -> Vec<Box<dyn Iterator>> {
         let version = self.current();
         let mut res: Vec<Box<dyn Iterator>> = vec![];
@@ -373,18 +376,15 @@ impl VersionSet {
         // Initialize new manifest file if necessary by creating a temporary file that contains a snapshot of the current version.
         let mut new_manifest_file = String::new();
         if self.manifest_writer.is_none() {
-            new_manifest_file = generate_filename(
-                self.db_name.as_str(),
-                FileType::Manifest,
-                self.manifest_file_number,
-            );
+            new_manifest_file =
+                generate_filename(self.db_name, FileType::Manifest, self.manifest_file_number);
             //            edit.set_next_file(self.next_file_number);
-            let f = self.options.env.create(new_manifest_file.as_str())?;
+            let f = self.storage.create(new_manifest_file.as_str())?;
             let mut writer = Writer::new(f);
             match self.write_snapshot(&mut writer) {
                 Ok(()) => self.manifest_writer = Some(writer),
                 Err(_) => {
-                    return self.options.env.remove(new_manifest_file.as_str());
+                    return self.storage.remove(new_manifest_file.as_str());
                 }
             }
         }
@@ -401,14 +401,14 @@ impl VersionSet {
                             // new CURRENT file that points to it.
                             if !new_manifest_file.is_empty() {
                                 match update_current(
-                                    self.options.env.clone(),
-                                    self.db_name.as_str(),
+                                    &self.storage,
+                                    self.db_name,
                                     self.manifest_file_number,
                                 ) {
                                     Ok(()) => {}
                                     Err(_) => {
                                         self.manifest_writer = None;
-                                        return self.options.env.remove(new_manifest_file.as_str());
+                                        return self.storage.remove(new_manifest_file.as_str());
                                     }
                                 }
                             }
@@ -421,13 +421,13 @@ impl VersionSet {
                         Err(e) => {
                             info!("MANIFEST write: {:?}", e);
                             self.manifest_writer = None;
-                            return self.options.env.remove(new_manifest_file.as_str());
+                            return self.storage.remove(new_manifest_file.as_str());
                         }
                     }
                 }
                 Err(_) => {
                     self.manifest_writer = None;
-                    return self.options.env.remove(new_manifest_file.as_str());
+                    return self.storage.remove(new_manifest_file.as_str());
                 }
             }
         }
@@ -543,7 +543,7 @@ impl VersionSet {
     pub fn write_level0_files(
         &mut self,
         db_name: &str,
-        table_cache: Arc<TableCache>,
+        table_cache: TableCache<S>,
         mem_iter: &mut dyn Iterator,
         edit: &mut VersionEdit,
     ) -> Result<()> {
@@ -554,8 +554,9 @@ impl VersionSet {
         info!("Level-0 table #{} : started", meta.number);
         let build_result = build_table(
             self.options.clone(),
+            &self.storage,
             db_name,
-            table_cache,
+            &table_cache,
             mem_iter,
             &mut meta,
         );
@@ -600,12 +601,6 @@ impl VersionSet {
         }
     }
 
-    /// Calculate the total size of given files
-    #[inline]
-    pub fn total_file_size(files: &[Arc<FileMetaData>]) -> u64 {
-        files.iter().fold(0, |accum, file| accum + file.file_size)
-    }
-
     /// Create new table builder and physical file for current output in Compaction
     pub fn open_compaction_output_file(&mut self, compact: &mut Compaction) -> Result<()> {
         assert!(compact.builder.is_none());
@@ -613,8 +608,8 @@ impl VersionSet {
         self.pending_outputs.insert(file_number);
         let mut output = FileMetaData::default();
         output.number = file_number;
-        let file_name = generate_filename(self.db_name.as_str(), FileType::Table, file_number);
-        let file = self.options.env.create(file_name.as_str())?;
+        let file_name = generate_filename(self.db_name, FileType::Table, file_number);
+        let file = self.storage.create(file_name.as_str())?;
         compact.builder = Some(TableBuilder::new(file, self.options.clone()));
         Ok(())
     }
@@ -622,13 +617,9 @@ impl VersionSet {
     /// Recover the last saved Version from MANIFEST file.
     /// Returns whether we need a new MANIFEST file for later usage.
     pub fn recover(&mut self) -> Result<bool> {
-        let env = self.options.env.clone();
+        let env = self.storage.clone();
         // Read "CURRENT" file, which contains a pointer to the current manifest file
-        let mut current = env.open(&generate_filename(
-            self.db_name.as_str(),
-            FileType::Current,
-            0,
-        ))?;
+        let mut current = env.open(&generate_filename(self.db_name, FileType::Current, 0))?;
         let mut buf = vec![];
         current.read_all(&mut buf)?;
         let (current_manifest, file_name) = match String::from_utf8(buf) {
@@ -639,7 +630,7 @@ impl VersionSet {
                         Some("CURRENT file is empty"),
                     ));
                 }
-                let mut prefix = self.db_name.clone();
+                let mut prefix = self.db_name.to_owned();
                 prefix.push(MAIN_SEPARATOR);
                 let file_name = prefix + s.as_str();
                 (env.open(&file_name)?, file_name)
@@ -810,9 +801,9 @@ impl VersionSet {
             );
             // add boundary for expanded L(n) inputs
             self.add_boundary_inputs_for_compact_files(c.level, &mut expanded0);
-            let expanded0_size = Self::total_file_size(expanded0.as_slice());
-            let inputs0_size = Self::total_file_size(c.inputs[0].as_slice());
-            let inputs1_size = Self::total_file_size(c.inputs[1].as_slice());
+            let expanded0_size = total_file_size(expanded0.as_slice());
+            let inputs0_size = total_file_size(c.inputs[0].as_slice());
+            let inputs1_size = total_file_size(c.inputs[1].as_slice());
             if expanded0.len() > c.inputs[0].len()
                 && inputs1_size + expanded0_size
                     <= self.options.expanded_compaction_byte_size_limit()
@@ -826,7 +817,7 @@ impl VersionSet {
                 );
                 // the L(n+1) compacting files shouldn't be expanded
                 if expanded1.len() == c.inputs[1].len() {
-                    let expanded1_size = Self::total_file_size(expanded1.as_slice());
+                    let expanded1_size = total_file_size(expanded1.as_slice());
                     info!(
                         "Expanding@{} {}+{} ({}+{} bytes) to {}+{} ({}+{} bytes)",
                         c.level,
@@ -946,7 +937,7 @@ impl VersionSet {
                     if len > self.options.max_file_size {
                         return false;
                     }
-                    match self.options.env.open(manifest_file) {
+                    match self.storage.open(manifest_file) {
                         Ok(f) => {
                             info!("Reusing MANIFEST {}", manifest_file);
                             let writer = Writer::new(f);
@@ -968,13 +959,13 @@ impl VersionSet {
     }
 }
 
-pub struct FileIterFactory {
+pub struct FileIterFactory<S: Storage + Clone> {
     options: Rc<ReadOptions>,
-    table_cache: Arc<TableCache>,
+    table_cache: TableCache<S>,
 }
 
-impl FileIterFactory {
-    pub fn new(options: Rc<ReadOptions>, table_cache: Arc<TableCache>) -> Self {
+impl<S: Storage + Clone> FileIterFactory<S> {
+    pub fn new(options: Rc<ReadOptions>, table_cache: TableCache<S>) -> Self {
         Self {
             options,
             table_cache,
@@ -982,7 +973,7 @@ impl FileIterFactory {
     }
 }
 
-impl DerivedIterFactory for FileIterFactory {
+impl<S: Storage + Clone> DerivedIterFactory for FileIterFactory<S> {
     type Iter = IterWithCleanup<ConcatenateIterator<BlockIterator, TableIterFactory>>;
 
     fn derive(&self, value: &Slice) -> Result<Self::Iter> {
@@ -999,4 +990,10 @@ impl DerivedIterFactory for FileIterFactory {
                 .new_iter(self.options.clone(), file_number, file_size))
         }
     }
+}
+
+/// Calculate the total size of given files
+#[inline]
+pub fn total_file_size(files: &[Arc<FileMetaData>]) -> u64 {
+    files.iter().fold(0, |accum, file| accum + file.file_size)
 }

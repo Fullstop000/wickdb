@@ -22,7 +22,6 @@ use crate::util::status::{Result, Status, WickErr};
 use std::io;
 use std::io::SeekFrom;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 /// `Storage` is a namespace for files.
 ///
@@ -130,7 +129,7 @@ pub trait File {
 
 /// Write given `data` into underlying `env` file and flush file iff `should_sync` is true
 pub fn do_write_string_to_file(
-    env: Arc<dyn Storage>,
+    env: &dyn Storage,
     data: String,
     file_name: &str,
     should_sync: bool,

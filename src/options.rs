@@ -23,7 +23,6 @@ use crate::logger::Logger;
 use crate::options::CompressionType::{NoCompression, SnappyCompression, Unknown};
 use crate::snapshot::Snapshot;
 use crate::sstable::block::Block;
-use crate::storage::file::FileStorage;
 use crate::storage::Storage;
 use crate::util::comparator::{BytewiseComparator, Comparator};
 use crate::LevelFilter;
@@ -73,8 +72,6 @@ pub struct Options {
     /// become unreadable or for the entire DB to become unopenable.
     pub paranoid_checks: bool,
 
-    /// Use the specified object to interact with the environment,
-    pub env: Arc<dyn Storage>,
     // -------------------
     // Parameters that affect compaction:
     /// The max number of levels except L)
@@ -209,7 +206,7 @@ impl Options {
     }
 
     /// Initialize Options by limiting ranges of some flags, applying customized Logger and etc.
-    pub(crate) fn initialize(&mut self, db_name: String) {
+    pub(crate) fn initialize(&mut self, db_name: String, storage: &dyn Storage) {
         self.max_open_files =
             Self::clip_range(self.max_open_files, 64 + self.non_table_cache_files, 50000);
         self.write_buffer_size = Self::clip_range(self.write_buffer_size, 64 << 10, 1 << 30);
@@ -217,10 +214,9 @@ impl Options {
         self.block_size = Self::clip_range(self.block_size, 1 << 10, 4 << 20);
 
         if self.logger.is_none() {
-            let _ = self.env.mkdir_all(&db_name);
-            if let Ok(f) = self
-                .env
-                .create(generate_filename(&db_name, FileType::InfoLog, 0).as_str())
+            let _ = storage.mkdir_all(&db_name);
+            if let Ok(f) =
+                storage.create(generate_filename(&db_name, FileType::InfoLog, 0).as_str())
             {
                 self.logger = Some(Box::new(Logger::new(f, self.logger_level)))
             }
@@ -259,7 +255,6 @@ impl Default for Options {
             create_if_missing: true,
             error_if_exists: false,
             paranoid_checks: false,
-            env: Arc::new(FileStorage {}),
             max_levels: 7,
             l0_compaction_threshold: 4,
             l0_slowdown_writes_threshold: 8,

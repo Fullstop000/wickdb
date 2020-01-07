@@ -21,13 +21,14 @@ use crate::db::format::{
 };
 use crate::iterator::Iterator;
 use crate::options::{Options, ReadOptions};
+use crate::storage::Storage;
 use crate::table_cache::TableCache;
 use crate::util::coding::put_fixed_64;
 use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
 use crate::util::status::{Result, Status, WickErr};
 use crate::version::version_edit::FileMetaData;
-use crate::version::version_set::VersionSet;
+use crate::version::version_set::total_file_size;
 use std::cell::RefCell;
 use std::cmp::Ordering as CmpOrdering;
 use std::mem;
@@ -114,11 +115,11 @@ impl Version {
     }
 
     /// Search the value by the given key in sstables level by level
-    pub fn get(
+    pub fn get<S: Storage + Clone + 'static>(
         &self,
         options: ReadOptions,
         key: LookupKey,
-        table_cache: Arc<TableCache>,
+        table_cache: &TableCache<S>,
     ) -> Result<(Option<Slice>, SeekStats)> {
         let opt = Rc::new(options);
         let ikey = key.internal_key();
@@ -271,9 +272,7 @@ impl Version {
                         Some(smallest_ikey.clone()),
                         Some(largest_ikey.clone()),
                     );
-                    if VersionSet::total_file_size(&overlaps)
-                        > self.options.max_grandparent_overlap_bytes()
-                    {
+                    if total_file_size(&overlaps) > self.options.max_grandparent_overlap_bytes() {
                         break;
                     }
                 }
@@ -305,7 +304,7 @@ impl Version {
                     // overwrites/deletions)
                     self.files[level].len() as f64 / self.options.l0_compaction_threshold as f64
                 } else {
-                    let level_bytes = VersionSet::total_file_size(self.files[level].as_ref());
+                    let level_bytes = total_file_size(self.files[level].as_ref());
                     level_bytes as f64 / self.options.max_bytes_for_level(level) as f64
                 }
             };

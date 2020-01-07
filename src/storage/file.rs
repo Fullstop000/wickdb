@@ -25,6 +25,7 @@ use std::fs::{
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
+#[derive(Clone, Default)]
 pub struct FileStorage;
 
 impl Storage for FileStorage {
