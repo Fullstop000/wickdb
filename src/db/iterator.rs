@@ -37,7 +37,7 @@ enum Direction {
 /// `DBIterator` combines multiple entries for the same userkey found in the DB
 /// representation into a single entry while accounting for sequence
 /// numbers, deletion markers, overwrites, etc
-pub struct DBIterator {
+pub struct DBIterator<I: Iterator> {
     valid: bool,
     db: Arc<DBImpl>,
     ucmp: Arc<dyn Comparator>,
@@ -45,7 +45,7 @@ pub struct DBIterator {
     // Any key newer than this will be ignored
     sequence: u64,
     err: Option<WickErr>,
-    inner: Box<dyn Iterator>,
+    inner: I,
     direction: Direction,
     // used for randomly picking a yielded key to record read stats
     bytes_util_read_sampling: u64,
@@ -61,7 +61,7 @@ pub struct DBIterator {
     saved_value: Slice,
 }
 
-impl Iterator for DBIterator {
+impl<I: Iterator> Iterator for DBIterator<I> {
     fn valid(&self) -> bool {
         self.valid
     }
@@ -183,13 +183,8 @@ impl Iterator for DBIterator {
     }
 }
 
-impl DBIterator {
-    pub fn new(
-        iter: Box<dyn Iterator>,
-        db: Arc<DBImpl>,
-        sequence: u64,
-        ucmp: Arc<dyn Comparator>,
-    ) -> Self {
+impl<I: Iterator> DBIterator<I> {
+    pub fn new(iter: I, db: Arc<DBImpl>, sequence: u64, ucmp: Arc<dyn Comparator>) -> Self {
         Self {
             valid: false,
             db: db.clone(),

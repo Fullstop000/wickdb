@@ -439,10 +439,10 @@ mod tests {
     // Helper class for tests to unify the interface between
     // BlockBuilder/TableBuilder and Block/Table
     trait Constructor {
-        // Write key/value pairs in `data` into inner data structure ( Block / Table )
+        // Write key/value pairs in `data` into inner data structure
         fn finish(&mut self, options: Arc<Options>, data: &[(Vec<u8>, Vec<u8>)]) -> Result<()>;
 
-        // Returns a iterator for inner data structure ( Block / Table )
+        // Returns a iterator for inner data structure
         fn iter(&self) -> Box<dyn Iterator>;
     }
 
@@ -474,7 +474,7 @@ mod tests {
         }
 
         fn iter(&self) -> Box<dyn Iterator> {
-            self.block.iter(self.cmp.clone())
+            Box::new(self.block.iter(self.cmp.clone()))
         }
     }
 
@@ -519,20 +519,23 @@ mod tests {
 
         fn iter(&self) -> Box<dyn Iterator> {
             match &self.table {
-                Some(t) => new_table_iterator(t.clone(), Rc::new(ReadOptions::default())),
+                Some(t) => Box::new(new_table_iterator(
+                    t.clone(),
+                    Rc::new(ReadOptions::default()),
+                )),
                 None => Box::new(EmptyIterator::new()),
             }
         }
     }
 
     // A helper struct to convert user key into lookup key for inner iterator
-    struct KeyConvertingIterator {
-        inner: Box<dyn Iterator>,
+    struct KeyConvertingIterator<I: Iterator> {
+        inner: I,
         err: Cell<Option<WickErr>>,
     }
 
-    impl KeyConvertingIterator {
-        fn new(iter: Box<dyn Iterator>) -> Self {
+    impl<I: Iterator> KeyConvertingIterator<I> {
+        fn new(iter: I) -> Self {
             Self {
                 inner: iter,
                 err: Cell::new(None),
@@ -540,7 +543,7 @@ mod tests {
         }
     }
 
-    impl Iterator for KeyConvertingIterator {
+    impl<I: Iterator> Iterator for KeyConvertingIterator<I> {
         fn valid(&self) -> bool {
             self.inner.valid()
         }
@@ -734,7 +737,7 @@ mod tests {
         }
 
         fn iter(&self) -> Box<dyn Iterator> {
-            self.inner.iter(ReadOptions::default())
+            Box::new(self.inner.iter(ReadOptions::default()))
         }
     }
 

@@ -206,6 +206,7 @@ impl WriteBatch {
 mod tests {
     use crate::batch::WriteBatch;
     use crate::db::format::{InternalKeyComparator, ParsedInternalKey, ValueType};
+    use crate::iterator::Iterator;
     use crate::mem::{MemTable, MemoryTable};
     use crate::util::comparator::BytewiseComparator;
     use std::sync::Arc;
@@ -216,7 +217,7 @@ mod tests {
         ))));
         let result = batch.insert_into(&mem);
         let mut iter = mem.iter();
-        iter.as_mut().seek_to_first();
+        iter.seek_to_first();
         let mut s = String::new();
         let mut count = 0;
         while iter.valid() {

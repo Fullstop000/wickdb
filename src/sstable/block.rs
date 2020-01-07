@@ -76,14 +76,9 @@ impl Block {
     }
 
     /// Create a BlockIterator for current block.
-    pub fn iter(&self, cmp: Arc<dyn Comparator>) -> Box<dyn Iterator> {
+    pub fn iter(&self, cmp: Arc<dyn Comparator>) -> BlockIterator {
         let num_restarts = Self::restarts_len(self.data.as_slice());
-        Box::new(BlockIterator::new(
-            cmp,
-            self.data.clone(),
-            self.restart_offset,
-            num_restarts,
-        ))
+        BlockIterator::new(cmp, self.data.clone(), self.restart_offset, num_restarts)
     }
 
     // decoded the restarts length from block data

@@ -17,7 +17,7 @@
 
 use crate::iterator::{ConcatenateIterator, DerivedIterFactory, Iterator};
 use crate::options::{CompressionType, Options, ReadOptions};
-use crate::sstable::block::{Block, BlockBuilder};
+use crate::sstable::block::{Block, BlockBuilder, BlockIterator};
 use crate::sstable::filter_block::{FilterBlockBuilder, FilterBlockReader};
 use crate::sstable::{BlockHandle, Footer, BLOCK_TRAILER_SIZE, FOOTER_ENCODED_LENGTH};
 use crate::storage::File;
@@ -123,7 +123,7 @@ impl Table {
         &self,
         data_block_handle: BlockHandle,
         options: Rc<ReadOptions>,
-    ) -> Result<Box<dyn Iterator>> {
+    ) -> Result<BlockIterator> {
         let block = if let Some(cache) = &self.options.block_cache {
             let mut cache_key_buffer = vec![0; 16];
             put_fixed_64(&mut cache_key_buffer, self.cache_id);
@@ -226,24 +226,28 @@ pub struct TableIterFactory {
     options: Rc<ReadOptions>,
     table: Arc<Table>,
 }
+
 impl DerivedIterFactory for TableIterFactory {
-    fn derive(&self, value: &Slice) -> Result<Box<dyn Iterator>> {
+    type Iter = BlockIterator;
+    fn derive(&self, value: &Slice) -> Result<Self::Iter> {
         BlockHandle::decode_from(value.as_slice())
             .and_then(|(handle, _)| self.table.block_reader(handle, self.options.clone()))
     }
 }
 
+pub type TableIterator = ConcatenateIterator<BlockIterator, TableIterFactory>;
+
 /// Create a new `ConcatenateIterator` as table iterator.
-/// This iterator is able to yield all the key/values in a `.sst` file
+/// This iterator is able to yield all the key/values in the given `table` file
 ///
 /// Entry format:
 ///     key: internal key
 ///     value: value of user key
-pub fn new_table_iterator(table: Arc<Table>, options: Rc<ReadOptions>) -> Box<dyn Iterator> {
+pub fn new_table_iterator(table: Arc<Table>, options: Rc<ReadOptions>) -> TableIterator {
     let cmp = table.options.comparator.clone();
     let index_iter = table.index_block.iter(cmp);
-    let factory = Box::new(TableIterFactory { options, table });
-    Box::new(ConcatenateIterator::new(index_iter, factory))
+    let factory = TableIterFactory { options, table };
+    ConcatenateIterator::new(index_iter, factory)
 }
 
 /// Temporarily stores the contents of the table it is
@@ -635,6 +639,7 @@ pub fn read_block(file: &dyn File, handle: &BlockHandle, verify_checksum: bool) 
 #[cfg(test)]
 mod tests {
     use crate::filter::bloom::BloomFilter;
+    use crate::iterator::Iterator;
     use crate::sstable::block::Block;
     use crate::sstable::table::{read_block, Table, TableBuilder};
     use crate::sstable::BlockHandle;

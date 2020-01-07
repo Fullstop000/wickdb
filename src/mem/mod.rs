@@ -33,12 +33,13 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 pub trait MemoryTable {
+    type Iter: Iterator;
     /// Returns an estimate of the number of bytes of data in use by this
     /// data structure. It is safe to call when MemTable is being modified.
     fn approximate_memory_usage(&self) -> usize;
 
     /// Return an iterator that yields the contents of the memtable.
-    fn iter(&self) -> Box<dyn Iterator>;
+    fn iter(&self) -> Self::Iter;
 
     /// Add an entry into memtable that maps key to value at the
     /// specified sequence number and with the specified type.
@@ -121,12 +122,13 @@ impl MemTable {
 }
 
 impl MemoryTable for MemTable {
+    type Iter = MemTableIterator;
     fn approximate_memory_usage(&self) -> usize {
         self.table.arena.memory_used()
     }
 
-    fn iter(&self) -> Box<dyn Iterator> {
-        Box::new(MemTableIterator::new(self.table.clone()))
+    fn iter(&self) -> Self::Iter {
+        MemTableIterator::new(self.table.clone())
     }
 
     fn add(&self, seq_number: u64, val_type: ValueType, key: &[u8], value: &[u8]) {
@@ -234,6 +236,7 @@ fn extract_varint32_encoded_slice(origin: &mut Slice) -> Slice {
 #[cfg(test)]
 mod tests {
     use crate::db::format::{InternalKeyComparator, LookupKey, ParsedInternalKey, ValueType};
+    use crate::iterator::Iterator;
     use crate::mem::{MemTable, MemoryTable};
     use crate::util::comparator::BytewiseComparator;
     use crate::util::status::Status;

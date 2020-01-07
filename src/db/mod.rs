@@ -38,7 +38,6 @@ use crate::version::version_edit::{FileMetaData, VersionEdit};
 use crate::version::version_set::VersionSet;
 use crossbeam_channel::{Receiver, Sender};
 use crossbeam_utils::sync::ShardedLock;
-use std::cell::RefCell;
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::vec_deque::VecDeque;
 use std::mem;
@@ -53,6 +52,9 @@ use std::time::{Duration, SystemTime};
 /// A `DB` is safe for concurrent access from multiple threads without
 /// any external synchronization.
 pub trait DB {
+    /// The iterator that can yield all the kv pairs in `DB`
+    type Iterator;
+
     /// `put` sets the value for the given key. It overwrites any previous value
     /// for that key; a DB is not a multi-map.
     fn put(&self, write_opt: WriteOptions, key: Slice, value: Slice) -> Result<()>;
@@ -62,7 +64,7 @@ pub trait DB {
     fn get(&self, read_opt: ReadOptions, key: Slice) -> Result<Option<Slice>>;
 
     /// Return an iterator over the contents of the database.
-    fn iter(&self, read_opt: ReadOptions) -> Box<dyn Iterator>;
+    fn iter(&self, read_opt: ReadOptions) -> Self::Iterator;
 
     /// `delete` deletes the value for the given key. It returns `Status::NotFound` if
     /// the DB does not contain the key.
@@ -90,6 +92,8 @@ pub struct WickDB {
 }
 
 impl DB for WickDB {
+    type Iterator = DBIterator<MergingIterator>;
+
     fn put(&self, options: WriteOptions, key: Slice, value: Slice) -> Result<()> {
         let mut batch = WriteBatch::new();
         batch.put(key.as_slice(), value.as_slice());
@@ -100,17 +104,17 @@ impl DB for WickDB {
         self.inner.get(options, key)
     }
 
-    fn iter(&self, read_opt: ReadOptions) -> Box<dyn Iterator> {
+    fn iter(&self, read_opt: ReadOptions) -> Self::Iterator {
         let ucmp = self.inner.internal_comparator.user_comparator.clone();
         let sequence = if let Some(snapshot) = &read_opt.snapshot {
             snapshot.sequence()
         } else {
             self.inner.versions.lock().unwrap().last_sequence()
         };
-        let mut children = vec![];
-        children.push(Rc::new(RefCell::new(self.inner.mem.read().unwrap().iter())));
+        let mut children: Vec<Box<dyn Iterator>> = vec![];
+        children.push(Box::new(self.inner.mem.read().unwrap().iter()));
         if let Some(im_mem) = self.inner.im_mem.read().unwrap().as_ref() {
-            children.push(Rc::new(RefCell::new(im_mem.iter())));
+            children.push(Box::new(im_mem.iter()));
         }
         let mut table_iters = self
             .inner
@@ -118,16 +122,9 @@ impl DB for WickDB {
             .lock()
             .unwrap()
             .current_iters(Rc::new(read_opt), self.inner.table_cache.clone());
-        for iter in table_iters.drain(..) {
-            children.push(Rc::new(RefCell::new(iter)));
-        }
+        children.append(&mut table_iters);
         let iter = MergingIterator::new(self.inner.internal_comparator.clone(), children);
-        Box::new(DBIterator::new(
-            Box::new(iter),
-            self.inner.clone(),
-            sequence,
-            ucmp,
-        ))
+        DBIterator::new(iter, self.inner.clone(), sequence, ucmp)
     }
 
     fn delete(&self, options: WriteOptions, key: Slice) -> Result<()> {
@@ -632,11 +629,11 @@ impl DBImpl {
             if mem_ref.approximate_memory_usage() > self.options.write_buffer_size {
                 have_compacted = true;
                 *save_manifest = true;
-                let iter = mem_ref.iter();
+                let mut iter = mem_ref.iter();
                 versions.write_level0_files(
                     self.db_name.as_str(),
                     self.table_cache.clone(),
-                    iter,
+                    &mut iter,
                     edit,
                 )?;
                 mem = None;
@@ -657,10 +654,11 @@ impl DBImpl {
         }
         if let Some(m) = &mem {
             *save_manifest = true;
+            let mut iter = m.iter();
             versions.write_level0_files(
                 self.db_name.as_str(),
                 self.table_cache.clone(),
-                m.iter(),
+                &mut iter,
                 edit,
             )?;
         }
@@ -788,10 +786,11 @@ impl DBImpl {
         let mut versions = self.versions.lock().unwrap();
         let mut edit = VersionEdit::new(self.options.max_levels);
         let mut im_mem = self.im_mem.write().unwrap();
+        let mut iter = im_mem.as_ref().unwrap().iter();
         match versions.write_level0_files(
             self.db_name.as_str(),
             self.table_cache.clone(),
-            im_mem.as_ref().unwrap().iter(),
+            &mut iter,
             &mut edit,
         ) {
             Ok(()) => {
@@ -1183,11 +1182,11 @@ impl BatchTask {
 /// meta will be filled with metadata about the generated table.
 /// If no data is present in iter, `meta.file_size` will be set to
 /// zero, and no Table file will be produced.
-pub(crate) fn build_table<'a>(
+pub(crate) fn build_table(
     options: Arc<Options>,
     db_name: &str,
     table_cache: Arc<TableCache>,
-    mut iter: Box<dyn Iterator + 'a>,
+    iter: &mut dyn Iterator,
     meta: &mut FileMetaData,
 ) -> Result<()> {
     meta.file_size = 0;
