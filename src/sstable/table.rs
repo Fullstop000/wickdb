@@ -235,16 +235,15 @@ impl DerivedIterFactory for TableIterFactory {
     }
 }
 
+pub type TableIterator = ConcatenateIterator<BlockIterator, TableIterFactory>;
+
 /// Create a new `ConcatenateIterator` as table iterator.
-/// This iterator is able to yield all the key/values in a `.sst` file
+/// This iterator is able to yield all the key/values in the given `table` file
 ///
 /// Entry format:
 ///     key: internal key
 ///     value: value of user key
-pub fn new_table_iterator(
-    table: Arc<Table>,
-    options: Rc<ReadOptions>,
-) -> ConcatenateIterator<BlockIterator, TableIterFactory> {
+pub fn new_table_iterator(table: Arc<Table>, options: Rc<ReadOptions>) -> TableIterator {
     let cmp = table.options.comparator.clone();
     let index_iter = table.index_block.iter(cmp);
     let factory = TableIterFactory { options, table };

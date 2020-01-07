@@ -540,11 +540,11 @@ impl VersionSet {
     }
 
     /// Persistent given memtable into a single level0 file.
-    pub fn write_level0_files<'a>(
+    pub fn write_level0_files(
         &mut self,
         db_name: &str,
         table_cache: Arc<TableCache>,
-        mem_iter: Box<dyn Iterator + 'a>,
+        mem_iter: &mut dyn Iterator,
         edit: &mut VersionEdit,
     ) -> Result<()> {
         let base = self.current();
