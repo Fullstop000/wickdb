@@ -256,6 +256,7 @@ impl LookupKey {
 ///    increasing user key (according to user-supplied comparator)
 ///    decreasing sequence number
 ///    decreasing type (though sequence# should be enough to disambiguate)
+#[derive(Clone)]
 pub struct InternalKeyComparator {
     /// The comparator defined in `Options`
     pub user_comparator: Arc<dyn Comparator>,

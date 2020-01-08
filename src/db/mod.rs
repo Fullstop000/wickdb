@@ -92,7 +92,7 @@ pub struct WickDB<S: Storage + Clone + 'static> {
 }
 
 impl<S: Storage + Clone> DB for WickDB<S> {
-    type Iterator = DBIterator<MergingIterator, S>;
+    type Iterator = DBIterator<MergingIterator<InternalKeyComparator>, S>;
 
     fn put(&self, options: WriteOptions, key: Slice, value: Slice) -> Result<()> {
         let mut batch = WriteBatch::new();
@@ -327,7 +327,7 @@ impl<S: Storage + Clone> Clone for WickDB<S> {
 
 pub struct DBImpl<S: Storage + Clone> {
     env: S,
-    internal_comparator: Arc<InternalKeyComparator>,
+    internal_comparator: InternalKeyComparator,
     options: Arc<Options>,
     // The physical path of wickdb
     db_name: &'static str,
@@ -378,7 +378,7 @@ impl<S: Storage + Clone> Drop for DBImpl<S> {
 impl<S: Storage + Clone + 'static> DBImpl<S> {
     fn new(options: Options, db_name: &'static str, storage: S) -> Self {
         let o = Arc::new(options);
-        let icmp = Arc::new(InternalKeyComparator::new(o.comparator.clone()));
+        let icmp = InternalKeyComparator::new(o.comparator.clone());
         Self {
             env: storage.clone(),
             internal_comparator: icmp.clone(),

@@ -30,7 +30,6 @@ use crate::util::status::{Result, WickErr};
 use crate::util::varint::VarintU32;
 use std::cmp::Ordering;
 use std::rc::Rc;
-use std::sync::Arc;
 
 pub trait MemoryTable {
     type Iter: Iterator;
@@ -75,7 +74,7 @@ pub trait MemoryTable {
 // to the internal key before comparing.
 #[derive(Clone)]
 pub struct KeyComparator {
-    icmp: Arc<InternalKeyComparator>,
+    icmp: InternalKeyComparator,
 }
 
 impl Comparator for KeyComparator {
@@ -113,7 +112,7 @@ pub struct MemTable {
 }
 
 impl MemTable {
-    pub fn new(icmp: Arc<InternalKeyComparator>) -> Self {
+    pub fn new(icmp: InternalKeyComparator) -> Self {
         let arena = BlockArena::default();
         let kcmp = KeyComparator { icmp };
         let table = Rc::new(Skiplist::new(kcmp.clone(), arena));
@@ -243,9 +242,7 @@ mod tests {
     use std::sync::Arc;
 
     fn new_mem_table() -> MemTable {
-        let icmp = Arc::new(InternalKeyComparator::new(Arc::new(
-            BytewiseComparator::default(),
-        )));
+        let icmp = InternalKeyComparator::new(Arc::new(BytewiseComparator::default()));
         MemTable::new(icmp)
     }
 

@@ -116,9 +116,7 @@ impl VersionBuilder {
     /// same as `save_to` in C++ implementation
     pub fn apply_to_new(&mut self) -> Version {
         // TODO: config this to the option
-        let icmp = Arc::new(InternalKeyComparator::new(Arc::new(
-            BytewiseComparator::default(),
-        )));
+        let icmp = InternalKeyComparator::new(Arc::new(BytewiseComparator::default()));
         let mut v = Version::new(self.base.options.clone(), icmp.clone());
         for (level, (mut base_files, delta)) in self
             .base
@@ -170,7 +168,7 @@ pub struct VersionSet<S: Storage + Clone> {
     db_name: &'static str,
     storage: S,
     options: Arc<Options>,
-    icmp: Arc<InternalKeyComparator>,
+    icmp: InternalKeyComparator,
 
     // the next available file number
     next_file_number: u64,
@@ -207,7 +205,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
             storage,
             record_writer: None,
             options: options.clone(),
-            icmp: Arc::new(InternalKeyComparator::new(options.comparator.clone())),
+            icmp: InternalKeyComparator::new(options.comparator.clone()),
             next_file_number: 0,
             last_sequence: 0,
             log_number: 0,
@@ -327,7 +325,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         for files in version.files.iter().skip(1) {
             if !files.is_empty() {
                 let level_file_iter = LevelFileNumIterator::new(
-                    Arc::new(InternalKeyComparator::new(self.options.comparator.clone())),
+                    InternalKeyComparator::new(self.options.comparator.clone()),
                     files.clone(),
                 );
                 let factory = FileIterFactory::new(read_opt.clone(), table_cache.clone());

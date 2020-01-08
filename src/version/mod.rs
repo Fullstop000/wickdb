@@ -61,7 +61,7 @@ pub mod version_set;
 /// sequence number.
 pub struct Version {
     options: Arc<Options>,
-    icmp: Arc<InternalKeyComparator>,
+    icmp: InternalKeyComparator,
     // files per level in this version
     // sorted by the smallest key in FileMetaData
     // TODO: is this `Arc` necessary ?
@@ -97,7 +97,7 @@ impl SeekStats {
 }
 
 impl Version {
-    pub fn new(options: Arc<Options>, icmp: Arc<InternalKeyComparator>) -> Self {
+    pub fn new(options: Arc<Options>, icmp: InternalKeyComparator) -> Self {
         let max_levels = options.max_levels as usize;
         let mut files = Vec::with_capacity(max_levels);
         for _ in 0..max_levels {
@@ -222,7 +222,7 @@ impl Version {
     /// Binary search given files to find earliest index of index whose largest key >= ikey.
     /// If not found, returns the length of files.
     pub fn find_file(
-        icmp: Arc<InternalKeyComparator>,
+        icmp: InternalKeyComparator,
         files: &[Arc<FileMetaData>],
         ikey: &Slice,
     ) -> usize {
@@ -319,7 +319,7 @@ impl Version {
 
     /// Returns `icmp`
     #[inline]
-    pub fn comparator(&self) -> Arc<InternalKeyComparator> {
+    pub fn comparator(&self) -> InternalKeyComparator {
         self.icmp.clone()
     }
 
@@ -558,13 +558,13 @@ pub const FILE_META_LENGTH: usize = 2 * mem::size_of::<u64>();
 /// encoded using `encode_fixed_u64`
 pub struct LevelFileNumIterator {
     files: Vec<Arc<FileMetaData>>,
-    icmp: Arc<InternalKeyComparator>,
+    icmp: InternalKeyComparator,
     index: usize,
     value_buf: Vec<u8>,
 }
 
 impl LevelFileNumIterator {
-    pub fn new(icmp: Arc<InternalKeyComparator>, files: Vec<Arc<FileMetaData>>) -> Self {
+    pub fn new(icmp: InternalKeyComparator, files: Vec<Arc<FileMetaData>>) -> Self {
         let index = files.len();
         Self {
             files,

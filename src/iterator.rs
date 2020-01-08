@@ -20,7 +20,6 @@ use crate::util::slice::Slice;
 use crate::util::status::{Result, WickErr};
 use std::cmp::Ordering;
 use std::mem;
-use std::sync::Arc;
 
 /// A common trait for iterating all the key/value entries.
 // TODO: use Relative Type or Generics instead of explicitly using Slice as the type of key and value
@@ -410,15 +409,15 @@ pub enum IterDirection {
 /// This iterator performs just like a `merge sort` to its children.
 /// The result does no duplicate suppression.  I.e., if a particular
 /// key is present in K child iterators, it will be yielded K times.
-pub struct MergingIterator {
-    cmp: Arc<dyn Comparator>,
+pub struct MergingIterator<C: Comparator> {
+    cmp: C,
     direction: IterDirection,
     children: Vec<Box<dyn Iterator>>,
     current_index: usize, // index in 'children' of current iterator
 }
 
-impl MergingIterator {
-    pub fn new(cmp: Arc<dyn Comparator>, children: Vec<Box<dyn Iterator>>) -> Self {
+impl<C: Comparator> MergingIterator<C> {
+    pub fn new(cmp: C, children: Vec<Box<dyn Iterator>>) -> Self {
         let len = children.len();
         Self {
             cmp,
@@ -479,7 +478,7 @@ impl MergingIterator {
     }
 }
 
-impl Iterator for MergingIterator {
+impl<C: Comparator> Iterator for MergingIterator<C> {
     fn valid(&self) -> bool {
         let i = self.current_index;
         if i < self.children.len() {
@@ -609,7 +608,10 @@ mod tests {
     }
 
     // Divide given ordered `src` into `n` lists and then construct a `MergingIterator` with them
-    fn new_test_merging_iter(mut src: Vec<String>, n: usize) -> MergingIterator {
+    fn new_test_merging_iter(
+        mut src: Vec<String>,
+        n: usize,
+    ) -> MergingIterator<BytewiseComparator> {
         let mut children = vec![];
         for _ in 0..n {
             children.push(vec![]);
@@ -621,7 +623,7 @@ mod tests {
             let child = children.get_mut(i).unwrap();
             child.push(v);
         }
-        let cmp = Arc::new(BytewiseComparator::default());
+        let cmp = BytewiseComparator::default();
         let iters = children
             .drain(..)
             .map(|mut child| {

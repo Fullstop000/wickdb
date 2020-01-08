@@ -698,9 +698,8 @@ mod tests {
 
     impl MemTableConstructor {
         fn new(cmp: Arc<dyn Comparator>) -> Self {
-            let icmp = Arc::new(InternalKeyComparator::new(cmp));
             Self {
-                inner: MemTable::new(icmp),
+                inner: MemTable::new(InternalKeyComparator::new(cmp)),
             }
         }
     }

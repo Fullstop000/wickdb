@@ -183,7 +183,7 @@ impl Compaction {
     ///     value: value of user key
     pub fn new_input_iterator<S: Storage + Clone + 'static>(
         &self,
-        icmp: Arc<InternalKeyComparator>,
+        icmp: InternalKeyComparator,
         table_cache: TableCache<S>,
     ) -> impl Iterator {
         let read_options = Rc::new(ReadOptions {
@@ -223,7 +223,7 @@ impl Compaction {
 
     /// Returns true iff we should stop building the current output
     /// before processing `ikey` for too much overlapping with grand parents
-    pub fn should_stop_before(&mut self, ikey: &Slice, icmp: Arc<InternalKeyComparator>) -> bool {
+    pub fn should_stop_before(&mut self, ikey: &Slice, icmp: InternalKeyComparator) -> bool {
         // `seen_key` guarantees that we should continue checking for next `ikey`
         // no matter whether the first `ikey` overlaps with grand parents
         while self.grand_parent_index < self.grand_parents.len()
