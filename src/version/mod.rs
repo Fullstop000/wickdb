@@ -249,23 +249,19 @@ impl Version {
     /// result that covers the range `[smallest_user_key,largest_user_key]`.
     pub fn pick_level_for_memtable_output(
         &self,
-        smallest_ukey: &Slice,
-        largest_ukey: &Slice,
+        smallest_ukey: &[u8],
+        largest_ukey: &[u8],
     ) -> usize {
         let mut level = 0;
         if !self.overlap_in_level(level, smallest_ukey, largest_ukey) {
             // No overlapping in level 0
             // we might directly push files to next level if there is no overlap in next level
             let smallest_ikey = Rc::new(InternalKey::new(
-                smallest_ukey.as_slice(),
+                smallest_ukey,
                 u64::max_value(),
                 VALUE_TYPE_FOR_SEEK,
             ));
-            let largest_ikey = Rc::new(InternalKey::new(
-                largest_ukey.as_slice(),
-                0,
-                ValueType::Deletion,
-            ));
+            let largest_ikey = Rc::new(InternalKey::new(largest_ukey, 0, ValueType::Deletion));
             while level < self.options.max_mem_compact_level {
                 if self.overlap_in_level(level + 1, smallest_ukey, largest_ukey) {
                     break;
@@ -436,7 +432,7 @@ impl Version {
     // some part of `[smallest_ukey,largest_ukey]`.
     // `smallest_ukey` is empty represents a key smaller than all the DB's keys.
     // `largest_ukey` is empty represents a key largest than all the DB's keys.
-    fn overlap_in_level(&self, level: usize, smallest_ukey: &Slice, largest_ukey: &Slice) -> bool {
+    fn overlap_in_level(&self, level: usize, smallest_ukey: &[u8], largest_ukey: &[u8]) -> bool {
         if level == 0 {
             // need to check against all files in level 0
             for file in self.files[0].iter() {
@@ -453,11 +449,8 @@ impl Version {
         // binary search in level > 0
         let index = {
             if !smallest_ukey.is_empty() {
-                let smallest_ikey = InternalKey::new(
-                    smallest_ukey.as_slice(),
-                    u64::max_value(),
-                    VALUE_TYPE_FOR_SEEK,
-                );
+                let smallest_ikey =
+                    InternalKey::new(smallest_ukey, u64::max_value(), VALUE_TYPE_FOR_SEEK);
                 Self::find_file(self.icmp.clone(), &self.files[level], smallest_ikey.data())
             } else {
                 0
@@ -471,21 +464,21 @@ impl Version {
         !self.key_is_before_file(self.files[level][index].clone(), largest_ukey)
     }
 
-    fn key_is_after_file(&self, file: Arc<FileMetaData>, ukey: &Slice) -> bool {
+    fn key_is_after_file(&self, file: Arc<FileMetaData>, ukey: &[u8]) -> bool {
         !ukey.is_empty()
             && self
                 .icmp
                 .user_comparator
-                .compare(ukey.as_slice(), file.largest.user_key())
+                .compare(ukey, file.largest.user_key())
                 == CmpOrdering::Greater
     }
 
-    fn key_is_before_file(&self, file: Arc<FileMetaData>, ukey: &Slice) -> bool {
+    fn key_is_before_file(&self, file: Arc<FileMetaData>, ukey: &[u8]) -> bool {
         !ukey.is_empty()
             && self
                 .icmp
                 .user_comparator
-                .compare(ukey.as_slice(), file.smallest.user_key())
+                .compare(ukey, file.smallest.user_key())
                 == CmpOrdering::Less
     }
 

@@ -229,8 +229,8 @@ pub struct TableIterFactory {
 
 impl DerivedIterFactory for TableIterFactory {
     type Iter = BlockIterator;
-    fn derive(&self, value: &Slice) -> Result<Self::Iter> {
-        BlockHandle::decode_from(value.as_slice())
+    fn derive(&self, value: &[u8]) -> Result<Self::Iter> {
+        BlockHandle::decode_from(value)
             .and_then(|(handle, _)| self.table.block_reader(handle, self.options.clone()))
     }
 }

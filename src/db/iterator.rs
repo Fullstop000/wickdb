@@ -214,13 +214,6 @@ impl<I: Iterator, S: Storage + Clone> DBIterator<I, S> {
         }
         self.bytes_util_read_sampling -= bytes_read as u64;
         InternalKey::decoded_from(k.as_slice())
-        // ParsedInternalKey::decode_from(k.as_slice()).or_else(|| {
-        //     self.err = Some(WickErr::new(
-        //         Status::Corruption,
-        //         Some("corrupted internal key in DBIterator"),
-        //     ));
-        //     None
-        // })
     }
 
     // Try to point the inner iter to yield a internal key whose user key is greater than previous

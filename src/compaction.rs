@@ -22,7 +22,6 @@ use crate::sstable::table::TableBuilder;
 use crate::storage::Storage;
 use crate::table_cache::TableCache;
 use crate::util::comparator::Comparator;
-use crate::util::slice::Slice;
 use crate::version::version_edit::{FileMetaData, VersionEdit};
 use crate::version::version_set::{total_file_size, FileIterFactory};
 use crate::version::{LevelFileNumIterator, Version};
@@ -223,12 +222,12 @@ impl Compaction {
 
     /// Returns true iff we should stop building the current output
     /// before processing `ikey` for too much overlapping with grand parents
-    pub fn should_stop_before(&mut self, ikey: &Slice, icmp: InternalKeyComparator) -> bool {
+    pub fn should_stop_before(&mut self, ikey: &[u8], icmp: InternalKeyComparator) -> bool {
         // `seen_key` guarantees that we should continue checking for next `ikey`
         // no matter whether the first `ikey` overlaps with grand parents
         while self.grand_parent_index < self.grand_parents.len()
             && icmp.compare(
-                ikey.as_slice(),
+                ikey,
                 self.grand_parents[self.grand_parent_index].largest.data(),
             ) == CmpOrdering::Greater
         {

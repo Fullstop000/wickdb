@@ -19,7 +19,6 @@ use crate::record::{RecordType, BLOCK_SIZE, HEADER_SIZE};
 use crate::storage::File;
 use crate::util::coding::encode_fixed_32;
 use crate::util::crc32;
-use crate::util::slice::Slice;
 use crate::util::status::Result;
 
 /// Writer writes records to an underlying log `File`.
@@ -49,9 +48,8 @@ impl Writer {
     }
 
     /// Appends a slice into the underlying log file
-    pub fn add_record(&mut self, s: &Slice) -> Result<()> {
-        let data = s.as_slice();
-        let mut left = s.size();
+    pub fn add_record(&mut self, s: &[u8]) -> Result<()> {
+        let mut left = s.len();
         let mut begin = true; // indicate the record is a First or Middle record
         while {
             assert!(
@@ -92,8 +90,8 @@ impl Writer {
                 }
             };
 
-            let start = s.size() - left;
-            self.write(t, &data[start..start + to_write])?;
+            let start = s.len() - left;
+            self.write(t, &s[start..start + to_write])?;
             left -= to_write;
             begin = false;
             left > 0

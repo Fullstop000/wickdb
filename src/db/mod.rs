@@ -57,11 +57,11 @@ pub trait DB {
 
     /// `put` sets the value for the given key. It overwrites any previous value
     /// for that key; a DB is not a multi-map.
-    fn put(&self, write_opt: WriteOptions, key: Slice, value: Slice) -> Result<()>;
+    fn put(&self, write_opt: WriteOptions, key: &[u8], value: &[u8]) -> Result<()>;
 
     /// `get` gets the value for the given key. It returns `None` if the DB
     /// does not contain the key.
-    fn get(&self, read_opt: ReadOptions, key: Slice) -> Result<Option<Slice>>;
+    fn get(&self, read_opt: ReadOptions, key: &[u8]) -> Result<Option<Slice>>;
 
     /// Return an iterator over the contents of the database.
     fn iter(&self, read_opt: ReadOptions) -> Self::Iterator;
@@ -94,13 +94,13 @@ pub struct WickDB<S: Storage + Clone + 'static> {
 impl<S: Storage + Clone> DB for WickDB<S> {
     type Iterator = DBIterator<MergingIterator<InternalKeyComparator>, S>;
 
-    fn put(&self, options: WriteOptions, key: Slice, value: Slice) -> Result<()> {
+    fn put(&self, options: WriteOptions, key: &[u8], value: &[u8]) -> Result<()> {
         let mut batch = WriteBatch::new();
-        batch.put(key.as_slice(), value.as_slice());
+        batch.put(key, value);
         self.write(options, batch)
     }
 
-    fn get(&self, options: ReadOptions, key: Slice) -> Result<Option<Slice>> {
+    fn get(&self, options: ReadOptions, key: &[u8]) -> Result<Option<Slice>> {
         self.inner.get(options, key)
     }
 
@@ -247,7 +247,7 @@ impl<S: Storage + Clone> WickDB<S> {
                         last_seq += u64::from(grouped.batch.get_count());
                         // must initialize the WAL writer after `make_room_for_write`
                         let writer = versions.record_writer.as_mut().unwrap();
-                        let mut status = writer.add_record(&Slice::from(grouped.batch.data()));
+                        let mut status = writer.add_record(grouped.batch.data());
                         let mut sync_err = false;
                         if status.is_ok() && grouped.options.sync {
                             status = writer.sync();
@@ -402,7 +402,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         self.versions.lock().unwrap().new_snapshot()
     }
 
-    fn get(&self, options: ReadOptions, key: Slice) -> Result<Option<Slice>> {
+    fn get(&self, options: ReadOptions, key: &[u8]) -> Result<Option<Slice>> {
         if self.is_shutting_down.load(Ordering::Acquire) {
             return Err(WickErr::new(
                 Status::NotSupported,
@@ -413,7 +413,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
             Some(snapshot) => snapshot.sequence(),
             None => self.versions.lock().unwrap().last_sequence(),
         };
-        let lookup_key = LookupKey::new(key.as_slice(), snapshot);
+        let lookup_key = LookupKey::new(key, snapshot);
         // search the memtable
         if let Some(result) = self.mem.read().unwrap().get(&lookup_key) {
             match result {
@@ -485,7 +485,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
                 let mut manifest_writer = Writer::new(manifest);
                 let mut record = vec![];
                 new_db.encode_to(&mut record);
-                match manifest_writer.add_record(&Slice::from(&record)) {
+                match manifest_writer.add_record(&record) {
                     Ok(()) => update_current(&self.env, self.db_name, manifest_filenum)?,
                     Err(e) => {
                         self.env.remove(manifest_filename.as_str())?;
@@ -953,7 +953,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
             }
             let ikey = input_iter.key();
             // Checkout whether we need rotate a new output file
-            if c.should_stop_before(&ikey, icmp.clone()) && c.builder.is_some() {
+            if c.should_stop_before(ikey.as_slice(), icmp.clone()) && c.builder.is_some() {
                 status = self.finish_output_file(c, input_iter.valid());
                 if status.is_err() {
                     break;

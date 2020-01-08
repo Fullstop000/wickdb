@@ -14,7 +14,6 @@
 use wickdb::file::FileStorage;
 use wickdb::Options;
 use wickdb::ReadOptions;
-use wickdb::Slice;
 use wickdb::WickDB;
 use wickdb::WriteOptions;
 use wickdb::DB;
@@ -25,21 +24,21 @@ fn main() {
     let db = WickDB::open_db(options, "./test_db", storage).expect("could not open db");
     db.put(
         WriteOptions::default(),
-        Slice::from("key1"),
-        Slice::from("value1"),
+        "key1".as_bytes(),
+        "value1".as_bytes(),
     )
     .expect("could not success putting");
     db.put(
         WriteOptions::default(),
-        Slice::from("key2"),
-        Slice::from("value2"),
+        "key2".as_bytes(),
+        "value2".as_bytes(),
     )
     .expect("could not success putting");
     let val1 = db
-        .get(ReadOptions::default(), Slice::from("key1"))
+        .get(ReadOptions::default(), "key1".as_bytes())
         .expect("could not get key1");
     let val2 = db
-        .get(ReadOptions::default(), Slice::from("key2"))
+        .get(ReadOptions::default(), "key2".as_bytes())
         .expect("could not get key2");
     assert!(val1.is_some());
     assert!(val2.is_some());

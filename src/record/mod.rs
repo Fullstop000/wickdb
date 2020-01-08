@@ -64,7 +64,6 @@ mod tests {
     use crate::storage::File;
     use crate::util::coding::encode_fixed_32;
     use crate::util::crc32::{mask, value};
-    use crate::util::slice::Slice;
     use crate::util::status::{Result, Status, WickErr};
     use rand::Rng;
     use std::cell::RefCell;
@@ -260,7 +259,7 @@ mod tests {
         pub fn write(&mut self, msg: &str) {
             assert!(!self.reading, "cannot write() when some others are reading");
             self.writer
-                .add_record(&Slice::from(msg))
+                .add_record(msg.as_bytes())
                 .expect("fail to write: ");
         }
 
