@@ -39,7 +39,7 @@ pub trait Iterator {
     /// Position at the first key in the source that is at or past target.
     /// The iterator is valid after this call iff the source contains
     /// an entry that comes at or past target.
-    fn seek(&mut self, target: &Slice);
+    fn seek(&mut self, target: &[u8]);
 
     /// Moves to the next entry in the source.  After this call, the iterator is
     /// valid iff the iterator was not positioned at the last entry in the source.
@@ -122,7 +122,7 @@ impl<I: Iterator> Iterator for IterWithCleanup<I> {
         }
     }
 
-    fn seek(&mut self, target: &Slice) {
+    fn seek(&mut self, target: &[u8]) {
         if let Some(iter) = self.inner_iter.as_mut() {
             iter.seek(target)
         }
@@ -183,7 +183,7 @@ impl Iterator for EmptyIterator {
 
     fn seek_to_last(&mut self) {}
 
-    fn seek(&mut self, _target: &Slice) {}
+    fn seek(&mut self, _target: &[u8]) {}
 
     fn next(&mut self) {}
 
@@ -351,7 +351,7 @@ impl<I: Iterator, F: DerivedIterFactory> Iterator for ConcatenateIterator<I, F> 
         self.skip_backward();
     }
 
-    fn seek(&mut self, target: &Slice) {
+    fn seek(&mut self, target: &[u8]) {
         self.origin.seek(target);
         self.init_derived_iter();
         if let Some(di) = self.derived.as_mut() {
@@ -504,7 +504,7 @@ impl<C: Comparator> Iterator for MergingIterator<C> {
         self.direction = IterDirection::Reverse;
     }
 
-    fn seek(&mut self, target: &Slice) {
+    fn seek(&mut self, target: &[u8]) {
         for child in self.children.iter_mut() {
             child.seek(target)
         }
@@ -518,7 +518,7 @@ impl<C: Comparator> Iterator for MergingIterator<C> {
             let key = self.key();
             for (i, child) in self.children.iter_mut().enumerate() {
                 if i != self.current_index {
-                    child.seek(&key);
+                    child.seek(key.as_slice());
                     if child.valid()
                         && self.cmp.compare(key.as_slice(), child.key().as_slice())
                             == Ordering::Equal
@@ -539,7 +539,7 @@ impl<C: Comparator> Iterator for MergingIterator<C> {
             let key = self.key();
             for (i, child) in self.children.iter_mut().enumerate() {
                 if i != self.current_index {
-                    child.seek(&key);
+                    child.seek(key.as_slice());
                     if child.valid() {
                         child.prev();
                     } else {
@@ -671,7 +671,7 @@ mod tests {
             self.shadow.seek_to_last();
         }
 
-        fn seek(&mut self, target: &Slice) {
+        fn seek(&mut self, target: &[u8]) {
             self.origin.seek(target);
             self.shadow.seek(target);
         }
@@ -735,10 +735,10 @@ mod tests {
             }
         }
 
-        fn seek(&mut self, target: &Slice) {
+        fn seek(&mut self, target: &[u8]) {
             let mut current = self.inner.len() + 1;
             for (i, s) in self.inner.iter().enumerate() {
-                match s.as_bytes().cmp(target.as_slice()) {
+                match s.as_bytes().cmp(target) {
                     Ordering::Equal | Ordering::Greater => {
                         current = i;
                         break;
@@ -817,18 +817,18 @@ mod tests {
         assert_eq!(iter.key().as_str(), "cc");
 
         iter.seek_to_first();
-        iter.seek(&Slice::from("b"));
+        iter.seek("b".as_bytes());
         assert_eq!(iter.key().as_str(), "b");
 
-        iter.seek(&Slice::from("bb"));
+        iter.seek("bb".as_bytes());
         assert_eq!(iter.key().as_str(), "bb");
 
-        iter.seek(&Slice::from("bbbb"));
+        iter.seek("bbbb".as_bytes());
         assert_eq!(iter.key().as_str(), "c");
         // Test seeking out of range
-        iter.seek(&Slice::from("1"));
+        iter.seek("1".as_bytes());
         assert_eq!(iter.key().as_str(), "a");
-        iter.seek(&Slice::from("d"));
+        iter.seek("d".as_bytes());
         assert!(!iter.valid());
     }
 
@@ -849,15 +849,15 @@ mod tests {
             suite.assert_key_and_value();
             suite.seek_to_last();
             suite.assert_key_and_value();
-            suite.seek(&Slice::from("3"));
+            suite.seek("3".as_bytes());
             suite.assert_key_and_value();
             suite.prev();
             suite.assert_key_and_value();
             suite.next();
             suite.assert_key_and_value();
-            suite.seek(&Slice::from("0"));
+            suite.seek("0".as_bytes());
             suite.assert_key_and_value();
-            suite.seek(&Slice::from("9999"));
+            suite.seek("9999".as_bytes());
             suite.assert_valid(false);
         }
     }

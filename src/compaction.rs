@@ -249,7 +249,7 @@ impl Compaction {
     /// Returns false if the information we have available guarantees that
     /// the compaction is producing data in "level+1" for which no relative key exists
     /// in levels greater than "level+1".
-    pub fn key_exist_in_deeper_level(&mut self, ukey: &Slice) -> bool {
+    pub fn key_exist_in_deeper_level(&mut self, ukey: &[u8]) -> bool {
         let v = self.input_version.as_ref().unwrap().clone();
         let icmp = v.comparator();
         let ucmp = icmp.user_comparator.as_ref();
@@ -259,9 +259,8 @@ impl Compaction {
                 let files = v.get_level_files(level);
                 while self.level_ptrs[level] < files.len() {
                     let f = files[self.level_ptrs[level]].clone();
-                    if ucmp.compare(ukey.as_slice(), f.largest.user_key()) != CmpOrdering::Greater {
-                        if ucmp.compare(ukey.as_slice(), f.smallest.user_key()) != CmpOrdering::Less
-                        {
+                    if ucmp.compare(ukey, f.largest.user_key()) != CmpOrdering::Greater {
+                        if ucmp.compare(ukey, f.smallest.user_key()) != CmpOrdering::Less {
                             return true;
                         }
                         break;

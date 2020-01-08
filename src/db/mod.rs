@@ -441,13 +441,13 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
 
     // Record a sample of bytes read at the specified internal key
     // Might schedule a background compaction.
-    fn record_read_sample(&self, key: Slice) {
+    fn record_read_sample(&self, internal_key: &[u8]) {
         if self
             .versions
             .lock()
             .unwrap()
             .current()
-            .record_read_sample(key)
+            .record_read_sample(internal_key)
         {
             self.maybe_schedule_compaction()
         }
@@ -960,14 +960,14 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
                 }
             }
             let mut drop = false;
-            match ParsedInternalKey::decode_from(ikey.clone()) {
+            match ParsedInternalKey::decode_from(ikey.as_slice()) {
                 Some(key) => {
                     if !has_current_ukey
-                        || ucmp.compare(key.user_key.as_slice(), current_ukey.as_slice())
+                        || ucmp.compare(&key.user_key, current_ukey.as_slice())
                             != CmpOrdering::Equal
                     {
                         // First occurrence of this user key
-                        current_ukey = key.user_key.clone();
+                        current_ukey = Slice::from(key.user_key);
                         has_current_ukey = true;
                         last_sequence_for_key = u64::max_value();
                     }

@@ -136,8 +136,8 @@ impl Version {
                 // overlap user_key and process them in order from newest to oldest because
                 // the last level-0 file always has the newest entries.
                 for f in files.iter().rev() {
-                    if ucmp.compare(ukey.as_slice(), f.largest.data()) != CmpOrdering::Greater
-                        && ucmp.compare(ukey.as_slice(), f.smallest.data()) != CmpOrdering::Less
+                    if ucmp.compare(ukey, f.largest.data()) != CmpOrdering::Greater
+                        && ucmp.compare(ukey, f.smallest.data()) != CmpOrdering::Less
                     {
                         files_to_seek.push(f.clone());
                     }
@@ -151,7 +151,7 @@ impl Version {
                 } else {
                     let target = files[index].clone();
                     // if what we found is just the first file, it could still not includes the target
-                    if ucmp.compare(ukey.as_slice(), target.smallest.data()) != CmpOrdering::Less {
+                    if ucmp.compare(ukey, target.smallest.data()) != CmpOrdering::Less {
                         files_to_seek = vec![target];
                     }
                 }
@@ -163,7 +163,7 @@ impl Version {
                 match table_cache.get(opt.clone(), &ikey, file.number, file.file_size)? {
                     None => continue, // keep searching
                     Some((encoded_key, value)) => {
-                        match ParsedInternalKey::decode_from(encoded_key) {
+                        match ParsedInternalKey::decode_from(encoded_key.as_slice()) {
                             None => {
                                 return Err(WickErr::new(
                                     Status::Corruption,
@@ -171,10 +171,11 @@ impl Version {
                                 ))
                             }
                             Some(parsed_key) => {
-                                if self.options.comparator.compare(
-                                    parsed_key.user_key.as_slice(),
-                                    key.user_key().as_slice(),
-                                ) == CmpOrdering::Equal
+                                if self
+                                    .options
+                                    .comparator
+                                    .compare(&parsed_key.user_key, key.user_key())
+                                    == CmpOrdering::Equal
                                 {
                                     match parsed_key.value_type {
                                         ValueType::Value => return Ok((Some(value), seek_stats)),
@@ -224,14 +225,14 @@ impl Version {
     pub fn find_file(
         icmp: InternalKeyComparator,
         files: &[Arc<FileMetaData>],
-        ikey: &Slice,
+        ikey: &[u8],
     ) -> usize {
         let mut left = 0;
         let mut right = files.len();
         while left < right {
             let mid = (left + right) / 2;
             let f = &files[mid];
-            if icmp.compare(f.largest.data(), ikey.as_slice()) == CmpOrdering::Less {
+            if icmp.compare(f.largest.data(), ikey) == CmpOrdering::Less {
                 // Key at "mid.largest" is < "target".  Therefore all
                 // files at or before "mid" are uninteresting
                 left = mid + 1;
@@ -256,11 +257,15 @@ impl Version {
             // No overlapping in level 0
             // we might directly push files to next level if there is no overlap in next level
             let smallest_ikey = Rc::new(InternalKey::new(
-                smallest_ukey,
+                smallest_ukey.as_slice(),
                 u64::max_value(),
                 VALUE_TYPE_FOR_SEEK,
             ));
-            let largest_ikey = Rc::new(InternalKey::new(largest_ukey, 0, ValueType::Deletion));
+            let largest_ikey = Rc::new(InternalKey::new(
+                largest_ukey.as_slice(),
+                0,
+                ValueType::Deletion,
+            ));
             while level < self.options.max_mem_compact_level {
                 if self.overlap_in_level(level + 1, smallest_ukey, largest_ukey) {
                     break;
@@ -344,8 +349,8 @@ impl Version {
     /// false, makes no more calls.
     pub fn for_each_overlapping(
         &self,
-        user_key: Slice,
-        internal_key: Slice,
+        user_key: &[u8],
+        internal_key: &[u8],
         mut func: Box<dyn FnMut(usize, Arc<FileMetaData>) -> bool>,
     ) {
         let ucmp = self.icmp.user_comparator.clone();
@@ -354,9 +359,8 @@ impl Version {
                 let mut target_files = vec![];
                 // Search level 0 files
                 for f in files.iter() {
-                    if ucmp.compare(user_key.as_slice(), f.smallest.user_key()) != CmpOrdering::Less
-                        && ucmp.compare(user_key.as_slice(), f.largest.user_key())
-                            != CmpOrdering::Greater
+                    if ucmp.compare(user_key, f.smallest.user_key()) != CmpOrdering::Less
+                        && ucmp.compare(user_key, f.largest.user_key()) != CmpOrdering::Greater
                     {
                         target_files.push(f.clone());
                     }
@@ -383,8 +387,7 @@ impl Version {
                 } else {
                     let target = files[index].clone();
                     // if what we found is just the first file, it could still not includes the target
-                    if ucmp.compare(user_key.as_slice(), target.smallest.data())
-                        != CmpOrdering::Less
+                    if ucmp.compare(user_key, target.smallest.data()) != CmpOrdering::Less
                         && !func(level, target)
                     {
                         return;
@@ -396,8 +399,8 @@ impl Version {
 
     /// Record a sample of bytes read at the specified internal key.
     /// Returns true if a new compaction may need to be triggered
-    pub fn record_read_sample(&self, internal_key: Slice) -> bool {
-        if let Some(pkey) = ParsedInternalKey::decode_from(internal_key.clone()) {
+    pub fn record_read_sample(&self, internal_key: &[u8]) -> bool {
+        if let Some(pkey) = ParsedInternalKey::decode_from(internal_key) {
             let stats = Rc::new(RefCell::new(SeekStats::new()));
             let matches = Rc::new(RefCell::new(0));
             let stats_clone = stats.clone();
@@ -450,13 +453,12 @@ impl Version {
         // binary search in level > 0
         let index = {
             if !smallest_ukey.is_empty() {
-                let smallest_ikey =
-                    InternalKey::new(smallest_ukey, u64::max_value(), VALUE_TYPE_FOR_SEEK);
-                Self::find_file(
-                    self.icmp.clone(),
-                    &self.files[level],
-                    &Slice::from(smallest_ikey.data()),
-                )
+                let smallest_ikey = InternalKey::new(
+                    smallest_ukey.as_slice(),
+                    u64::max_value(),
+                    VALUE_TYPE_FOR_SEEK,
+                );
+                Self::find_file(self.icmp.clone(), &self.files[level], smallest_ikey.data())
             } else {
                 0
             }
@@ -596,7 +598,7 @@ impl Iterator for LevelFileNumIterator {
         }
     }
 
-    fn seek(&mut self, target: &Slice) {
+    fn seek(&mut self, target: &[u8]) {
         let index = Version::find_file(self.icmp.clone(), self.files.as_slice(), target);
         self.index = index;
         let file = &self.files[index];

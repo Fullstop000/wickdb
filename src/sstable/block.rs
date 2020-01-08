@@ -246,7 +246,7 @@ impl Iterator for BlockIterator {
     }
 
     // find the first entry in block with key>= target
-    fn seek(&mut self, target: &Slice) {
+    fn seek(&mut self, target: &[u8]) {
         // binary search in restart array to find the last restart point with a key < target
         let mut left = 0;
         let mut right = self.restarts_len - 1;
@@ -265,7 +265,7 @@ impl Iterator for BlockIterator {
             let key_offset = region_offset + (n0 + n1 + n2) as u32;
             let key_len = (shared + not_shared) as usize;
             let mid_key = &self.data[key_offset as usize..key_offset as usize + key_len];
-            match self.cmp.compare(&mid_key, target.as_slice()) {
+            match self.cmp.compare(&mid_key, target) {
                 Ordering::Less => left = mid,
                 _ => right = mid - 1,
             }
@@ -279,7 +279,7 @@ impl Iterator for BlockIterator {
             if !self.parse_block_entry() {
                 return;
             }
-            match self.cmp.compare(self.key.as_slice(), target.as_slice()) {
+            match self.cmp.compare(self.key.as_slice(), target) {
                 Ordering::Less => {}
                 _ => return,
             }
@@ -478,7 +478,6 @@ mod tests {
     use crate::sstable::block::{Block, BlockIterator};
     use crate::util::coding::{decode_fixed_32, put_fixed_32};
     use crate::util::comparator::BytewiseComparator;
-    use crate::util::slice::Slice;
     use crate::util::status::Status;
     use crate::util::varint::VarintU32;
     use std::sync::Arc;
@@ -544,7 +543,7 @@ mod tests {
         let data = builder.finish();
         let block = Block::new(Vec::from(data)).expect("New block should work");
         let mut iter = block.iter(cmp.clone());
-        iter.seek(&Slice::from(""));
+        iter.seek("".as_bytes());
         assert!(iter.valid());
         let k = iter.key();
         let v = iter.value();
@@ -655,13 +654,13 @@ mod tests {
         assert_eq!(iter.key().as_str(), "bbb");
         assert_eq!(iter.value().as_str(), "bbb");
         // Seek
-        iter.seek(&Slice::from("abd"));
+        iter.seek("abd".as_bytes());
         assert_eq!(iter.key().as_str(), "abd");
         assert_eq!(iter.value().as_str(), "abd");
-        iter.seek(&Slice::from(""));
+        iter.seek("".as_bytes());
         assert_eq!(iter.key().as_str(), "1");
         assert_eq!(iter.value().as_str(), "1");
-        iter.seek(&Slice::from("zzzzzzzzzzzzzzz"));
+        iter.seek("zzzzzzzzzzzzzzz".as_bytes());
         assert!(!iter.valid());
     }
 

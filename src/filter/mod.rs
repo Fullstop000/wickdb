@@ -15,8 +15,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use crate::util::slice::Slice;
-
 pub mod bloom;
 
 /// `FilterPolicy` is an algorithm for probabilistically encoding a set of keys.
@@ -41,7 +39,7 @@ pub trait FilterPolicy {
     /// `MayContain` returns whether the encoded filter may contain given key.
     /// False positives are possible, where it returns true for keys not in the
     /// original set.
-    fn may_contain(&self, filter: &[u8], key: &Slice) -> bool;
+    fn may_contain(&self, filter: &[u8], key: &[u8]) -> bool;
 
     /// Creates a filter based on given keys
     // TODO: use another type instead of &[Vec<u8>]

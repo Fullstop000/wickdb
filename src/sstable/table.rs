@@ -97,7 +97,7 @@ impl Table {
                         String::from("")
                     };
                     // Read filter block
-                    iter.seek(&Slice::from(filter_key.as_bytes()));
+                    iter.seek(filter_key.as_bytes());
                     if iter.valid() && iter.key().as_str() == filter_key.as_str() {
                         if let Ok((filter_handle, _)) =
                             BlockHandle::decode_from(iter.value().as_slice())
@@ -168,7 +168,7 @@ impl Table {
     ) -> Result<Option<(Slice, Slice)>> {
         let mut index_iter = self.index_block.iter(self.options.comparator.clone());
         // seek to the first 'last key' bigger than 'key'
-        index_iter.seek(&Slice::from(key));
+        index_iter.seek(key);
         if index_iter.valid() {
             // It's called 'maybe_contained' not only because the filter policy may report the falsy result,
             // but also even if we've found a block with the last key bigger than the target
@@ -179,7 +179,7 @@ impl Table {
             // check the filter block
             if let Some(filter) = &self.filter_reader {
                 if let Ok((handle, _)) = BlockHandle::decode_from(handle_val.as_slice()) {
-                    if !filter.key_may_match(handle.offset, &Slice::from(key)) {
+                    if !filter.key_may_match(handle.offset, key) {
                         maybe_contained = false;
                     }
                 }
@@ -187,7 +187,7 @@ impl Table {
             if maybe_contained {
                 let (data_block_handle, _) = BlockHandle::decode_from(handle_val.as_slice())?;
                 let mut block_iter = self.block_reader(data_block_handle, options)?;
-                block_iter.seek(&Slice::from(key));
+                block_iter.seek(key);
                 if block_iter.valid() {
                     return Ok(Some((block_iter.key(), block_iter.value())));
                 }
@@ -208,7 +208,7 @@ impl Table {
     #[allow(dead_code)]
     pub(crate) fn approximate_offset_of(&self, key: &[u8]) -> u64 {
         let mut index_iter = self.index_block.iter(self.options.comparator.clone());
-        index_iter.seek(&Slice::from(key));
+        index_iter.seek(key);
         if index_iter.valid() {
             let val = index_iter.value();
             if let Ok((h, _)) = BlockHandle::decode_from(val.as_slice()) {
@@ -334,7 +334,7 @@ impl TableBuilder {
         self.maybe_append_index_block(Some(key));
         // Update filter block
         if let Some(fb) = self.filter_block.as_mut() {
-            fb.add_key(&Slice::from(key))
+            fb.add_key(key)
         }
         // TODO: avoid the copy
         self.last_key.resize(key.len(), 0);

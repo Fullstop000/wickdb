@@ -50,13 +50,11 @@ pub trait Comparator: Send + Sync {
     /// is `return a`, but appending fewer bytes leads to smaller SSTables.
     ///
     /// If one key is the prefix of the other or b is smaller than a, returns a
-    // TODO: returns a &[u8] to avoid copy ?
     fn separator(&self, a: &[u8], b: &[u8]) -> Vec<u8>;
 
     /// Given a feasible key s, Successor returns feasible key k such that Compare(k,
     /// a) >= 0.
     /// If the key is a run of \xff, returns itself
-    // TODO: returns a &[u8] to avoid copy ?
     fn successor(&self, key: &[u8]) -> Vec<u8>;
 }
 

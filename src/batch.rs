@@ -221,16 +221,15 @@ mod tests {
         let mut s = String::new();
         let mut count = 0;
         while iter.valid() {
-            if let Some(ikey) = ParsedInternalKey::decode_from(iter.key()) {
+            if let Some(ikey) = ParsedInternalKey::decode_from(iter.key().as_slice()) {
                 match ikey.value_type {
                     ValueType::Value => {
-                        let tmp =
-                            format!("Put({}, {})", ikey.user_key.as_str(), iter.value().as_str());
+                        let tmp = format!("Put({}, {})", ikey.as_str(), iter.value().as_str());
                         s.push_str(tmp.as_str());
                         count += 1
                     }
                     ValueType::Deletion => {
-                        let tmp = format!("Delete({})", ikey.user_key.as_str());
+                        let tmp = format!("Delete({})", ikey.as_str());
                         s.push_str(tmp.as_str());
                         count += 1
                     }

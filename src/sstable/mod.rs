@@ -572,9 +572,9 @@ mod tests {
             self.inner.seek_to_last()
         }
 
-        fn seek(&mut self, target: &Slice) {
-            let lkey = LookupKey::new(target.as_slice(), MAX_KEY_SEQUENCE);
-            self.inner.seek(&lkey.mem_key());
+        fn seek(&mut self, target: &[u8]) {
+            let lkey = LookupKey::new(target, MAX_KEY_SEQUENCE);
+            self.inner.seek(lkey.mem_key());
         }
 
         fn next(&mut self) {
@@ -586,8 +586,8 @@ mod tests {
         }
 
         fn key(&self) -> Slice {
-            match ParsedInternalKey::decode_from(self.inner.key()) {
-                Some(parsed_ikey) => parsed_ikey.user_key.clone(),
+            match ParsedInternalKey::decode_from(self.inner.key().as_slice()) {
+                Some(parsed_ikey) => Slice::from(parsed_ikey.user_key),
                 None => {
                     self.err.set(Some(WickErr::new(
                         Status::Corruption,
@@ -647,9 +647,9 @@ mod tests {
             }
         }
 
-        fn seek(&mut self, target: &Slice) {
+        fn seek(&mut self, target: &[u8]) {
             for (i, (key, _)) in self.data.iter().enumerate() {
-                if self.cmp.compare(key.as_slice(), target.as_slice()) != Ordering::Less {
+                if self.cmp.compare(key.as_slice(), target) != Ordering::Less {
                     self.current = i;
                     return;
                 }
@@ -925,9 +925,9 @@ mod tests {
                     // case for `seek`
                     2 => {
                         let rkey = random_seek_key(keys, self.reverse_cmp);
-                        let key = Slice::from(rkey.as_slice());
-                        iter.seek(&key);
-                        expected_iter.seek(&key);
+                        let key = rkey.as_slice();
+                        iter.seek(key);
+                        expected_iter.seek(key);
                         if iter.valid() {
                             assert_eq!(format_entry(iter.as_ref()), format_entry(&expected_iter));
                         } else {

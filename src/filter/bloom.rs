@@ -17,7 +17,6 @@
 
 use crate::filter::FilterPolicy;
 use crate::util::hash::hash;
-use crate::util::slice::Slice;
 
 pub struct BloomFilter {
     // the hash count for a key
@@ -49,7 +48,7 @@ impl FilterPolicy for BloomFilter {
         "leveldb.BuiltinBloomFilter"
     }
 
-    fn may_contain(&self, filter: &[u8], key: &Slice) -> bool {
+    fn may_contain(&self, filter: &[u8], key: &[u8]) -> bool {
         let n = filter.len() - 1; // exclude the k
         if filter.is_empty() || n < 1 {
             return false;
@@ -64,7 +63,7 @@ impl FilterPolicy for BloomFilter {
             // Consider it a match.
             return true;
         };
-        let mut h = Self::bloom_hash(key.as_slice());
+        let mut h = Self::bloom_hash(key);
         let delta = (h >> 17) | (h << 15); // rotate right 17 bits
         for _ in 0..k {
             let bit_pos = h % (bits as u32);
@@ -139,9 +138,7 @@ mod tests {
         }
 
         pub fn assert_or_return(&self, key: &[u8], want: bool, assert: bool) -> bool {
-            let got = (&self)
-                .policy
-                .may_contain(self.filter.as_slice(), &Slice::from(key));
+            let got = (&self).policy.may_contain(self.filter.as_slice(), key);
             if assert {
                 assert_eq!(got, want);
             };
