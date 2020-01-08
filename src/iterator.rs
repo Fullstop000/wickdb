@@ -22,7 +22,7 @@ use std::cmp::Ordering;
 use std::mem;
 
 /// A common trait for iterating all the key/value entries.
-/// 
+///
 /// An `Iterator` should be invalid once created
 pub trait Iterator {
     /// An iterator is either positioned at a key/value pair, or
