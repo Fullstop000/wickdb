@@ -21,6 +21,7 @@ use std::sync::Arc;
 /// Abstract handle to particular state of a DB.
 /// A `Snapshot` is an immutable object and can therefore be safely
 /// accessed from multiple threads without any external synchronization.
+#[derive(Clone, Copy)]
 pub struct Snapshot {
     // The sequence number pointing to the view of db
     sequence_number: u64,
@@ -28,7 +29,7 @@ pub struct Snapshot {
 
 impl Snapshot {
     #[inline]
-    pub fn sequence(&self) -> u64 {
+    pub fn sequence(self) -> u64 {
         self.sequence_number
     }
 }

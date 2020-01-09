@@ -304,7 +304,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
     /// Returns the collection of all the file iterators in current version
     pub fn current_iters(
         &self,
-        read_opt: Rc<ReadOptions>,
+        read_opt: ReadOptions,
         table_cache: TableCache<S>,
     ) -> Vec<Box<dyn Iterator>> {
         let version = self.current();
@@ -312,7 +312,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         // Merge all level zero files together since they may overlap
         for file in version.files[0].iter() {
             res.push(Box::new(table_cache.new_iter(
-                read_opt.clone(),
+                read_opt,
                 file.number,
                 file.file_size,
             )));
@@ -327,7 +327,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
                     InternalKeyComparator::new(self.options.comparator.clone()),
                     files.clone(),
                 );
-                let factory = FileIterFactory::new(read_opt.clone(), table_cache.clone());
+                let factory = FileIterFactory::new(read_opt, table_cache.clone());
                 let iter = ConcatenateIterator::new(level_file_iter, factory);
                 res.push(Box::new(iter));
             }
@@ -975,12 +975,12 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
 }
 
 pub struct FileIterFactory<S: Storage + Clone> {
-    options: Rc<ReadOptions>,
+    options: ReadOptions,
     table_cache: TableCache<S>,
 }
 
 impl<S: Storage + Clone> FileIterFactory<S> {
-    pub fn new(options: Rc<ReadOptions>, table_cache: TableCache<S>) -> Self {
+    pub fn new(options: ReadOptions, table_cache: TableCache<S>) -> Self {
         Self {
             options,
             table_cache,

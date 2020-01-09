@@ -121,7 +121,6 @@ impl Version {
         key: LookupKey,
         table_cache: &TableCache<S>,
     ) -> Result<(Option<Slice>, SeekStats)> {
-        let opt = Rc::new(options);
         let ikey = key.internal_key();
         let ukey = key.user_key();
         let ucmp = self.icmp.user_comparator.as_ref();
@@ -160,7 +159,7 @@ impl Version {
             for file in files_to_seek.iter() {
                 seek_stats.seek_file_level = Some(level);
                 seek_stats.seek_file = Some(file.clone());
-                match table_cache.get(opt.clone(), &ikey, file.number, file.file_size)? {
+                match table_cache.get(options, &ikey, file.number, file.file_size)? {
                     None => continue, // keep searching
                     Some((encoded_key, value)) => {
                         match ParsedInternalKey::decode_from(encoded_key.as_slice()) {

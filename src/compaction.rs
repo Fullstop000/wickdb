@@ -194,11 +194,11 @@ impl Compaction {
         icmp: InternalKeyComparator,
         table_cache: TableCache<S>,
     ) -> impl Iterator {
-        let read_options = Rc::new(ReadOptions {
+        let read_options = ReadOptions {
             verify_checksums: self.options.paranoid_checks,
             fill_cache: false,
             snapshot: None,
-        });
+        };
         // Level-0 files have to be merged together so we generate a merging iterator includes iterators for each level 0 file.
         // For other levels, we will make a concatenating iterator per level.
         let space = if self.level == 0 {
@@ -221,7 +221,7 @@ impl Compaction {
                     }
                 } else {
                     let origin = LevelFileNumIterator::new(icmp.clone(), self.inputs[i].clone());
-                    let factory = FileIterFactory::new(read_options.clone(), table_cache.clone());
+                    let factory = FileIterFactory::new(read_options, table_cache.clone());
                     iter_list.push(Box::new(ConcatenateIterator::new(origin, factory)));
                 }
             }

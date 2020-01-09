@@ -392,7 +392,6 @@ mod tests {
     use rand::Rng;
     use std::cell::Cell;
     use std::cmp::Ordering;
-    use std::rc::Rc;
     use std::sync::Arc;
 
     // Return the reverse of given key
@@ -535,10 +534,7 @@ mod tests {
 
         fn iter(&self) -> Box<dyn Iterator> {
             match &self.table {
-                Some(t) => Box::new(new_table_iterator(
-                    t.clone(),
-                    Rc::new(ReadOptions::default()),
-                )),
+                Some(t) => Box::new(new_table_iterator(t.clone(), ReadOptions::default())),
                 None => Box::new(EmptyIterator::new()),
             }
         }

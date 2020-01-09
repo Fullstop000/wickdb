@@ -28,7 +28,6 @@ use crate::util::slice::Slice;
 use crate::util::status::{Result, Status, WickErr};
 use snap::max_compress_len;
 use std::cmp::Ordering;
-use std::rc::Rc;
 use std::sync::Arc;
 
 /// A `Table` is a sorted map from strings to strings.  Tables are
@@ -122,7 +121,7 @@ impl Table {
     pub fn block_reader(
         &self,
         data_block_handle: BlockHandle,
-        options: Rc<ReadOptions>,
+        options: ReadOptions,
     ) -> Result<BlockIterator> {
         let block = if let Some(cache) = &self.options.block_cache {
             let mut cache_key_buffer = vec![0; 16];
@@ -161,11 +160,7 @@ impl Table {
 
     /// Gets the first entry with the key equal or greater than target.
     /// The given `key` is a user key
-    pub fn internal_get(
-        &self,
-        options: Rc<ReadOptions>,
-        key: &[u8],
-    ) -> Result<Option<(Slice, Slice)>> {
+    pub fn internal_get(&self, options: ReadOptions, key: &[u8]) -> Result<Option<(Slice, Slice)>> {
         let mut index_iter = self.index_block.iter(self.options.comparator.clone());
         // seek to the first 'last key' bigger than 'key'
         index_iter.seek(key);
@@ -223,7 +218,7 @@ impl Table {
 }
 
 pub struct TableIterFactory {
-    options: Rc<ReadOptions>,
+    options: ReadOptions,
     table: Arc<Table>,
 }
 
@@ -231,7 +226,7 @@ impl DerivedIterFactory for TableIterFactory {
     type Iter = BlockIterator;
     fn derive(&self, value: &[u8]) -> Result<Self::Iter> {
         BlockHandle::decode_from(value)
-            .and_then(|(handle, _)| self.table.block_reader(handle, self.options.clone()))
+            .and_then(|(handle, _)| self.table.block_reader(handle, self.options))
     }
 }
 
@@ -243,7 +238,7 @@ pub type TableIterator = ConcatenateIterator<BlockIterator, TableIterFactory>;
 /// Entry format:
 ///     key: internal key
 ///     value: value of user key
-pub fn new_table_iterator(table: Arc<Table>, options: Rc<ReadOptions>) -> TableIterator {
+pub fn new_table_iterator(table: Arc<Table>, options: ReadOptions) -> TableIterator {
     let cmp = table.options.comparator.clone();
     let index_iter = table.index_block.iter(cmp);
     let factory = TableIterFactory { options, table };
@@ -678,8 +673,8 @@ mod tests {
         let table = Table::open(file, file_len, opt.clone()).expect("");
         assert!(table.filter_reader.is_none());
         assert!(table.meta_block_handle.is_none()); // no filter block means no meta block
-        let read_opt = Rc::new(ReadOptions::default());
-        let res = table.internal_get(read_opt.clone(), b"test");
+        let read_opt = ReadOptions::default();
+        let res = table.internal_get(read_opt, b"test");
         assert!(res.is_err());
     }
 
@@ -740,16 +735,16 @@ mod tests {
         let file = s.open("test").expect("file open should work");
         let file_len = file.len().expect("file len should work");
         let table = Table::open(file, file_len, opt.clone()).expect("table open should work");
-        let read_opt = Rc::new(ReadOptions {
+        let read_opt = ReadOptions {
             verify_checksums: true,
             fill_cache: true,
             snapshot: None,
-        });
+        };
         for (key, val) in tests.clone().drain(..) {
             assert_eq!(
                 val,
                 table
-                    .internal_get(read_opt.clone(), key.as_bytes())
+                    .internal_get(read_opt, key.as_bytes())
                     .expect("")
                     .unwrap()
                     .1

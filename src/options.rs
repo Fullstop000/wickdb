@@ -279,6 +279,7 @@ impl Default for Options {
 }
 
 /// Options that control read operations
+#[derive(Clone, Copy)]
 pub struct ReadOptions {
     /// If true, all data read from underlying storage will be
     /// verified against corresponding checksums.

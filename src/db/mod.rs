@@ -42,7 +42,6 @@ use std::cmp::Ordering as CmpOrdering;
 use std::collections::vec_deque::VecDeque;
 use std::mem;
 use std::path::MAIN_SEPARATOR;
-use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, RwLock};
 use std::thread;
@@ -121,7 +120,7 @@ impl<S: Storage + Clone> DB for WickDB<S> {
             .versions
             .lock()
             .unwrap()
-            .current_iters(Rc::new(read_opt), self.inner.table_cache.clone());
+            .current_iters(read_opt, self.inner.table_cache.clone());
         children.append(&mut table_iters);
         let iter = MergingIterator::new(self.inner.internal_comparator.clone(), children);
         DBIterator::new(iter, self.inner.clone(), sequence, ucmp)
@@ -1136,11 +1135,9 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         if status.is_ok() && current_entries > 0 {
             let output_number = compact.outputs[length - 1].number;
             // make sure that the new file is in the cache
-            let mut it = self.table_cache.new_iter(
-                Rc::new(ReadOptions::default()),
-                output_number,
-                current_bytes,
-            );
+            let mut it =
+                self.table_cache
+                    .new_iter(ReadOptions::default(), output_number, current_bytes);
             it.status()?;
             info!(
                 "Generated table #{}@{}: {} keys, {} bytes",
@@ -1207,11 +1204,8 @@ pub(crate) fn build_table<S: Storage + Clone>(
             status = builder.finish(true).and_then(|_| {
                 meta.file_size = builder.file_size();
                 // make sure that the new file is in the cache
-                let mut it = table_cache.new_iter(
-                    Rc::new(ReadOptions::default()),
-                    meta.number,
-                    meta.file_size,
-                );
+                let mut it =
+                    table_cache.new_iter(ReadOptions::default(), meta.number, meta.file_size);
                 it.status()
             })
         }
