@@ -256,11 +256,8 @@ impl Version {
         if !self.overlap_in_level(level, smallest_ukey, largest_ukey) {
             // No overlapping in level 0
             // we might directly push files to next level if there is no overlap in next level
-            let smallest_ikey = InternalKey::new(
-                smallest_ukey,
-                u64::max_value(),
-                VALUE_TYPE_FOR_SEEK,
-            );
+            let smallest_ikey =
+                InternalKey::new(smallest_ukey, u64::max_value(), VALUE_TYPE_FOR_SEEK);
             let largest_ikey = InternalKey::new(largest_ukey, 0, ValueType::Deletion);
             while level < self.options.max_mem_compact_level {
                 if self.overlap_in_level(level + 1, smallest_ukey, largest_ukey) {
@@ -270,8 +267,8 @@ impl Version {
                     // Check that file does not overlap too many grandparent bytes
                     let overlaps = self.get_overlapping_inputs(
                         level + 2,
-                        Some(smallest_ikey.clone()),
-                        Some(largest_ikey.clone()),
+                        Some(&smallest_ikey),
+                        Some(&largest_ikey),
                     );
                     if total_file_size(&overlaps) > self.options.max_grandparent_overlap_bytes() {
                         break;
@@ -482,18 +479,19 @@ impl Version {
                 == CmpOrdering::Less
     }
 
-    // Return all files in `level` that overlap [begin, end]
-    // Notice that both `begin` and `end` is InternalKey but we
+    // Return all files in `level` that overlap [`begin`, `end`]
+    // Notice that both `begin` and `end` is `InternalKey` but we
     // compare the user key directly.
     // Since files in level0 probably overlaps with each other, the final output
     // total range could be larger than [begin, end]
-    // A None begin is considered as -infinite
-    // A None end is considered as +infinite
+    //
+    // A `None` begin is considered as -infinite
+    // A `None` end is considered as +infinite
     fn get_overlapping_inputs(
         &self,
         level: usize,
-        begin: Option<InternalKey>,
-        end: Option<InternalKey>,
+        begin: Option<&InternalKey>,
+        end: Option<&InternalKey>,
     ) -> Vec<Arc<FileMetaData>> {
         // TODO: the implementation treating level 0 files is somewhat tricky ( since we use unsafe pointer ).
         //       Consider separate this into two single functions: one for level 0, one for level > 0

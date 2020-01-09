@@ -829,8 +829,8 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
                         } else {
                             let compaction = versions.compact_range(
                                 manual.level,
-                                manual.begin.clone(),
-                                manual.end.clone(),
+                                manual.begin.as_ref(),
+                                manual.end.as_ref(),
                             );
                             manual.done = compaction.is_none();
                             let begin = if let Some(begin) = &manual.begin {
@@ -1000,12 +1000,10 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
                         // TODO: InternalKey::decoded_from adds extra cost of copying
                         if c.builder.as_ref().unwrap().num_entries() == 0 {
                             // We have a brand new builder so use current key as smallest
-                            c.outputs[last].smallest =
-                                InternalKey::decoded_from(ikey.as_slice());
+                            c.outputs[last].smallest = InternalKey::decoded_from(ikey.as_slice());
                         }
                         // Keep updating the largest
-                        c.outputs[last].largest =
-                            InternalKey::decoded_from(ikey.as_slice());
+                        c.outputs[last].largest = InternalKey::decoded_from(ikey.as_slice());
                         let _ = c
                             .builder
                             .as_mut()

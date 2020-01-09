@@ -295,8 +295,7 @@ impl VersionEdit {
                         // decode compact pointer
                         if let Some(level) = get_level(self.max_levels, &mut s) {
                             if let Some(key) = get_internal_key(&mut s) {
-                                self.compaction_pointers
-                                    .push((level as usize, key));
+                                self.compaction_pointers.push((level as usize, key));
                                 continue;
                             }
                         }
@@ -325,8 +324,8 @@ impl VersionEdit {
                                                     allowed_seeks: AtomicUsize::new(0),
                                                     file_size,
                                                     number,
-                                                    smallest: smallest,
-                                                    largest: largest,
+                                                    smallest,
+                                                    largest,
                                                 }),
                                             ));
                                             continue;
@@ -448,16 +447,8 @@ mod tests {
                 3,
                 k_big + 300 + i,
                 k_big + 400 + i,
-                InternalKey::new(
-                    "foo".as_bytes(),
-                    k_big + 500 + i,
-                    ValueType::Value,
-                ),
-                InternalKey::new(
-                    "zoo".as_bytes(),
-                    k_big + 700 + i,
-                    ValueType::Deletion,
-                ),
+                InternalKey::new("foo".as_bytes(), k_big + 500 + i, ValueType::Value),
+                InternalKey::new("zoo".as_bytes(), k_big + 700 + i, ValueType::Deletion),
             );
             edit.delete_file(4, k_big + 700 + i);
             edit.add_compaction_pointer(
