@@ -26,15 +26,14 @@ use crate::version::version_edit::{FileMetaData, VersionEdit};
 use crate::version::version_set::{total_file_size, FileIterFactory};
 use crate::version::{LevelFileNumIterator, Version};
 use std::cmp::Ordering as CmpOrdering;
-use std::rc::Rc;
 use std::sync::Arc;
 
 /// Information for a manual compaction
 pub struct ManualCompaction {
     pub level: usize,
     pub done: bool,
-    pub begin: Option<Rc<InternalKey>>, // None means beginning of key range
-    pub end: Option<Rc<InternalKey>>,   // None means end of key range
+    pub begin: Option<InternalKey>, // None means beginning of key range
+    pub end: Option<InternalKey>,   // None means end of key range
 }
 
 /// A helper enum describing relations between the indexes of `inputs` in `Compaction`
@@ -116,47 +115,56 @@ impl Compaction {
         }
     }
 
-    /// Returns the minimal range that covers all entries in `self.inputs[0]`
-    pub fn base_range(&self, icmp: &InternalKeyComparator) -> (Rc<InternalKey>, Rc<InternalKey>) {
-        let files = &self.inputs[CompactionInputsRelation::Source as usize];
+    /// Returns the minimal range that covers all entries in `files`
+    pub fn base_range<'a>(
+        files: &'a [Arc<FileMetaData>],
+        level: usize,
+        icmp: &InternalKeyComparator,
+    ) -> (&'a InternalKey, &'a InternalKey) {
         assert!(
             !files.is_empty(),
             "[compaction] the input[0] shouldn't be empty when trying to get covered range"
         );
-        if self.level == 0 {
+        if level == 0 {
             // level 0 files are possible to overlaps with each other
-            let mut smallest = files.first().unwrap().smallest.clone();
-            let mut largest = files.last().unwrap().largest.clone();
+            let mut smallest = &files.first().unwrap().smallest;
+            let mut largest = &files.last().unwrap().largest;
             for f in files.iter().skip(1) {
                 if icmp.compare(f.smallest.data(), smallest.data()) == CmpOrdering::Less {
-                    smallest = f.smallest.clone();
+                    smallest = &f.smallest;
                 }
                 if icmp.compare(f.largest.data(), largest.data()) == CmpOrdering::Greater {
-                    largest = f.largest.clone();
+                    largest = &f.largest;
                 }
             }
             (smallest, largest)
         } else {
             // no overlapping in level > 0 and file is ordered by smallest key
             (
-                files.first().unwrap().smallest.clone(),
-                files.last().unwrap().largest.clone(),
+                &files.first().unwrap().smallest,
+                &files.last().unwrap().largest,
             )
         }
     }
 
-    /// Returns the minimal range that covers all entries in `self.inputs`
-    pub fn total_range(&self, icmp: &InternalKeyComparator) -> (Rc<InternalKey>, Rc<InternalKey>) {
-        let (mut smallest, mut largest) = self.base_range(icmp);
-        let files = &self.inputs[CompactionInputsRelation::Parent as usize];
-        if !files.is_empty() {
-            let first = files.first().unwrap();
+    /// Returns the minimal range that covers all key ranges in `current_l_files` and `next_l_files`
+    /// `current_l_files` means current level files to be compacted
+    /// `next_l_files` means next level files to be compacted
+    pub fn total_range<'a>(
+        current_l_files: &'a [Arc<FileMetaData>],
+        next_l_files: &'a [Arc<FileMetaData>],
+        level: usize,
+        icmp: &InternalKeyComparator,
+    ) -> (&'a InternalKey, &'a InternalKey) {
+        let (mut smallest, mut largest) = Self::base_range(current_l_files, level, icmp);
+        if !next_l_files.is_empty() {
+            let first = next_l_files.first().unwrap();
             if icmp.compare(first.smallest.data(), smallest.data()) == CmpOrdering::Less {
-                smallest = first.smallest.clone()
+                smallest = &first.smallest
             }
-            let last = files.last().unwrap();
+            let last = next_l_files.last().unwrap();
             if icmp.compare(last.largest.data(), largest.data()) == CmpOrdering::Greater {
-                largest = last.largest.clone()
+                largest = &last.largest
             }
         }
         (smallest, largest)
@@ -185,11 +193,11 @@ impl Compaction {
         icmp: InternalKeyComparator,
         table_cache: TableCache<S>,
     ) -> impl Iterator {
-        let read_options = Rc::new(ReadOptions {
+        let read_options = ReadOptions {
             verify_checksums: self.options.paranoid_checks,
             fill_cache: false,
             snapshot: None,
-        });
+        };
         // Level-0 files have to be merged together so we generate a merging iterator includes iterators for each level 0 file.
         // For other levels, we will make a concatenating iterator per level.
         let space = if self.level == 0 {
@@ -212,7 +220,7 @@ impl Compaction {
                     }
                 } else {
                     let origin = LevelFileNumIterator::new(icmp.clone(), self.inputs[i].clone());
-                    let factory = FileIterFactory::new(read_options.clone(), table_cache.clone());
+                    let factory = FileIterFactory::new(read_options, table_cache.clone());
                     iter_list.push(Box::new(ConcatenateIterator::new(origin, factory)));
                 }
             }
@@ -280,7 +288,10 @@ impl Compaction {
             }
         }
         for output in self.outputs.drain(..) {
-            self.edit.new_files.push((self.level + 1, Rc::new(output)))
+            self.edit
+                .file_delta
+                .new_files
+                .push((self.level + 1, output))
         }
     }
 

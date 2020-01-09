@@ -207,6 +207,9 @@ impl Default for InternalKey {
     }
 }
 
+/// A `LookupKey` represents a 'Get' request from the user by the give key with a
+/// specific sequence number to perform a MVCC style query.
+///
 /// The format of a `LookupKey`:
 ///
 /// ```text

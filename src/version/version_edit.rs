@@ -26,7 +26,6 @@ use crate::version::version_edit::Tag::{
 };
 use std::fmt::{Debug, Formatter};
 use std::mem;
-use std::rc::Rc;
 use std::sync::atomic::AtomicUsize;
 
 // Tags for the VersionEdit disk format.
@@ -77,9 +76,9 @@ pub struct FileMetaData {
     // the file number
     pub number: u64,
     // Smallest internal key served by table
-    pub smallest: Rc<InternalKey>,
+    pub smallest: InternalKey,
     // Largest internal key served by table
-    pub largest: Rc<InternalKey>,
+    pub largest: InternalKey,
 }
 
 impl Default for FileMetaData {
@@ -88,8 +87,8 @@ impl Default for FileMetaData {
             allowed_seeks: AtomicUsize::new(0),
             file_size: 0,
             number: 0,
-            smallest: Rc::new(InternalKey::default()),
-            largest: Rc::new(InternalKey::default()),
+            smallest: InternalKey::default(),
+            largest: InternalKey::default(),
         }
     }
 }
@@ -107,12 +106,17 @@ pub struct VersionEdit {
     // the last used sequence number
     pub last_sequence: Option<u64>,
 
+    pub file_delta: FileDelta,
+}
+
+#[derive(Default)]
+pub struct FileDelta {
     // (level, InternalKey)
-    pub compaction_pointers: Vec<(usize, Rc<InternalKey>)>,
+    pub compaction_pointers: Vec<(usize, InternalKey)>,
     // (level, file_number)
     pub deleted_files: HashSet<(usize, u64)>,
     // (level, FileMetaData)
-    pub new_files: Vec<(usize, Rc<FileMetaData>)>,
+    pub new_files: Vec<(usize, FileMetaData)>,
 }
 
 impl VersionEdit {
@@ -124,9 +128,11 @@ impl VersionEdit {
             prev_log_number: None,
             next_file_number: None,
             last_sequence: None,
-            deleted_files: HashSet::default(),
-            new_files: Vec::new(),
-            compaction_pointers: Vec::new(),
+            file_delta: FileDelta {
+                deleted_files: HashSet::default(),
+                new_files: Vec::new(),
+                compaction_pointers: Vec::new(),
+            },
         }
     }
 
@@ -138,9 +144,14 @@ impl VersionEdit {
         self.prev_log_number = None;
         self.next_file_number = None;
         self.last_sequence = None;
-        self.deleted_files.clear();
-        self.new_files.clear();
-        // compaction pointers are not cleared here
+        self.file_delta.deleted_files.clear();
+        self.file_delta.new_files.clear();
+        // NOTICE: compaction pointers are not cleared here
+    }
+
+    #[inline]
+    pub fn take_file_delta(&mut self) -> FileDelta {
+        mem::replace(&mut self.file_delta, FileDelta::default())
     }
 
     /// Add the specified file at the specified number
@@ -149,31 +160,25 @@ impl VersionEdit {
         level: usize,
         file_number: u64,
         file_size: u64,
-        smallest: Rc<InternalKey>,
-        largest: Rc<InternalKey>,
+        smallest: InternalKey,
+        largest: InternalKey,
     ) {
-        self.new_files.push((
+        self.file_delta.new_files.push((
             level,
-            Rc::new(FileMetaData {
+            FileMetaData {
                 allowed_seeks: AtomicUsize::new(0),
                 file_size,
                 number: file_number,
                 smallest,
                 largest,
-            }),
+            },
         ))
     }
 
     /// Delete the specified file from the specified level
     #[inline]
     pub fn delete_file(&mut self, level: usize, file_number: u64) {
-        self.deleted_files.insert((level, file_number));
-    }
-
-    #[inline]
-    #[allow(dead_code)]
-    pub fn add_compaction_pointer(&mut self, level: usize, key: InternalKey) {
-        self.compaction_pointers.push((level, Rc::new(key)))
+        self.file_delta.deleted_files.insert((level, file_number));
     }
 
     #[inline]
@@ -225,19 +230,19 @@ impl VersionEdit {
             VarintU64::put_varint(dst, *last_seq);
         }
 
-        for (level, key) in self.compaction_pointers.iter() {
+        for (level, key) in self.file_delta.compaction_pointers.iter() {
             VarintU32::put_varint(dst, CompactPointer as u32);
             VarintU32::put_varint(dst, *level as u32);
             VarintU32::put_varint_prefixed_slice(dst, key.data());
         }
 
-        for (level, file_num) in self.deleted_files.iter() {
+        for (level, file_num) in self.file_delta.deleted_files.iter() {
             VarintU32::put_varint(dst, DeletedFile as u32);
             VarintU32::put_varint(dst, *level as u32);
             VarintU64::put_varint(dst, *file_num);
         }
 
-        for (level, file_meta) in self.new_files.iter() {
+        for (level, file_meta) in self.file_delta.new_files.iter() {
             VarintU32::put_varint(dst, NewFile as u32);
             VarintU32::put_varint(dst, *level as u32);
             VarintU64::put_varint(dst, file_meta.number);
@@ -295,8 +300,9 @@ impl VersionEdit {
                         // decode compact pointer
                         if let Some(level) = get_level(self.max_levels, &mut s) {
                             if let Some(key) = get_internal_key(&mut s) {
-                                self.compaction_pointers
-                                    .push((level as usize, Rc::new(key)));
+                                self.file_delta
+                                    .compaction_pointers
+                                    .push((level as usize, key));
                                 continue;
                             }
                         }
@@ -306,7 +312,9 @@ impl VersionEdit {
                     DeletedFile => {
                         if let Some(level) = get_level(self.max_levels, &mut s) {
                             if let Some(file_num) = VarintU64::drain_read(&mut s) {
-                                self.deleted_files.insert((level as usize, file_num));
+                                self.file_delta
+                                    .deleted_files
+                                    .insert((level as usize, file_num));
                                 continue;
                             }
                         }
@@ -319,15 +327,15 @@ impl VersionEdit {
                                 if let Some(file_size) = VarintU64::drain_read(&mut s) {
                                     if let Some(smallest) = get_internal_key(&mut s) {
                                         if let Some(largest) = get_internal_key(&mut s) {
-                                            self.new_files.push((
+                                            self.file_delta.new_files.push((
                                                 level as usize,
-                                                Rc::new(FileMetaData {
+                                                FileMetaData {
                                                     allowed_seeks: AtomicUsize::new(0),
                                                     file_size,
                                                     number,
-                                                    smallest: Rc::new(smallest),
-                                                    largest: Rc::new(largest),
-                                                }),
+                                                    smallest,
+                                                    largest,
+                                                },
                                             ));
                                             continue;
                                         }
@@ -386,13 +394,13 @@ impl Debug for VersionEdit {
         if let Some(last_seq) = &self.last_sequence {
             write!(f, "\n  LastSeq: {}", last_seq)?;
         }
-        for (level, key) in self.compaction_pointers.iter() {
+        for (level, key) in self.file_delta.compaction_pointers.iter() {
             write!(f, "\n  CompactPointer: {} {:?}", level, key)?;
         }
-        for (level, file_num) in self.deleted_files.iter() {
+        for (level, file_num) in self.file_delta.deleted_files.iter() {
             write!(f, "\n  DeleteFile: {} {}", level, file_num)?;
         }
-        for (level, meta) in self.new_files.iter() {
+        for (level, meta) in self.file_delta.new_files.iter() {
             write!(
                 f,
                 "\n  AddFile: {} {} {} {:?}..{:?}",
@@ -427,7 +435,6 @@ fn get_level(max_levels: u8, src: &mut Slice) -> Option<u32> {
 mod tests {
     use crate::db::format::{InternalKey, ValueType};
     use crate::version::version_edit::VersionEdit;
-    use std::rc::Rc;
 
     fn assert_encode_decode(edit: &VersionEdit) {
         let mut encoded = vec![];
@@ -437,6 +444,12 @@ mod tests {
         let mut encoded2 = vec![];
         parsed.encode_to(&mut encoded2);
         assert_eq!(encoded, encoded2)
+    }
+
+    impl VersionEdit {
+        fn add_compaction_pointer(&mut self, level: usize, key: InternalKey) {
+            self.file_delta.compaction_pointers.push((level, key))
+        }
     }
 
     #[test]
@@ -449,16 +462,8 @@ mod tests {
                 3,
                 k_big + 300 + i,
                 k_big + 400 + i,
-                Rc::new(InternalKey::new(
-                    "foo".as_bytes(),
-                    k_big + 500 + i,
-                    ValueType::Value,
-                )),
-                Rc::new(InternalKey::new(
-                    "zoo".as_bytes(),
-                    k_big + 700 + i,
-                    ValueType::Deletion,
-                )),
+                InternalKey::new("foo".as_bytes(), k_big + 500 + i, ValueType::Value),
+                InternalKey::new("zoo".as_bytes(), k_big + 700 + i, ValueType::Deletion),
             );
             edit.delete_file(4, k_big + 700 + i);
             edit.add_compaction_pointer(

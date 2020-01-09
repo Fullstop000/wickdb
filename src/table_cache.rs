@@ -26,7 +26,6 @@ use crate::storage::Storage;
 use crate::util::slice::Slice;
 use crate::util::status::Result;
 use crate::util::varint::VarintU64;
-use std::rc::Rc;
 use std::sync::Arc;
 
 /// A `TableCache` is the cache for the sst files and the sstable in them
@@ -75,7 +74,7 @@ impl<S: Storage + Clone> TableCache<S> {
     /// Returns the result of a seek to internal key `key` in specified file
     pub fn get(
         &self,
-        options: Rc<ReadOptions>,
+        options: ReadOptions,
         key: &[u8],
         file_number: u64,
         file_size: u64,
@@ -96,7 +95,7 @@ impl<S: Storage + Clone> TableCache<S> {
     ///     value: value of user key
     pub fn new_iter(
         &self,
-        options: Rc<ReadOptions>,
+        options: ReadOptions,
         file_number: u64,
         file_size: u64,
     ) -> IterWithCleanup<ConcatenateIterator<BlockIterator, TableIterFactory>> {

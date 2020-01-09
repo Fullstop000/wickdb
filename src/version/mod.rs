@@ -121,7 +121,6 @@ impl Version {
         key: LookupKey,
         table_cache: &TableCache<S>,
     ) -> Result<(Option<Slice>, SeekStats)> {
-        let opt = Rc::new(options);
         let ikey = key.internal_key();
         let ukey = key.user_key();
         let ucmp = self.icmp.user_comparator.as_ref();
@@ -160,7 +159,7 @@ impl Version {
             for file in files_to_seek.iter() {
                 seek_stats.seek_file_level = Some(level);
                 seek_stats.seek_file = Some(file.clone());
-                match table_cache.get(opt.clone(), &ikey, file.number, file.file_size)? {
+                match table_cache.get(options, &ikey, file.number, file.file_size)? {
                     None => continue, // keep searching
                     Some((encoded_key, value)) => {
                         match ParsedInternalKey::decode_from(encoded_key.as_slice()) {
@@ -256,12 +255,9 @@ impl Version {
         if !self.overlap_in_level(level, smallest_ukey, largest_ukey) {
             // No overlapping in level 0
             // we might directly push files to next level if there is no overlap in next level
-            let smallest_ikey = Rc::new(InternalKey::new(
-                smallest_ukey,
-                u64::max_value(),
-                VALUE_TYPE_FOR_SEEK,
-            ));
-            let largest_ikey = Rc::new(InternalKey::new(largest_ukey, 0, ValueType::Deletion));
+            let smallest_ikey =
+                InternalKey::new(smallest_ukey, u64::max_value(), VALUE_TYPE_FOR_SEEK);
+            let largest_ikey = InternalKey::new(largest_ukey, 0, ValueType::Deletion);
             while level < self.options.max_mem_compact_level {
                 if self.overlap_in_level(level + 1, smallest_ukey, largest_ukey) {
                     break;
@@ -270,8 +266,8 @@ impl Version {
                     // Check that file does not overlap too many grandparent bytes
                     let overlaps = self.get_overlapping_inputs(
                         level + 2,
-                        Some(smallest_ikey.clone()),
-                        Some(largest_ikey.clone()),
+                        Some(&smallest_ikey),
+                        Some(&largest_ikey),
                     );
                     if total_file_size(&overlaps) > self.options.max_grandparent_overlap_bytes() {
                         break;
@@ -482,18 +478,19 @@ impl Version {
                 == CmpOrdering::Less
     }
 
-    // Return all files in `level` that overlap [begin, end]
-    // Notice that both `begin` and `end` is InternalKey but we
+    // Return all files in `level` that overlap [`begin`, `end`]
+    // Notice that both `begin` and `end` is `InternalKey` but we
     // compare the user key directly.
     // Since files in level0 probably overlaps with each other, the final output
     // total range could be larger than [begin, end]
-    // A None begin is considered as -infinite
-    // A None end is considered as +infinite
+    //
+    // A `None` begin is considered as -infinite
+    // A `None` end is considered as +infinite
     fn get_overlapping_inputs(
         &self,
         level: usize,
-        begin: Option<Rc<InternalKey>>,
-        end: Option<Rc<InternalKey>>,
+        begin: Option<&InternalKey>,
+        end: Option<&InternalKey>,
     ) -> Vec<Arc<FileMetaData>> {
         // TODO: the implementation treating level 0 files is somewhat tricky ( since we use unsafe pointer ).
         //       Consider separate this into two single functions: one for level 0, one for level > 0
