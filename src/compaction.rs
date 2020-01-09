@@ -26,7 +26,6 @@ use crate::version::version_edit::{FileMetaData, VersionEdit};
 use crate::version::version_set::{total_file_size, FileIterFactory};
 use crate::version::{LevelFileNumIterator, Version};
 use std::cmp::Ordering as CmpOrdering;
-use std::rc::Rc;
 use std::sync::Arc;
 
 /// Information for a manual compaction
@@ -289,7 +288,10 @@ impl Compaction {
             }
         }
         for output in self.outputs.drain(..) {
-            self.edit.new_files.push((self.level + 1, Rc::new(output)))
+            self.edit
+                .file_delta
+                .new_files
+                .push((self.level + 1, output))
         }
     }
 

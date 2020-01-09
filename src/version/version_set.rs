@@ -34,13 +34,12 @@ use crate::util::collection::HashSet;
 use crate::util::comparator::{BytewiseComparator, Comparator};
 use crate::util::reporter::LogReporter;
 use crate::util::status::{Result, Status, WickErr};
-use crate::version::version_edit::{FileMetaData, VersionEdit};
+use crate::version::version_edit::{FileDelta, FileMetaData, VersionEdit};
 use crate::version::{LevelFileNumIterator, Version, FILE_META_LENGTH};
 use crate::ReadOptions;
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::vec_deque::VecDeque;
 use std::path::MAIN_SEPARATOR;
-use std::rc::Rc;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -49,7 +48,7 @@ struct LevelState {
     // set of new deleted files
     deleted_files: HashSet<u64>,
     // all new added files
-    added_files: Vec<Rc<FileMetaData>>,
+    added_files: Vec<FileMetaData>,
 }
 
 /// Summarizes the files added and deleted from a set of version edits.
@@ -75,16 +74,16 @@ impl VersionBuilder {
     /// Add the given VersionEdit for later applying
     /// 'vset.compaction_pointers' will be updated
     /// same as `apply` in C++ implementation
-    pub fn accumulate<S: Storage + Clone>(&mut self, edit: &VersionEdit, vset: &mut VersionSet<S>) {
+    pub fn accumulate<S: Storage + Clone>(&mut self, delta: FileDelta, vset: &mut VersionSet<S>) {
         // update compcation pointers
-        for (level, key) in edit.compaction_pointers.iter() {
-            vset.compaction_pointer[*level] = key.clone();
+        for (level, key) in delta.compaction_pointers {
+            vset.compaction_pointer[level] = key;
         }
         // delete files
-        for (level, deleted_file) in edit.deleted_files.iter() {
-            self.levels[*level].deleted_files.insert(*deleted_file);
+        for (level, deleted_file) in delta.deleted_files {
+            self.levels[level].deleted_files.insert(deleted_file);
         }
-        for (level, new_file) in edit.new_files.iter() {
+        for (level, new_file) in delta.new_files {
             // We arrange to automatically compact this file after
             // a certain number of seeks.  Let's assume:
             //   (1) One seek costs 10ms
@@ -106,8 +105,8 @@ impl VersionBuilder {
             new_file
                 .allowed_seeks
                 .store(allowed_seeks, Ordering::Release);
-            self.levels[*level].deleted_files.remove(&new_file.number);
-            self.levels[*level].added_files.push(new_file.clone());
+            self.levels[level].deleted_files.remove(&new_file.number);
+            self.levels[level].added_files.push(new_file);
         }
     }
 
@@ -363,7 +362,8 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
 
         let mut v = Version::new(self.options.clone(), self.icmp.clone());
         let mut builder = VersionBuilder::new(v);
-        builder.accumulate(&edit, self);
+        let file_delta = edit.take_file_delta();
+        builder.accumulate(file_delta, self);
         v = builder.apply_to_new();
         v.finalize();
 
@@ -674,7 +674,8 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
                     ));
                 }
             }
-            builder.accumulate(&edit, self);
+            let file_delta = edit.take_file_delta();
+            builder.accumulate(file_delta, self);
             if let Some(n) = edit.next_file_number {
                 next_file_number = n;
                 has_next_file_number = true;
@@ -751,7 +752,8 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         // Save compaction pointers
         for level in 0..self.options.max_levels as usize {
             if !self.compaction_pointer[level].is_empty() {
-                edit.compaction_pointers
+                edit.file_delta
+                    .compaction_pointers
                     .push((level, self.compaction_pointer[level].clone()));
             }
         }
@@ -862,6 +864,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         // to be applied so that if the compaction fails, we will try a different
         // key range next time
         c.edit
+            .file_delta
             .compaction_pointers
             .push((c.level, final_largest.clone()));
         self.compaction_pointer[c.level] = final_largest.clone();
