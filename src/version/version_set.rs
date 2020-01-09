@@ -184,7 +184,7 @@ pub struct VersionSet<S: Storage + Clone> {
     versions: VecDeque<Arc<Version>>,
 
     // Indicates that every level's compaction progress of last compaction.
-    compaction_pointer: Vec<Rc<InternalKey>>,
+    compaction_pointer: Vec<InternalKey>,
 }
 
 unsafe impl<S: Storage + Clone> Send for VersionSet<S> {}
@@ -437,8 +437,8 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
     pub fn compact_range(
         &mut self,
         level: usize,
-        begin: Option<Rc<InternalKey>>,
-        end: Option<Rc<InternalKey>>,
+        begin: Option<InternalKey>,
+        end: Option<InternalKey>,
     ) -> Option<Compaction> {
         let version = self.current();
         let mut overlapping_inputs = version.get_overlapping_inputs(level, begin, end);

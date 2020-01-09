@@ -33,8 +33,8 @@ use std::sync::Arc;
 pub struct ManualCompaction {
     pub level: usize,
     pub done: bool,
-    pub begin: Option<Rc<InternalKey>>, // None means beginning of key range
-    pub end: Option<Rc<InternalKey>>,   // None means end of key range
+    pub begin: Option<InternalKey>, // None means beginning of key range
+    pub end: Option<InternalKey>,   // None means end of key range
 }
 
 /// A helper enum describing relations between the indexes of `inputs` in `Compaction`
@@ -117,7 +117,7 @@ impl Compaction {
     }
 
     /// Returns the minimal range that covers all entries in `self.inputs[0]`
-    pub fn base_range(&self, icmp: &InternalKeyComparator) -> (Rc<InternalKey>, Rc<InternalKey>) {
+    pub fn base_range(&self, icmp: &InternalKeyComparator) -> (InternalKey, InternalKey) {
         let files = &self.inputs[CompactionInputsRelation::Source as usize];
         assert!(
             !files.is_empty(),
@@ -146,7 +146,7 @@ impl Compaction {
     }
 
     /// Returns the minimal range that covers all entries in `self.inputs`
-    pub fn total_range(&self, icmp: &InternalKeyComparator) -> (Rc<InternalKey>, Rc<InternalKey>) {
+    pub fn total_range(&self, icmp: &InternalKeyComparator) -> (InternalKey, InternalKey) {
         let (mut smallest, mut largest) = self.base_range(icmp);
         let files = &self.inputs[CompactionInputsRelation::Parent as usize];
         if !files.is_empty() {

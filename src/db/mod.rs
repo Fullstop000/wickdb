@@ -1001,11 +1001,11 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
                         if c.builder.as_ref().unwrap().num_entries() == 0 {
                             // We have a brand new builder so use current key as smallest
                             c.outputs[last].smallest =
-                                Rc::new(InternalKey::decoded_from(ikey.as_slice()));
+                                InternalKey::decoded_from(ikey.as_slice());
                         }
                         // Keep updating the largest
                         c.outputs[last].largest =
-                            Rc::new(InternalKey::decoded_from(ikey.as_slice()));
+                            InternalKey::decoded_from(ikey.as_slice());
                         let _ = c
                             .builder
                             .as_mut()
@@ -1204,8 +1204,8 @@ pub(crate) fn build_table<S: Storage + Clone>(
             iter.next();
         }
         if status.is_ok() {
-            meta.smallest = Rc::new(InternalKey::decoded_from(smallest_key.as_slice()));
-            meta.largest = Rc::new(InternalKey::decoded_from(prev_key.as_slice()));
+            meta.smallest = InternalKey::decoded_from(smallest_key.as_slice());
+            meta.largest = InternalKey::decoded_from(prev_key.as_slice());
             status = builder.finish(true).and_then(|_| {
                 meta.file_size = builder.file_size();
                 // make sure that the new file is in the cache

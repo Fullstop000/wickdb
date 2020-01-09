@@ -256,12 +256,12 @@ impl Version {
         if !self.overlap_in_level(level, smallest_ukey, largest_ukey) {
             // No overlapping in level 0
             // we might directly push files to next level if there is no overlap in next level
-            let smallest_ikey = Rc::new(InternalKey::new(
+            let smallest_ikey = InternalKey::new(
                 smallest_ukey,
                 u64::max_value(),
                 VALUE_TYPE_FOR_SEEK,
-            ));
-            let largest_ikey = Rc::new(InternalKey::new(largest_ukey, 0, ValueType::Deletion));
+            );
+            let largest_ikey = InternalKey::new(largest_ukey, 0, ValueType::Deletion);
             while level < self.options.max_mem_compact_level {
                 if self.overlap_in_level(level + 1, smallest_ukey, largest_ukey) {
                     break;
@@ -492,8 +492,8 @@ impl Version {
     fn get_overlapping_inputs(
         &self,
         level: usize,
-        begin: Option<Rc<InternalKey>>,
-        end: Option<Rc<InternalKey>>,
+        begin: Option<InternalKey>,
+        end: Option<InternalKey>,
     ) -> Vec<Arc<FileMetaData>> {
         // TODO: the implementation treating level 0 files is somewhat tricky ( since we use unsafe pointer ).
         //       Consider separate this into two single functions: one for level 0, one for level > 0
