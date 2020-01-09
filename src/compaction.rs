@@ -22,7 +22,6 @@ use crate::sstable::table::TableBuilder;
 use crate::storage::Storage;
 use crate::table_cache::TableCache;
 use crate::util::comparator::Comparator;
-use crate::util::slice::Slice;
 use crate::version::version_edit::{FileMetaData, VersionEdit};
 use crate::version::version_set::{total_file_size, FileIterFactory};
 use crate::version::{LevelFileNumIterator, Version};
@@ -223,12 +222,12 @@ impl Compaction {
 
     /// Returns true iff we should stop building the current output
     /// before processing `ikey` for too much overlapping with grand parents
-    pub fn should_stop_before(&mut self, ikey: &Slice, icmp: InternalKeyComparator) -> bool {
+    pub fn should_stop_before(&mut self, ikey: &[u8], icmp: InternalKeyComparator) -> bool {
         // `seen_key` guarantees that we should continue checking for next `ikey`
         // no matter whether the first `ikey` overlaps with grand parents
         while self.grand_parent_index < self.grand_parents.len()
             && icmp.compare(
-                ikey.as_slice(),
+                ikey,
                 self.grand_parents[self.grand_parent_index].largest.data(),
             ) == CmpOrdering::Greater
         {
@@ -249,7 +248,7 @@ impl Compaction {
     /// Returns false if the information we have available guarantees that
     /// the compaction is producing data in "level+1" for which no relative key exists
     /// in levels greater than "level+1".
-    pub fn key_exist_in_deeper_level(&mut self, ukey: &Slice) -> bool {
+    pub fn key_exist_in_deeper_level(&mut self, ukey: &[u8]) -> bool {
         let v = self.input_version.as_ref().unwrap().clone();
         let icmp = v.comparator();
         let ucmp = icmp.user_comparator.as_ref();
@@ -259,9 +258,8 @@ impl Compaction {
                 let files = v.get_level_files(level);
                 while self.level_ptrs[level] < files.len() {
                     let f = files[self.level_ptrs[level]].clone();
-                    if ucmp.compare(ukey.as_slice(), f.largest.user_key()) != CmpOrdering::Greater {
-                        if ucmp.compare(ukey.as_slice(), f.smallest.user_key()) != CmpOrdering::Less
-                        {
+                    if ucmp.compare(ukey, f.largest.user_key()) != CmpOrdering::Greater {
+                        if ucmp.compare(ukey, f.smallest.user_key()) != CmpOrdering::Less {
                             return true;
                         }
                         break;

@@ -145,13 +145,13 @@ impl MemoryTable for MemTable {
         let mk = key.mem_key();
         // internal key
         let mut iter = self.iter();
-        iter.seek(&mk);
+        iter.seek(mk);
         if iter.valid() {
             let internal_key = iter.key();
             // only check the user key here
             match self.cmp.icmp.user_comparator.compare(
                 Slice::new(internal_key.as_ptr(), internal_key.size() - 8).as_slice(),
-                key.user_key().as_slice(),
+                key.user_key(),
             ) {
                 Ordering::Equal => {
                     let tag = decode_fixed_64(&internal_key.as_slice()[internal_key.size() - 8..]);
@@ -194,7 +194,7 @@ impl Iterator for MemTableIterator {
         self.iter.seek_to_last()
     }
 
-    fn seek(&mut self, target: &Slice) {
+    fn seek(&mut self, target: &[u8]) {
         self.iter.seek(target)
     }
 
@@ -295,13 +295,14 @@ mod tests {
         iter.seek_to_first();
         assert!(iter.valid());
         for (key, value) in entries.iter() {
-            let pkey = ParsedInternalKey::decode_from(iter.key()).unwrap();
+            let k = iter.key();
+            let pkey = ParsedInternalKey::decode_from(k.as_slice()).unwrap();
             assert_eq!(
-                pkey.user_key.as_str(),
+                pkey.as_str(),
                 *key,
                 "expected key: {:?}, but got {:?}",
                 *key,
-                pkey.user_key.as_str()
+                pkey.as_str()
             );
             assert_eq!(
                 iter.value().as_str(),
@@ -318,13 +319,14 @@ mod tests {
         iter.seek_to_last();
         assert!(iter.valid());
         for (key, value) in entries.iter().rev() {
-            let pkey = ParsedInternalKey::decode_from(iter.key()).unwrap();
+            let k = iter.key();
+            let pkey = ParsedInternalKey::decode_from(k.as_slice()).unwrap();
             assert_eq!(
-                pkey.user_key.as_str(),
+                pkey.as_str(),
                 *key,
                 "expected key: {:?}, but got {:?}",
                 *key,
-                pkey.user_key.as_str()
+                pkey.as_str()
             );
             assert_eq!(
                 iter.value().as_str(),

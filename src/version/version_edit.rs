@@ -426,7 +426,6 @@ fn get_level(max_levels: u8, src: &mut Slice) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use crate::db::format::{InternalKey, ValueType};
-    use crate::util::slice::Slice;
     use crate::version::version_edit::VersionEdit;
     use std::rc::Rc;
 
@@ -451,12 +450,12 @@ mod tests {
                 k_big + 300 + i,
                 k_big + 400 + i,
                 Rc::new(InternalKey::new(
-                    &Slice::from("foo"),
+                    "foo".as_bytes(),
                     k_big + 500 + i,
                     ValueType::Value,
                 )),
                 Rc::new(InternalKey::new(
-                    &Slice::from("zoo"),
+                    "zoo".as_bytes(),
                     k_big + 700 + i,
                     ValueType::Deletion,
                 )),
@@ -464,7 +463,7 @@ mod tests {
             edit.delete_file(4, k_big + 700 + i);
             edit.add_compaction_pointer(
                 i as usize,
-                InternalKey::new(&Slice::from("x"), k_big + 900 + i, ValueType::Value),
+                InternalKey::new("x".as_bytes(), k_big + 900 + i, ValueType::Value),
             );
         }
         edit.set_comparator_name("foo".to_owned());

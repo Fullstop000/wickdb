@@ -33,7 +33,6 @@ use crate::util::coding::decode_fixed_64;
 use crate::util::collection::HashSet;
 use crate::util::comparator::{BytewiseComparator, Comparator};
 use crate::util::reporter::LogReporter;
-use crate::util::slice::Slice;
 use crate::util::status::{Result, Status, WickErr};
 use crate::version::version_edit::{FileMetaData, VersionEdit};
 use crate::version::{LevelFileNumIterator, Version, FILE_META_LENGTH};
@@ -391,7 +390,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         // In origin C++ implementation, the relative part unlocks the global mutex. But we dont need
         // to do this in wickdb since we split the mutex into several ones for more subtle controlling.
         if let Some(writer) = self.manifest_writer.as_mut() {
-            match writer.add_record(&Slice::from(record.as_slice())) {
+            match writer.add_record(&record) {
                 Ok(()) => {
                     match writer.sync() {
                         Ok(()) => {
@@ -567,9 +566,9 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         // If `file_size` is zero, the file has been deleted and
         // should not be added to the manifest
         if build_result.is_ok() && meta.file_size > 0 {
-            let smallest_ukey = Slice::from(meta.smallest.user_key());
-            let largest_ukey = Slice::from(meta.largest.user_key());
-            level = base.pick_level_for_memtable_output(&smallest_ukey, &largest_ukey);
+            let smallest_ukey = meta.smallest.user_key();
+            let largest_ukey = meta.largest.user_key();
+            level = base.pick_level_for_memtable_output(smallest_ukey, largest_ukey);
             edit.add_file(
                 level,
                 meta.number,
@@ -770,7 +769,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
 
         let mut record = vec![];
         edit.encode_to(&mut record);
-        writer.add_record(&Slice::from(record.as_slice()))?;
+        writer.add_record(&record)?;
         Ok(())
     }
 
@@ -974,15 +973,15 @@ impl<S: Storage + Clone> FileIterFactory<S> {
 impl<S: Storage + Clone> DerivedIterFactory for FileIterFactory<S> {
     type Iter = IterWithCleanup<ConcatenateIterator<BlockIterator, TableIterFactory>>;
 
-    fn derive(&self, value: &Slice) -> Result<Self::Iter> {
-        if value.size() != 2 * FILE_META_LENGTH {
+    fn derive(&self, value: &[u8]) -> Result<Self::Iter> {
+        if value.len() != 2 * FILE_META_LENGTH {
             Err(WickErr::new(
                 Status::Corruption,
                 Some("file reader invoked with unexpected value"),
             ))
         } else {
-            let file_number = decode_fixed_64(value.as_slice());
-            let file_size = decode_fixed_64(&value.as_slice()[8..]);
+            let file_number = decode_fixed_64(value);
+            let file_size = decode_fixed_64(&value[8..]);
             Ok(self
                 .table_cache
                 .new_iter(self.options.clone(), file_number, file_size))

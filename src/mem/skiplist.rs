@@ -122,7 +122,7 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
     pub fn insert(&self, key: Vec<u8>) {
         let mut prev = [ptr::null_mut(); MAX_HEIGHT];
         let slc = Slice::from(&key);
-        let node = self.find_greater_or_equal(&slc, Some(&mut prev));
+        let node = self.find_greater_or_equal(slc.as_slice(), Some(&mut prev));
         if !node.is_null() {
             unsafe {
                 assert_ne!(
@@ -162,7 +162,7 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
     /// which can be helpful for adding new node to the skiplist.
     pub fn find_greater_or_equal(
         &self,
-        key: &Slice,
+        key: &[u8],
         mut prev_nodes: Option<&mut [*mut Node]>,
     ) -> *mut Node {
         let mut level = self.max_height.load(Ordering::Acquire);
@@ -241,13 +241,13 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
     }
 
     /// Return whether the give key is less than the given node's key.
-    pub(super) fn key_is_less_than_or_equal(&self, key: &Slice, n: *mut Node) -> bool {
+    pub(super) fn key_is_less_than_or_equal(&self, key: &[u8], n: *mut Node) -> bool {
         if n.is_null() {
             // take nullptr as +infinite large
             true
         } else {
             let node_key = unsafe { (*n).key() };
-            match self.comparator.compare(key.as_slice(), node_key.as_slice()) {
+            match self.comparator.compare(key, node_key.as_slice()) {
                 CmpOrdering::Greater => false,
                 _ => true,
             }
@@ -287,7 +287,7 @@ impl<C: Comparator, A: Arena> Iterator for SkiplistIterator<C, A> {
 
     /// Advance to the first node with a key >= target
     #[inline]
-    fn seek(&mut self, target_key: &Slice) {
+    fn seek(&mut self, target_key: &[u8]) {
         self.node = self.skl.find_greater_or_equal(target_key, None);
     }
 
@@ -424,11 +424,17 @@ mod tests {
             (vec![1u8, 2u8, 3u8], true),
         ];
         // nullptr should be considered as the largest
-        assert_eq!(true, skl.key_is_less_than_or_equal(&key, ptr::null_mut()));
+        assert_eq!(
+            true,
+            skl.key_is_less_than_or_equal(key.as_slice(), ptr::null_mut())
+        );
 
         for (node_key, expected) in tests {
             let node = Node::new(Slice::from(node_key.as_slice()), 1, &skl.arena);
-            assert_eq!(expected, skl.key_is_less_than_or_equal(&key, node))
+            assert_eq!(
+                expected,
+                skl.key_is_less_than_or_equal(key.as_slice(), node)
+            )
         }
     }
 
@@ -448,8 +454,7 @@ mod tests {
         let skl = construct_skl_from_nodes(nodes);
         let mut prev_nodes = vec![ptr::null_mut(); 5];
         // test the scenario for un-inserted key
-        let target_key = Slice::from("key4");
-        let res = skl.find_greater_or_equal(&target_key, Some(&mut prev_nodes));
+        let res = skl.find_greater_or_equal("key4".as_bytes(), Some(&mut prev_nodes));
         unsafe {
             assert_eq!((*res).key().as_str(), "key5");
             // prev_nodes should be correct
@@ -460,8 +465,7 @@ mod tests {
         }
         prev_nodes = vec![ptr::null_mut(); 5];
         // test the scenario for inserted key
-        let target_key2 = Slice::from("key5");
-        let res2 = skl.find_greater_or_equal(&target_key2, Some(&mut prev_nodes));
+        let res2 = skl.find_greater_or_equal("key5".as_bytes(), Some(&mut prev_nodes));
         unsafe {
             assert_eq!((*res2).key().as_str(), "key5");
             // prev_nodes should be correct
@@ -598,13 +602,13 @@ mod tests {
             iter.prev();
         }
         assert!(!iter.valid());
-        iter.seek(&Slice::from("key7"));
+        iter.seek("key7".as_bytes());
         assert_eq!("key7", iter.key().as_str());
-        iter.seek(&Slice::from("key4"));
+        iter.seek("key4".as_bytes());
         assert_eq!("key5", iter.key().as_str());
-        iter.seek(&Slice::from(""));
+        iter.seek("".as_bytes());
         assert_eq!("key1", iter.key().as_str());
-        iter.seek(&Slice::from("llllllllllllllll"));
+        iter.seek("llllllllllllllll".as_bytes());
         assert!(!iter.valid());
     }
 
@@ -747,7 +751,7 @@ mod tests {
             let mut pos_bytes = vec![];
             put_fixed_64(&mut pos_bytes, pos);
             let mut iter = SkiplistIterator::new(self.list.clone());
-            iter.seek(&Slice::from(&pos_bytes));
+            iter.seek(&pos_bytes);
             loop {
                 let current = if !iter.valid() {
                     // Seek to end
@@ -794,7 +798,7 @@ mod tests {
                         pos = new_target;
                         let mut bytes = vec![];
                         put_fixed_64(&mut bytes, pos);
-                        iter.seek(&Slice::from(&bytes));
+                        iter.seek(&bytes);
                     }
                 }
             }

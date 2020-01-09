@@ -76,16 +76,13 @@ impl<S: Storage + Clone> TableCache<S> {
     pub fn get(
         &self,
         options: Rc<ReadOptions>,
-        key: &Slice,
+        key: &[u8],
         file_number: u64,
         file_size: u64,
     ) -> Result<Option<(Slice, Slice)>> {
         let handle = self.find_table(file_number, file_size)?;
         // every value should be valid so unwrap is safe here
-        let res = handle
-            .value()
-            .unwrap()
-            .internal_get(options, key.as_slice())?;
+        let res = handle.value().unwrap().internal_get(options, key)?;
         self.cache.release(handle);
         Ok(res)
     }

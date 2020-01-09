@@ -22,7 +22,8 @@ use std::cmp::Ordering;
 use std::mem;
 
 /// A common trait for iterating all the key/value entries.
-// TODO: use Relative Type or Generics instead of explicitly using Slice as the type of key and value
+///
+/// An `Iterator` should be invalid once created
 pub trait Iterator {
     /// An iterator is either positioned at a key/value pair, or
     /// not valid.  This method returns true iff the iterator is valid.
@@ -39,7 +40,7 @@ pub trait Iterator {
     /// Position at the first key in the source that is at or past target.
     /// The iterator is valid after this call iff the source contains
     /// an entry that comes at or past target.
-    fn seek(&mut self, target: &Slice);
+    fn seek(&mut self, target: &[u8]);
 
     /// Moves to the next entry in the source.  After this call, the iterator is
     /// valid iff the iterator was not positioned at the last entry in the source.
@@ -122,7 +123,7 @@ impl<I: Iterator> Iterator for IterWithCleanup<I> {
         }
     }
 
-    fn seek(&mut self, target: &Slice) {
+    fn seek(&mut self, target: &[u8]) {
         if let Some(iter) = self.inner_iter.as_mut() {
             iter.seek(target)
         }
@@ -183,7 +184,7 @@ impl Iterator for EmptyIterator {
 
     fn seek_to_last(&mut self) {}
 
-    fn seek(&mut self, _target: &Slice) {}
+    fn seek(&mut self, _target: &[u8]) {}
 
     fn next(&mut self) {}
 
@@ -221,7 +222,7 @@ pub struct ConcatenateIterator<I: Iterator, F: DerivedIterFactory> {
 pub trait DerivedIterFactory {
     type Iter: Iterator;
     /// Create a new `Iterator` based on value yield by original `Iterator`
-    fn derive(&self, value: &Slice) -> Result<Self::Iter>;
+    fn derive(&self, value: &[u8]) -> Result<Self::Iter>;
 }
 
 impl<I: Iterator, F: DerivedIterFactory> ConcatenateIterator<I, F> {
@@ -253,9 +254,9 @@ impl<I: Iterator, F: DerivedIterFactory> ConcatenateIterator<I, F> {
         } else {
             let v = self.origin.value();
             if self.derived.is_none()
-                || v.compare(&Slice::from(self.prev_derived_value.as_slice())) != Ordering::Equal
+                || v.as_slice().cmp(self.prev_derived_value.as_slice()) != Ordering::Equal
             {
-                match self.factory.derive(&v) {
+                match self.factory.derive(v.as_slice()) {
                     Ok(derived) => {
                         if derived.valid() {
                             self.prev_derived_value = Vec::from(v.as_slice());
@@ -351,7 +352,7 @@ impl<I: Iterator, F: DerivedIterFactory> Iterator for ConcatenateIterator<I, F> 
         self.skip_backward();
     }
 
-    fn seek(&mut self, target: &Slice) {
+    fn seek(&mut self, target: &[u8]) {
         self.origin.seek(target);
         self.init_derived_iter();
         if let Some(di) = self.derived.as_mut() {
@@ -504,7 +505,7 @@ impl<C: Comparator> Iterator for MergingIterator<C> {
         self.direction = IterDirection::Reverse;
     }
 
-    fn seek(&mut self, target: &Slice) {
+    fn seek(&mut self, target: &[u8]) {
         for child in self.children.iter_mut() {
             child.seek(target)
         }
@@ -518,7 +519,7 @@ impl<C: Comparator> Iterator for MergingIterator<C> {
             let key = self.key();
             for (i, child) in self.children.iter_mut().enumerate() {
                 if i != self.current_index {
-                    child.seek(&key);
+                    child.seek(key.as_slice());
                     if child.valid()
                         && self.cmp.compare(key.as_slice(), child.key().as_slice())
                             == Ordering::Equal
@@ -539,7 +540,7 @@ impl<C: Comparator> Iterator for MergingIterator<C> {
             let key = self.key();
             for (i, child) in self.children.iter_mut().enumerate() {
                 if i != self.current_index {
-                    child.seek(&key);
+                    child.seek(key.as_slice());
                     if child.valid() {
                         child.prev();
                     } else {
@@ -586,6 +587,7 @@ mod tests {
     use std::cmp::Ordering;
     use std::mem;
     use std::rc::Rc;
+    use std::str;
 
     struct TestCleanup {
         results: Vec<usize>,
@@ -671,7 +673,7 @@ mod tests {
             self.shadow.seek_to_last();
         }
 
-        fn seek(&mut self, target: &Slice) {
+        fn seek(&mut self, target: &[u8]) {
             self.origin.seek(target);
             self.shadow.seek(target);
         }
@@ -735,10 +737,10 @@ mod tests {
             }
         }
 
-        fn seek(&mut self, target: &Slice) {
+        fn seek(&mut self, target: &[u8]) {
             let mut current = self.inner.len() + 1;
             for (i, s) in self.inner.iter().enumerate() {
-                match s.as_bytes().cmp(target.as_slice()) {
+                match s.as_bytes().cmp(target) {
                     Ordering::Equal | Ordering::Greater => {
                         current = i;
                         break;
@@ -787,8 +789,13 @@ mod tests {
 
     impl DerivedIterFactory for SimpleDeriveFactory {
         type Iter = TestSimpleArrayIter;
-        fn derive(&self, value: &Slice) -> Result<Self::Iter> {
-            let c = value.as_str().chars().nth(0).unwrap().to_string();
+        fn derive(&self, value: &[u8]) -> Result<Self::Iter> {
+            let c = str::from_utf8(value)
+                .unwrap()
+                .chars()
+                .nth(0)
+                .unwrap()
+                .to_string();
             let inner = vec![c.clone(), c.as_str().repeat(2), c.as_str().repeat(3)];
             Ok(TestSimpleArrayIter::new(inner))
         }
@@ -817,18 +824,18 @@ mod tests {
         assert_eq!(iter.key().as_str(), "cc");
 
         iter.seek_to_first();
-        iter.seek(&Slice::from("b"));
+        iter.seek("b".as_bytes());
         assert_eq!(iter.key().as_str(), "b");
 
-        iter.seek(&Slice::from("bb"));
+        iter.seek("bb".as_bytes());
         assert_eq!(iter.key().as_str(), "bb");
 
-        iter.seek(&Slice::from("bbbb"));
+        iter.seek("bbbb".as_bytes());
         assert_eq!(iter.key().as_str(), "c");
         // Test seeking out of range
-        iter.seek(&Slice::from("1"));
+        iter.seek("1".as_bytes());
         assert_eq!(iter.key().as_str(), "a");
-        iter.seek(&Slice::from("d"));
+        iter.seek("d".as_bytes());
         assert!(!iter.valid());
     }
 
@@ -849,15 +856,15 @@ mod tests {
             suite.assert_key_and_value();
             suite.seek_to_last();
             suite.assert_key_and_value();
-            suite.seek(&Slice::from("3"));
+            suite.seek("3".as_bytes());
             suite.assert_key_and_value();
             suite.prev();
             suite.assert_key_and_value();
             suite.next();
             suite.assert_key_and_value();
-            suite.seek(&Slice::from("0"));
+            suite.seek("0".as_bytes());
             suite.assert_key_and_value();
-            suite.seek(&Slice::from("9999"));
+            suite.seek("9999".as_bytes());
             suite.assert_valid(false);
         }
     }
