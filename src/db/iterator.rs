@@ -18,7 +18,7 @@ use crate::iterator::Iterator;
 use crate::storage::Storage;
 use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
-use crate::util::status::{Result, WickErr};
+use crate::{Error, Result};
 use rand::Rng;
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -45,7 +45,7 @@ pub struct DBIterator<I: Iterator, S: Storage + Clone + 'static> {
     // The newest sequence acquired.
     // Any key newer than this will be ignored
     sequence: u64,
-    err: Option<WickErr>,
+    err: Option<Error>,
     inner: I,
     direction: Direction,
     // used for randomly picking a yielded key to record read stats

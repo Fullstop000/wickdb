@@ -19,7 +19,7 @@ use crate::record::{RecordType, BLOCK_SIZE, HEADER_SIZE};
 use crate::storage::File;
 use crate::util::coding::encode_fixed_32;
 use crate::util::crc32;
-use crate::util::status::Result;
+use crate::Result;
 
 /// Writer writes records to an underlying log `File`.
 pub struct Writer {
@@ -139,5 +139,3 @@ impl Writer {
         Ok(())
     }
 }
-
-unsafe impl Send for Writer {}

@@ -25,7 +25,7 @@ use crate::util::coding::{decode_fixed_32, put_fixed_32, put_fixed_64};
 use crate::util::comparator::Comparator;
 use crate::util::crc32::{extend, mask, unmask, value};
 use crate::util::slice::Slice;
-use crate::util::status::{Result, Status, WickErr};
+use crate::{Error, Result};
 use snap::max_compress_len;
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -43,16 +43,14 @@ pub struct Table {
     index_block: Block,
 }
 
-// Common methods
 impl Table {
     /// Attempt to open the table that is stored in bytes `[0..size)`
     /// of `file`, and read the metadata entries necessary to allow
     /// retrieving data from the table.
     pub fn open(file: Box<dyn File>, size: u64, options: Arc<Options>) -> Result<Self> {
         if size < FOOTER_ENCODED_LENGTH as u64 {
-            return Err(WickErr::new(
-                Status::Corruption,
-                Some("file is too short to be an sstable"),
+            return Err(Error::Corruption(
+                "file is too short to be an sstable".to_owned(),
             ));
         };
         // Read footer
@@ -368,9 +366,7 @@ impl TableBuilder {
             )?;
             self.data_block.reset();
             self.pending_index_entry = true;
-            if let Err(e) = self.file.flush() {
-                return Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e)));
-            }
+            self.file.flush()?;
             if let Some(fb) = &mut self.filter_block {
                 fb.start_block(self.offset)
             }
@@ -528,13 +524,7 @@ fn compress_block(
             let mut buffer = vec![0; max_compress_len(raw_block.len())];
             match enc.compress(raw_block, buffer.as_mut_slice()) {
                 Ok(size) => buffer.truncate(size),
-                Err(e) => {
-                    return Err(WickErr::new_from_raw(
-                        Status::CompressionError,
-                        None,
-                        Box::new(e),
-                    ))
-                }
+                Err(e) => return Err(Error::CompressionFailed(e)),
             }
             Ok((buffer, CompressionType::SnappyCompression))
         }
@@ -582,10 +572,7 @@ pub fn read_block(file: &dyn File, handle: &BlockHandle, verify_checksum: bool) 
         // Compression type is included in CRC checksum
         let actual = value(&buffer.as_slice()[..=n]);
         if crc != actual {
-            return Err(WickErr::new(
-                Status::Corruption,
-                Some("block checksum mismatch"),
-            ));
+            return Err(Error::Corruption("block checksum mismatch".to_owned()));
         }
     }
     let data = {
@@ -602,29 +589,18 @@ pub fn read_block(file: &dyn File, handle: &BlockHandle, verify_checksum: bool) 
                         decompressed.resize(len, 0u8);
                     }
                     Err(e) => {
-                        return Err(WickErr::new_from_raw(
-                            Status::CompressionError,
-                            None,
-                            Box::new(e),
-                        ));
+                        return Err(Error::CompressionFailed(e));
                     }
                 }
                 let mut dec = snap::Decoder::new();
                 if let Err(e) = dec.decompress(&buffer.as_slice()[..n], decompressed.as_mut_slice())
                 {
-                    return Err(WickErr::new_from_raw(
-                        Status::CompressionError,
-                        None,
-                        Box::new(e),
-                    ));
+                    return Err(Error::CompressionFailed(e));
                 }
                 decompressed
             }
             CompressionType::Unknown => {
-                return Err(WickErr::new(
-                    Status::Corruption,
-                    Some("bad block compression type"),
-                ))
+                return Err(Error::Corruption("bad block compression type".to_owned()))
             }
         }
     };

@@ -26,9 +26,9 @@ use crate::table_cache::TableCache;
 use crate::util::coding::put_fixed_64;
 use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
-use crate::util::status::{Result, Status, WickErr};
 use crate::version::version_edit::FileMetaData;
 use crate::version::version_set::total_file_size;
+use crate::{Error, Result};
 use std::cell::RefCell;
 use std::cmp::Ordering as CmpOrdering;
 use std::mem;
@@ -163,12 +163,7 @@ impl Version {
                     None => continue, // keep searching
                     Some((encoded_key, value)) => {
                         match ParsedInternalKey::decode_from(encoded_key.as_slice()) {
-                            None => {
-                                return Err(WickErr::new(
-                                    Status::Corruption,
-                                    Some("bad internal key"),
-                                ))
-                            }
+                            None => return Err(Error::Corruption("bad internal key".to_owned())),
                             Some(parsed_key) => {
                                 if self
                                     .options

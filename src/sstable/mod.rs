@@ -207,8 +207,8 @@ mod filter_block;
 pub mod table;
 
 use crate::util::coding::{decode_fixed_64, put_fixed_64};
-use crate::util::status::{Status, WickErr};
 use crate::util::varint::{VarintU64, MAX_VARINT_LEN_U64};
+use crate::{Error, Result};
 
 const TABLE_MAGIC_NUMBER: u64 = 0xdb4775248b80fb57;
 
@@ -268,15 +268,15 @@ impl BlockHandle {
     ///
     /// If varint decoding fails, return `Status::Corruption` with relative messages
     #[inline]
-    pub fn decode_from(src: &[u8]) -> Result<(Self, usize), WickErr> {
+    pub fn decode_from(src: &[u8]) -> Result<(Self, usize)> {
         if let Some((offset, n)) = VarintU64::read(src) {
             if let Some((size, m)) = VarintU64::read(&src[n..]) {
                 Ok((Self::new(offset, size), m + n))
             } else {
-                Err(WickErr::new(Status::Corruption, Some("bad block handle")))
+                Err(Error::Corruption("bad block handle".to_owned()))
             }
         } else {
-            Err(WickErr::new(Status::Corruption, Some("bad block handle")))
+            Err(Error::Corruption("bad block handle".to_owned()))
         }
     }
 }
@@ -304,12 +304,11 @@ impl Footer {
     ///
     /// Returns `Status::Corruption` when decoding meta index or index handle fails
     ///
-    pub fn decode_from(src: &[u8]) -> Result<(Self, usize), WickErr> {
+    pub fn decode_from(src: &[u8]) -> Result<(Self, usize)> {
         let magic = decode_fixed_64(&src[FOOTER_ENCODED_LENGTH - 8..]);
         if magic != TABLE_MAGIC_NUMBER {
-            return Err(WickErr::new(
-                Status::Corruption,
-                Some("not an sstable (bad magic number)"),
+            return Err(Error::Corruption(
+                "not an sstable (bad magic number)".to_owned(),
             ));
         };
         let (meta_index_handle, n) = BlockHandle::decode_from(src)?;
@@ -344,8 +343,6 @@ impl Footer {
 #[cfg(test)]
 mod test_footer {
     use crate::sstable::{BlockHandle, Footer};
-    use crate::util::status::Status;
-    use std::error::Error;
 
     #[test]
     fn test_footer_corruption() {
@@ -356,8 +353,10 @@ mod test_footer {
         let r1 = Footer::decode_from(&encoded);
         assert!(r1.is_err());
         let e1 = r1.unwrap_err();
-        assert_eq!(e1.status(), Status::Corruption);
-        assert_eq!(e1.description(), "not an sstable (bad magic number)");
+        assert_eq!(
+            e1.to_string(),
+            "data corruption: not an sstable (bad magic number)"
+        );
     }
 
     #[test]
@@ -386,7 +385,7 @@ mod tests {
     use crate::util::collection::HashSet;
     use crate::util::comparator::{BytewiseComparator, Comparator};
     use crate::util::slice::Slice;
-    use crate::util::status::{Result, Status, WickErr};
+    use crate::{Error, Result};
     use crate::{WriteBatch, WriteOptions};
     use rand::prelude::ThreadRng;
     use rand::Rng;
@@ -543,7 +542,7 @@ mod tests {
     // A helper struct to convert user key into lookup key for inner iterator
     struct KeyConvertingIterator<I: Iterator> {
         inner: I,
-        err: Cell<Option<WickErr>>,
+        err: Cell<Option<Error>>,
     }
 
     impl<I: Iterator> KeyConvertingIterator<I> {
@@ -585,10 +584,8 @@ mod tests {
             match ParsedInternalKey::decode_from(self.inner.key().as_slice()) {
                 Some(parsed_ikey) => Slice::from(parsed_ikey.user_key),
                 None => {
-                    self.err.set(Some(WickErr::new(
-                        Status::Corruption,
-                        Some("malformed internal key"),
-                    )));
+                    self.err
+                        .set(Some(Error::Corruption("malformed internal key".to_owned())));
                     Slice::from("corrupted key")
                 }
             }

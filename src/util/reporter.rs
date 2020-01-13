@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use crate::record::reader::Reporter;
-use crate::util::status::{Result, Status, WickErr};
+use crate::{Error, Result};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -37,11 +37,10 @@ impl LogReporter {
     }
     pub fn result(&self) -> Result<()> {
         let inner = self.inner.borrow();
-        let static_reasons: &'static str = Box::leak(Box::new(inner.reason.clone()));
         if inner.ok {
             Ok(())
         } else {
-            Err(WickErr::new(Status::Corruption, Some(static_reasons)))
+            Err(Error::Corruption(inner.reason.clone()))
         }
     }
 }

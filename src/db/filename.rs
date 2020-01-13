@@ -16,7 +16,7 @@
 // found in the LICENSE file.
 
 use crate::storage::{do_write_string_to_file, Storage};
-use crate::util::status::Result;
+use crate::Result;
 use std::ffi::OsStr;
 use std::path::{Path, MAIN_SEPARATOR};
 
