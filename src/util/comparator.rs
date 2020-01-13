@@ -58,11 +58,8 @@ pub trait Comparator: Send + Sync {
     fn successor(&self, key: &[u8]) -> Vec<u8>;
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct BytewiseComparator {}
-
-unsafe impl Send for BytewiseComparator {}
-unsafe impl Sync for BytewiseComparator {}
 
 impl Comparator for BytewiseComparator {
     #[inline]

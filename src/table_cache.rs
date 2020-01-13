@@ -29,18 +29,17 @@ use crate::Result;
 use std::sync::Arc;
 
 /// A `TableCache` is the cache for the sst files and the sstable in them
-#[derive(Clone)]
 pub struct TableCache<S: Storage + Clone> {
     storage: S,
     db_name: &'static str,
     options: Arc<Options>,
     // the key of cache is the file number
-    cache: Arc<dyn Cache<Arc<Table>>>,
+    cache: Arc<dyn Cache<Arc<Table<S::F>>>>,
 }
 
 impl<S: Storage + Clone> TableCache<S> {
     pub fn new(db_name: &'static str, options: Arc<Options>, size: usize, storage: S) -> Self {
-        let cache = Arc::new(SharedLRUCache::<Arc<Table>>::new(size));
+        let cache = Arc::new(SharedLRUCache::<Arc<Table<S::F>>>::new(size));
         Self {
             storage,
             db_name,
@@ -50,7 +49,7 @@ impl<S: Storage + Clone> TableCache<S> {
     }
 
     // Try to find the sst file from cache. If not found, try to find the file from storage and insert it into the cache
-    fn find_table(&self, file_number: u64, file_size: u64) -> Result<HandleRef<Arc<Table>>> {
+    fn find_table(&self, file_number: u64, file_size: u64) -> Result<HandleRef<Arc<Table<S::F>>>> {
         let mut key = vec![];
         VarintU64::put_varint(&mut key, file_number);
         match self.cache.look_up(key.as_slice()) {
@@ -98,7 +97,7 @@ impl<S: Storage + Clone> TableCache<S> {
         options: ReadOptions,
         file_number: u64,
         file_size: u64,
-    ) -> IterWithCleanup<ConcatenateIterator<BlockIterator, TableIterFactory>> {
+    ) -> IterWithCleanup<ConcatenateIterator<BlockIterator, TableIterFactory<S::F>>> {
         match self.find_table(file_number, file_size) {
             Ok(h) => {
                 let table = h.value().unwrap();
@@ -108,6 +107,17 @@ impl<S: Storage + Clone> TableCache<S> {
                 iter
             }
             Err(e) => IterWithCleanup::new_with_err(e),
+        }
+    }
+}
+
+impl<S: Storage + Clone> Clone for TableCache<S> {
+    fn clone(&self) -> Self {
+        TableCache {
+            storage: self.storage.clone(),
+            db_name: self.db_name,
+            options: self.options.clone(),
+            cache: self.cache.clone(),
         }
     }
 }

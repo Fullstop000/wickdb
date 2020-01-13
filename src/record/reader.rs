@@ -51,9 +51,9 @@ pub trait Reporter {
 
 /// A `Reader` is used for reading records from log file.
 /// The `Reader` always starts reading the records at `initial_offset` of the `file`.
-pub struct Reader {
+pub struct Reader<F: File> {
     // NOTICE: we probably mutate the underlying file in the FilePtr by calling `seek()` and this is not thread safe
-    file: Box<dyn File>,
+    file: F,
     reporter: Option<Box<dyn Reporter>>,
     // We should check sum for the record or not
     checksum: bool,
@@ -74,9 +74,9 @@ pub struct Reader {
     resyncing: bool,
 }
 
-impl Reader {
+impl<F: File> Reader<F> {
     pub fn new(
-        file: Box<dyn File>,
+        file: F,
         reporter: Option<Box<dyn Reporter>>,
         checksum: bool,
         initial_offset: u64,
@@ -97,7 +97,7 @@ impl Reader {
 
     /// Deliver the file's ownership
     #[inline]
-    pub fn into_file(self) -> Box<dyn File> {
+    pub fn into_file(self) -> F {
         self.file
     }
 

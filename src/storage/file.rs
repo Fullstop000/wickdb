@@ -29,7 +29,8 @@ use std::path::{Path, PathBuf};
 pub struct FileStorage;
 
 impl Storage for FileStorage {
-    fn create(&self, name: &str) -> Result<Box<dyn File>> {
+    type F = SysFile;
+    fn create(&self, name: &str) -> Result<Self::F> {
         match OpenOptions::new()
             .write(true)
             .read(true)
@@ -37,14 +38,14 @@ impl Storage for FileStorage {
             .truncate(true)
             .open(name)
         {
-            Ok(f) => Ok(Box::new(f)),
+            Ok(f) => Ok(f),
             Err(e) => Err(Error::IO(e)),
         }
     }
 
-    fn open(&self, name: &str) -> Result<Box<dyn File>> {
+    fn open(&self, name: &str) -> Result<Self::F> {
         match OpenOptions::new().write(true).read(true).open(name) {
-            Ok(f) => Ok(Box::new(f)),
+            Ok(f) => Ok(f),
             Err(e) => Err(Error::IO(e)),
         }
     }

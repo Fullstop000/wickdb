@@ -380,8 +380,8 @@ mod tests {
     use crate::options::{Options, ReadOptions};
     use crate::sstable::block::*;
     use crate::sstable::table::*;
-    use crate::storage::mem::MemStorage;
-    use crate::storage::Storage;
+    use crate::storage::mem::{FileNode, MemStorage};
+    use crate::storage::{File, Storage};
     use crate::util::collection::HashSet;
     use crate::util::comparator::{BytewiseComparator, Comparator};
     use crate::util::slice::Slice;
@@ -442,7 +442,7 @@ mod tests {
         fn finish(
             &mut self,
             options: Arc<Options>,
-            storage: &dyn Storage,
+            storage: &MemStorage,
             data: &[(Vec<u8>, Vec<u8>)],
         ) -> Result<()>;
 
@@ -468,7 +468,7 @@ mod tests {
         fn finish(
             &mut self,
             options: Arc<Options>,
-            _storage: &dyn Storage,
+            _storage: &MemStorage,
             data: &[(Vec<u8>, Vec<u8>)],
         ) -> Result<()> {
             let mut builder =
@@ -488,7 +488,7 @@ mod tests {
     }
 
     struct TableConstructor {
-        table: Option<Arc<Table>>,
+        table: Option<Arc<Table<FileNode>>>,
     }
 
     impl TableConstructor {
@@ -510,7 +510,7 @@ mod tests {
         fn finish(
             &mut self,
             options: Arc<Options>,
-            storage: &dyn Storage,
+            storage: &MemStorage,
             data: &[(Vec<u8>, Vec<u8>)],
         ) -> Result<()> {
             let file_name = "test_table";
@@ -701,7 +701,7 @@ mod tests {
         fn finish(
             &mut self,
             _options: Arc<Options>,
-            _storage: &dyn Storage,
+            _storage: &MemStorage,
             data: &[(Vec<u8>, Vec<u8>)],
         ) -> Result<()> {
             for (seq, (key, value)) in data.iter().enumerate() {
@@ -740,7 +740,7 @@ mod tests {
         fn finish(
             &mut self,
             _options: Arc<Options>,
-            _storage: &dyn Storage,
+            _storage: &MemStorage,
             data: &[(Vec<u8>, Vec<u8>)],
         ) -> Result<()> {
             for (key, value) in data.iter() {

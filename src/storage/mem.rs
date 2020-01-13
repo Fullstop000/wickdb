@@ -27,18 +27,19 @@ pub struct MemStorage {
 }
 
 impl Storage for MemStorage {
-    fn create(&self, name: &str) -> Result<Box<dyn File>> {
+    type F = FileNode;
+    fn create(&self, name: &str) -> Result<Self::F> {
         let file_node = FileNode::new(name);
         self.inner
             .write()
             .unwrap()
             .insert(String::from(name), file_node.clone());
-        Ok(Box::new(file_node))
+        Ok(file_node)
     }
 
-    fn open(&self, name: &str) -> Result<Box<dyn File>> {
+    fn open(&self, name: &str) -> Result<Self::F> {
         match self.inner.read().unwrap().get(name) {
-            Some(f) => Ok(Box::new(f.clone())),
+            Some(f) => Ok(f.clone()),
             None => Err(Error::IO(IOError::new(ErrorKind::NotFound, name))),
         }
     }
