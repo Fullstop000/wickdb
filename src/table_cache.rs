@@ -24,8 +24,8 @@ use crate::sstable::block::BlockIterator;
 use crate::sstable::table::{new_table_iterator, Table, TableIterFactory};
 use crate::storage::Storage;
 use crate::util::slice::Slice;
-use crate::util::status::Result;
 use crate::util::varint::VarintU64;
+use crate::Result;
 use std::sync::Arc;
 
 /// A `TableCache` is the cache for the sst files and the sstable in them

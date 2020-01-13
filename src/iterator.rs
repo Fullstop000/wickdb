@@ -17,7 +17,7 @@
 
 use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
-use crate::util::status::{Result, WickErr};
+use crate::{Error, Result};
 use std::cmp::Ordering;
 use std::mem;
 
@@ -73,7 +73,7 @@ pub struct IterWithCleanup<I: Iterator> {
     inner_iter: Option<I>,
     // Tasks to be executed when self is dropped
     tasks: Vec<Box<dyn FnMut()>>,
-    err: Option<WickErr>,
+    err: Option<Error>,
 }
 
 impl<I: Iterator> IterWithCleanup<I> {
@@ -85,7 +85,7 @@ impl<I: Iterator> IterWithCleanup<I> {
         }
     }
 
-    pub fn new_with_err(err: WickErr) -> Self {
+    pub fn new_with_err(err: Error) -> Self {
         Self {
             inner_iter: None,
             tasks: vec![],
@@ -164,7 +164,7 @@ impl<I: Iterator> Iterator for IterWithCleanup<I> {
 ///
 /// The `valid()` is always `false`
 pub struct EmptyIterator {
-    err: Option<WickErr>,
+    err: Option<Error>,
 }
 
 impl EmptyIterator {
@@ -215,7 +215,7 @@ pub struct ConcatenateIterator<I: Iterator, F: DerivedIterFactory> {
     factory: F,
     derived: Option<F::Iter>,
     prev_derived_value: Vec<u8>,
-    err: Option<WickErr>,
+    err: Option<Error>,
 }
 
 /// A factory that takes value from the origin and
@@ -237,10 +237,10 @@ impl<I: Iterator, F: DerivedIterFactory> ConcatenateIterator<I, F> {
     }
 
     #[inline]
-    fn maybe_save_err(old: &mut Option<WickErr>, new: Result<()>) {
+    fn maybe_save_err(old: &mut Option<Error>, new: Result<()>) {
         if old.is_none() {
             if let Err(e) = new {
-                mem::replace::<Option<WickErr>>(old, Some(e));
+                mem::replace::<Option<Error>>(old, Some(e));
             }
         }
     }
@@ -582,7 +582,7 @@ mod tests {
     use crate::rand::Rng;
     use crate::util::comparator::BytewiseComparator;
     use crate::util::slice::Slice;
-    use crate::util::status::Result;
+    use crate::Result;
     use std::cell::RefCell;
     use std::cmp::Ordering;
     use std::mem;

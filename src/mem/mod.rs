@@ -25,9 +25,8 @@ use crate::mem::skiplist::{Skiplist, SkiplistIterator};
 use crate::util::coding::{decode_fixed_64, put_fixed_64};
 use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
-use crate::util::status::Status;
-use crate::util::status::{Result, WickErr};
 use crate::util::varint::VarintU32;
+use crate::{Error, Result};
 use std::cmp::Ordering;
 use std::rc::Rc;
 
@@ -157,9 +156,7 @@ impl MemoryTable for MemTable {
                     let tag = decode_fixed_64(&internal_key.as_slice()[internal_key.size() - 8..]);
                     match ValueType::from(tag & 0xff as u64) {
                         ValueType::Value => return Some(Ok(iter.value())),
-                        ValueType::Deletion => {
-                            return Some(Err(WickErr::new(Status::NotFound, None)))
-                        }
+                        ValueType::Deletion => return Some(Err(Error::NotFound(None))),
                         ValueType::Unknown => { /* fallback to None*/ }
                     }
                 }
@@ -238,7 +235,6 @@ mod tests {
     use crate::iterator::Iterator;
     use crate::mem::{MemTable, MemoryTable};
     use crate::util::comparator::BytewiseComparator;
-    use crate::util::status::Status;
     use std::sync::Arc;
 
     fn new_mem_table() -> MemTable {
@@ -280,7 +276,7 @@ mod tests {
         let v = memtable.get(&LookupKey::new(b"foo", 1));
         assert_eq!(b"val1", v.unwrap().unwrap().as_slice());
         let v = memtable.get(&LookupKey::new(b"foo", 3));
-        assert_eq!(Status::NotFound, v.unwrap().unwrap_err().status());
+        assert!(v.unwrap().is_err());
         let v = memtable.get(&LookupKey::new(b"boo", 3));
         assert_eq!(b"boo", v.unwrap().unwrap().as_slice());
     }

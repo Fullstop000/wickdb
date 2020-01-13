@@ -18,7 +18,7 @@
 pub mod file;
 pub mod mem;
 
-use crate::util::status::{Result, Status, WickErr};
+use crate::{Error, Result};
 use std::io;
 use std::io::SeekFrom;
 use std::path::PathBuf;
@@ -103,15 +103,10 @@ pub trait File {
                     buf = &mut tmp[n..];
                     offset += n as u64;
                 }
-                Err(mut e) => match e.status() {
-                    Status::IOError => {
-                        if let Some(r) = e.take_raw() {
-                            match r.downcast_ref::<io::Error>() {
-                                Some(r) if r.kind() == io::ErrorKind::Interrupted => {}
-                                _ => return Err(e),
-                            }
-                        } else {
-                            return Err(e);
+                Err(e) => match e {
+                    Error::IO(err) => {
+                        if err.kind() != io::ErrorKind::Interrupted {
+                            return Err(Error::IO(err));
                         }
                     }
                     _ => return Err(e),
@@ -120,7 +115,7 @@ pub trait File {
         }
         if !buf.is_empty() {
             let e = io::Error::new(io::ErrorKind::UnexpectedEof, "failed to fill whole buffer");
-            Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e)))
+            Err(Error::IO(e))
         } else {
             Ok(())
         }

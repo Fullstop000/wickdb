@@ -19,8 +19,8 @@ use crate::iterator::Iterator;
 use crate::util::coding::{decode_fixed_32, put_fixed_32};
 use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
-use crate::util::status::{Result, Status, WickErr};
 use crate::util::varint::VarintU32;
+use crate::{Error, Result};
 use std::cmp::{min, Ordering};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -69,9 +69,8 @@ impl Block {
                 });
             }
         };
-        Err(WickErr::new(
-            Status::Corruption,
-            Some("[block] read invalid block content"),
+        Err(Error::Corruption(
+            "[block] read invalid block content".to_owned(),
         ))
     }
 
@@ -102,7 +101,7 @@ impl Default for Block {
 pub struct BlockIterator {
     cmp: Arc<dyn Comparator>,
 
-    err: Option<WickErr>,
+    err: Option<Error>,
     // underlying block data
     // should never be modified in iterator
     data: Rc<Vec<u8>>,
@@ -206,7 +205,7 @@ impl BlockIterator {
 
     #[inline]
     fn corruption_err(&mut self) {
-        self.err = Some(WickErr::new(Status::Corruption, Some("bad entry in block")));
+        self.err = Some(Error::Corruption("bad entry in block".to_owned()));
         self.key.clear();
         self.current = self.restarts;
         self.restart_index = self.restarts_len
@@ -478,7 +477,6 @@ mod tests {
     use crate::sstable::block::{Block, BlockIterator};
     use crate::util::coding::{decode_fixed_32, put_fixed_32};
     use crate::util::comparator::BytewiseComparator;
-    use crate::util::status::Status;
     use crate::util::varint::VarintU32;
     use std::sync::Arc;
 
@@ -496,8 +494,9 @@ mod tests {
 
     #[test]
     fn test_corrupted_block() {
+        // Invalid data size
         let res = Block::new(vec![0, 0, 0]);
-        assert_eq!(res.unwrap_err().status(), Status::Corruption);
+        assert!(res.is_err());
 
         let mut data = vec![];
         let mut test_restarts = vec![0, 10, 20];
@@ -508,7 +507,7 @@ mod tests {
         // Append invalid length of restarts
         put_fixed_32(&mut data, length + 1);
         let res = Block::new(data);
-        assert_eq!(res.unwrap_err().status(), Status::Corruption);
+        assert!(res.is_err());
     }
 
     #[test]

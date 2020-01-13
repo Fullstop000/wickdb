@@ -13,8 +13,8 @@
 
 use crate::storage::{File, Storage};
 use crate::util::collection::HashMap;
-use crate::util::status::{Result, Status, WickErr};
-use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+use crate::{Error, Result};
+use std::io::{Cursor, Error as IOError, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
@@ -39,7 +39,7 @@ impl Storage for MemStorage {
     fn open(&self, name: &str) -> Result<Box<dyn File>> {
         match self.inner.read().unwrap().get(name) {
             Some(f) => Ok(Box::new(f.clone())),
-            None => Err(WickErr::new(Status::IOError, Some("Not Found"))),
+            None => Err(Error::IO(IOError::new(ErrorKind::NotFound, name))),
         }
     }
 
@@ -65,7 +65,7 @@ impl Storage for MemStorage {
                 map.insert(new.to_owned(), f);
                 Ok(())
             }
-            None => Err(WickErr::new(Status::IOError, Some("Not Found"))),
+            None => Err(Error::IO(IOError::new(ErrorKind::NotFound, old))),
         }
     }
 
@@ -177,7 +177,7 @@ impl File for InmemFile {
         let r = self.contents.write(buf);
         // Prevent position from being modified
         self.contents.set_position(pos);
-        w_io_result!(r)
+        map_io_res!(r)
     }
 
     fn flush(&mut self) -> Result<()> {
@@ -190,18 +190,18 @@ impl File for InmemFile {
 
     fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
         let r = self.contents.seek(pos);
-        w_io_result!(r)
+        map_io_res!(r)
     }
 
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         let r = self.contents.read(buf);
-        w_io_result!(r)
+        map_io_res!(r)
     }
 
     fn read_all(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
         self.contents.set_position(0);
         let r = self.contents.read_to_end(buf);
-        w_io_result!(r)
+        map_io_res!(r)
     }
 
     fn len(&self) -> Result<u64> {
@@ -211,7 +211,7 @@ impl File for InmemFile {
     fn lock(&self) -> Result<()> {
         // Unlike described in comments, returns Err instead of blocking if locked
         if self.lock.load(Ordering::Acquire) {
-            Err(WickErr::new(Status::IOError, Some("Already locked")))
+            Err(Error::IO(IOError::new(ErrorKind::Other, "Already locked")))
         } else {
             self.lock.store(true, Ordering::Release);
             Ok(())
@@ -233,7 +233,7 @@ impl File for InmemFile {
                 return Ok(0);
             }
             let exact = if buf.len() as u64 + offset > length {
-                return Err(WickErr::new(Status::IOError, Some("EOF")));
+                return Err(Error::IO(IOError::new(ErrorKind::UnexpectedEof, "EOF")));
             } else {
                 buf.len()
             };
@@ -249,8 +249,6 @@ mod tests {
     use crate::storage::{File, Storage};
     use crate::util::coding::put_fixed_32;
     use crate::util::collection::HashSet;
-    use crate::util::status::Status;
-    use std::error::Error;
 
     #[test]
     fn test_mem_file_read_write() {
@@ -285,7 +283,10 @@ mod tests {
         assert!(f.lock().is_ok());
         assert!(f.unlock().is_ok());
         f.lock().expect("");
-        assert_eq!(f.lock().unwrap_err().status(), Status::IOError);
+        assert_eq!(
+            f.lock().unwrap_err().to_string(),
+            "I/O operation error: Already locked"
+        );
         f.unlock().expect("");
         assert!(f.unlock().is_ok());
     }
@@ -325,7 +326,7 @@ mod tests {
                         &buf.as_slice()[offset as usize..offset as usize + buf_len]
                     )
                 }
-                Err(e) => assert_eq!(e.description(), "EOF"),
+                Err(e) => assert_eq!(e.to_string(), "I/O operation error: EOF"),
             }
         }
     }
@@ -339,7 +340,10 @@ mod tests {
 
         let expected_not_found = env.open("not exist");
         assert!(expected_not_found.is_err());
-        assert_eq!(expected_not_found.err().unwrap().description(), "Not Found");
+        assert_eq!(
+            expected_not_found.err().unwrap().to_string(),
+            "I/O operation error: not exist"
+        );
 
         f = env.open("test1").expect("'open' should work");
         let mut read_buf = vec![];
@@ -349,7 +353,10 @@ mod tests {
 
         let expected_not_found = env.rename("not exist", "test3");
         assert!(expected_not_found.is_err());
-        assert_eq!(expected_not_found.unwrap_err().description(), "Not Found");
+        assert_eq!(
+            expected_not_found.unwrap_err().to_string(),
+            "I/O operation error: not exist"
+        );
 
         env.rename("test1", "test2").expect("'rename' should work");
         assert!(!env.exists("test1"));

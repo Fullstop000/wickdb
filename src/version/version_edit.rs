@@ -18,12 +18,12 @@
 use crate::db::format::InternalKey;
 use crate::util::collection::HashSet;
 use crate::util::slice::Slice;
-use crate::util::status::{Result, Status, WickErr};
 use crate::util::varint::{VarintU32, VarintU64};
 use crate::version::version_edit::Tag::{
     CompactPointer, Comparator, DeletedFile, LastSequence, LogNumber, NewFile, NextFileNumber,
     PrevLogNumber, Unknown,
 };
+use crate::{Error, Result};
 use std::fmt::{Debug, Formatter};
 use std::mem;
 use std::sync::atomic::AtomicUsize;
@@ -369,8 +369,7 @@ impl VersionEdit {
         if !msg.is_empty() {
             let mut m = "VersionEdit: ".to_owned();
             m.push_str(msg.as_str());
-            let s: &'static str = Box::leak(m.into_boxed_str());
-            return Err(WickErr::new(Status::Corruption, Some(s)));
+            return Err(Error::Corruption(m));
         }
         Ok(())
     }

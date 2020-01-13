@@ -19,7 +19,7 @@ use super::arena::*;
 use crate::iterator::Iterator;
 use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
-use crate::util::status::Result;
+use crate::Result;
 use rand::random;
 use std::cmp::Ordering as CmpOrdering;
 use std::intrinsics::copy_nonoverlapping;

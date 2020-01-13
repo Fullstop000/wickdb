@@ -19,8 +19,8 @@ use crate::db::format::ValueType;
 use crate::mem::{MemTable, MemoryTable};
 use crate::util::coding::{decode_fixed_32, decode_fixed_64, encode_fixed_32, encode_fixed_64};
 use crate::util::slice::Slice;
-use crate::util::status::{Result, Status, WickErr};
 use crate::util::varint::VarintU32;
+use crate::{Error, Result};
 
 pub const HEADER_SIZE: usize = 12;
 
@@ -116,9 +116,8 @@ impl WriteBatch {
     /// Insert all the records in the batch into the given `MemTable`
     pub fn insert_into(&self, mem: &MemTable) -> Result<()> {
         if self.contents.len() < HEADER_SIZE {
-            return Err(WickErr::new(
-                Status::Corruption,
-                Some("[batch] malformed WriteBatch (too small)"),
+            return Err(Error::Corruption(
+                "[batch] malformed WriteBatch (too small)".to_owned(),
             ));
         }
         let mut s = Slice::from(&self.contents.as_slice()[HEADER_SIZE..]);
@@ -137,10 +136,7 @@ impl WriteBatch {
                             continue;
                         }
                     }
-                    return Err(WickErr::new(
-                        Status::Corruption,
-                        Some("[batch] bad WriteBatch put"),
-                    ));
+                    return Err(Error::Corruption("[batch] bad WriteBatch put".to_owned()));
                 }
                 ValueType::Deletion => {
                     if let Some(key) = VarintU32::get_varint_prefixed_slice(&mut s) {
@@ -148,23 +144,20 @@ impl WriteBatch {
                         seq += 1;
                         continue;
                     }
-                    return Err(WickErr::new(
-                        Status::Corruption,
-                        Some("[batch] bad WriteBatch delete"),
+                    return Err(Error::Corruption(
+                        "[batch] bad WriteBatch delete".to_owned(),
                     ));
                 }
                 ValueType::Unknown => {
-                    return Err(WickErr::new(
-                        Status::Corruption,
-                        Some("[batch] unknown WriteBatch value type"),
+                    return Err(Error::Corruption(
+                        "[batch] unknown WriteBatch value type".to_owned(),
                     ))
                 }
             }
         }
         if found != self.get_count() {
-            return Err(WickErr::new(
-                Status::Corruption,
-                Some("[batch] WriteBatch has wrong count"),
+            return Err(Error::Corruption(
+                "[batch] WriteBatch has wrong count".to_owned(),
             ));
         }
         Ok(())

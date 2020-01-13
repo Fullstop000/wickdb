@@ -64,7 +64,7 @@ mod tests {
     use crate::storage::File;
     use crate::util::coding::encode_fixed_32;
     use crate::util::crc32::{mask, value};
-    use crate::util::status::{Result, Status, WickErr};
+    use crate::{Error, Result};
     use rand::Rng;
     use std::cell::RefCell;
     use std::cmp::min;
@@ -128,10 +128,9 @@ mod tests {
             match pos {
                 SeekFrom::Start(p) => {
                     if p > (self.contents.borrow().len() - 1) as u64 {
-                        return Err(WickErr::new(
-                            Status::NotFound,
-                            Some("in-memory file seeking pasts the end"),
-                        ));
+                        return Err(Error::NotFound(Some(
+                            "in-memory file seeking pasts the end".to_owned(),
+                        )));
                     }
                     self.contents.borrow_mut().drain(0..p as usize);
                     Ok(p)
@@ -145,7 +144,7 @@ mod tests {
             if *self.force_err.borrow() {
                 *self.force_err.borrow_mut() = false;
                 self.returned_partial = true;
-                return Err(WickErr::new(Status::Corruption, Some("read error")));
+                return Err(Error::Corruption("read error".to_owned()));
             }
             if self.contents.borrow().len() < buf.len() {
                 self.returned_partial = true;
@@ -313,6 +312,7 @@ mod tests {
         }
 
         pub fn match_error(&self, msg: &str) -> bool {
+            dbg!(self.reporter.message.borrow());
             match self.reporter.message.borrow().find(msg) {
                 Some(_) => true,
                 None => false,

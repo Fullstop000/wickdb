@@ -33,9 +33,9 @@ use crate::storage::{File, Storage};
 use crate::table_cache::TableCache;
 use crate::util::reporter::LogReporter;
 use crate::util::slice::Slice;
-use crate::util::status::{Result, Status, WickErr};
 use crate::version::version_edit::{FileMetaData, VersionEdit};
 use crate::version::version_set::VersionSet;
+use crate::{Error, Result};
 use crossbeam_channel::{Receiver, Sender};
 use crossbeam_utils::sync::ShardedLock;
 use std::cmp::Ordering as CmpOrdering;
@@ -246,41 +246,58 @@ impl<S: Storage + Clone> WickDB<S> {
                         last_seq += u64::from(grouped.batch.get_count());
                         // must initialize the WAL writer after `make_room_for_write`
                         let writer = versions.record_writer.as_mut().unwrap();
-                        let mut status = writer.add_record(grouped.batch.data());
+                        let mut res = writer.add_record(grouped.batch.data());
                         let mut sync_err = false;
-                        if status.is_ok() && grouped.options.sync {
-                            status = writer.sync();
-                            if status.is_err() {
+                        if res.is_ok() && grouped.options.sync {
+                            res = writer.sync();
+                            if res.is_err() {
                                 sync_err = true;
                             }
                         }
-                        if status.is_ok() {
+                        if res.is_ok() {
                             let memtable = db.mem.read().unwrap();
-                            status = grouped.batch.insert_into(&*memtable);
+                            // Might encounter corruption err here
+                            res = grouped.batch.insert_into(&*memtable);
                         }
-
-                        for signal in signals.iter() {
-                            if let Err(e) = signal.send(status.clone()) {
-                                error!(
-                                    "[process batch] Fail sending finshing signal to waiting batch: {}", e
-                                )
+                        match res {
+                            Ok(_) => {
+                                for signal in signals {
+                                    if let Err(e) = signal.send(Ok(())) {
+                                        error!(
+                                            "[process batch] Fail sending finshing signal to waiting batch: {}", e
+                                        )
+                                    }
+                                }
                             }
-                        }
-                        if let Err(e) = status {
-                            if sync_err {
-                                // The state of the log file is indeterminate: the log record we
-                                // just added may or may not show up when the DB is re-opened.
-                                // So we force the DB into a mode where all future writes fail.
-                                db.record_bg_error(e.clone());
+                            Err(e) => {
+                                warn!("[process batch] write batch failed: {}", e);
+                                for signal in signals {
+                                    if let Err(e) = signal.send(Err(Error::Customized(
+                                        "[process batch] write batch failed".to_owned(),
+                                    ))) {
+                                        error!(
+                                            "[process batch] Fail sending finshing signal to waiting batch: {}", e
+                                        )
+                                    }
+                                }
+                                if sync_err {
+                                    // The state of the log file is indeterminate: the log record we
+                                    // just added may or may not show up when the DB is re-opened.
+                                    // So we force the DB into a mode where all future writes fail.
+                                    db.record_bg_error(e);
+                                }
                             }
                         }
                         versions.set_last_sequence(last_seq);
                     }
                     Err(e) => {
+                        warn!("[process batch] no room for write requests: {}", e);
                         for signal in signals.iter() {
-                            if let Err(e) = signal.send(Err(e.clone())) {
+                            if let Err(e) = signal.send(Err(Error::Customized(
+                                "[process batch] no room for write requests".to_owned(),
+                            ))) {
                                 error!(
-                                    "[process batch] Fail sending finishing signal to waiting batch: {}", e
+                                    "[process batch] fail to send finishing signal to waiting batch: {}", e
                                 )
                             }
                         }
@@ -356,7 +373,7 @@ pub struct DBImpl<S: Storage + Clone> {
     mem: ShardedLock<MemTable>,
     im_mem: ShardedLock<Option<MemTable>>, // There is a compacted immutable table or not
     // Have we encountered a background error in paranoid mode
-    bg_error: RwLock<Option<WickErr>>,
+    bg_error: RwLock<Option<Error>>,
     // Whether the db is closing
     is_shutting_down: AtomicBool,
 }
@@ -403,10 +420,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
 
     fn get(&self, options: ReadOptions, key: &[u8]) -> Result<Option<Slice>> {
         if self.is_shutting_down.load(Ordering::Acquire) {
-            return Err(WickErr::new(
-                Status::NotSupported,
-                Some("Try to operate a closed db"),
-            ));
+            return Err(Error::DBClosed("get request".to_owned()));
         }
         let snapshot = match &options.snapshot {
             Some(snapshot) => snapshot.sequence(),
@@ -492,21 +506,13 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
                     }
                 }
             } else {
-                return Err(WickErr::new(
-                    Status::InvalidArgument,
-                    Some(Box::leak(
-                        (self.db_name.to_owned() + " does not exist (create_if_missing is false)")
-                            .into_boxed_str(),
-                    )),
+                return Err(Error::InvalidArgument(
+                    self.db_name.to_owned() + " does not exist (create_if_missing is false)",
                 ));
             }
         } else if self.options.error_if_exists {
-            return Err(WickErr::new(
-                Status::InvalidArgument,
-                Some(Box::leak(
-                    (self.db_name.to_owned() + " exists (error_if_exists is true)")
-                        .into_boxed_str(),
-                )),
+            return Err(Error::InvalidArgument(
+                self.db_name.to_owned() + " exists (error_if_exists is true)",
             ));
         }
         let mut versions = self.versions.lock().unwrap();
@@ -603,10 +609,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
                 return Err(e);
             }
             if record_buf.len() < HEADER_SIZE {
-                return Err(WickErr::new(
-                    Status::Corruption,
-                    Some("log record too small"),
-                ));
+                return Err(Error::Corruption("log record too small".to_owned()));
             }
             if mem.is_none() {
                 mem = Some(MemTable::new(self.internal_comparator.clone()))
@@ -703,10 +706,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
     // This function wakes up the thread in `process_batch`.
     fn schedule_batch_and_wait(&self, options: WriteOptions, batch: WriteBatch) -> Result<()> {
         if self.is_shutting_down.load(Ordering::Acquire) {
-            return Err(WickErr::new(
-                Status::NotSupported,
-                Some("Try to operate a closed db"),
-            ));
+            return Err(Error::DBClosed("schedule WriteBatch".to_owned()));
         }
         if batch.is_empty() {
             return Ok(());
@@ -717,7 +717,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         self.process_batch_sem.notify_all();
         match recv.recv() {
             Ok(m) => m,
-            Err(e) => Err(WickErr::new_from_raw(Status::Unexpected, None, Box::new(e))),
+            Err(e) => Err(Error::RecvError(e)),
         }
     }
 
@@ -787,10 +787,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         ) {
             Ok(()) => {
                 if self.is_shutting_down.load(Ordering::Acquire) {
-                    self.record_bg_error(WickErr::new(
-                        Status::IOError,
-                        Some("Deleting DB during memtable compaction"),
-                    ))
+                    self.record_bg_error(Error::DBClosed("compact memory table".to_owned()))
                 } else {
                     edit.prev_log_number = Some(0);
                     edit.log_number = Some(versions.log_number());
@@ -1028,10 +1025,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         }
         // TODO: simplify the implementation
         if status.is_ok() && self.is_shutting_down.load(Ordering::Acquire) {
-            status = Err(WickErr::new(
-                Status::IOError,
-                Some("Deleting DB during compaction"),
-            ))
+            status = Err(Error::DBClosed("major compaction".to_owned()))
         }
         if status.is_ok() && c.builder.is_some() {
             status = self.finish_output_file(c, input_iter.valid())
@@ -1076,8 +1070,8 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         versions
     }
 
-    // Replace the `bg_error` with new WickErr if it's None
-    fn record_bg_error(&self, e: WickErr) {
+    // Replace the `bg_error` with new `Error` if it's `None`
+    fn record_bg_error(&self, e: Error) {
         let old = self.bg_error.read().unwrap();
         if old.is_none() {
             mem::drop(old);

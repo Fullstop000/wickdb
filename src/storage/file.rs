@@ -16,7 +16,7 @@
 // found in the LICENSE SysFile. See the AUTHORS SysFile for names of contributors.
 
 use crate::storage::{File, Storage};
-use crate::util::status::{Result, Status, WickErr};
+use crate::{Error, Result};
 use fs2::FileExt;
 use std::fs::{
     create_dir_all, read_dir, remove_dir, remove_dir_all, remove_file, rename, File as SysFile,
@@ -38,20 +38,20 @@ impl Storage for FileStorage {
             .open(name)
         {
             Ok(f) => Ok(Box::new(f)),
-            Err(e) => Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e))),
+            Err(e) => Err(Error::IO(e)),
         }
     }
 
     fn open(&self, name: &str) -> Result<Box<dyn File>> {
         match OpenOptions::new().write(true).read(true).open(name) {
             Ok(f) => Ok(Box::new(f)),
-            Err(e) => Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e))),
+            Err(e) => Err(Error::IO(e)),
         }
     }
 
     fn remove(&self, name: &str) -> Result<()> {
         let r = remove_file(name);
-        w_io_result!(r)
+        map_io_res!(r)
     }
 
     fn remove_dir(&self, dir: &str, recursively: bool) -> Result<()> {
@@ -60,7 +60,7 @@ impl Storage for FileStorage {
         } else {
             remove_dir(dir)
         };
-        w_io_result!(r)
+        map_io_res!(r)
     }
 
     fn exists(&self, name: &str) -> bool {
@@ -68,12 +68,12 @@ impl Storage for FileStorage {
     }
 
     fn rename(&self, old: &str, new: &str) -> Result<()> {
-        w_io_result!(rename(old, new))
+        map_io_res!(rename(old, new))
     }
 
     fn mkdir_all(&self, dir: &str) -> Result<()> {
         let r = create_dir_all(dir);
-        w_io_result!(r)
+        map_io_res!(r)
     }
 
     fn list(&self, dir: &str) -> Result<Vec<PathBuf>> {
@@ -85,18 +85,12 @@ impl Storage for FileStorage {
                     for entry in rd {
                         match entry {
                             Ok(p) => v.push(p.path()),
-                            Err(e) => {
-                                return Err(WickErr::new_from_raw(
-                                    Status::IOError,
-                                    None,
-                                    Box::new(e),
-                                ))
-                            }
+                            Err(e) => return Err(Error::IO(e)),
                         }
                     }
                     return Ok(v);
                 }
-                Err(e) => return Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e))),
+                Err(e) => return Err(Error::IO(e)),
             }
         }
         Ok(vec![])
@@ -105,11 +99,11 @@ impl Storage for FileStorage {
 
 impl File for SysFile {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
-        w_io_result!(Write::write(self, buf))
+        map_io_res!(Write::write(self, buf))
     }
 
     fn flush(&mut self) -> Result<()> {
-        w_io_result!(Write::flush(self))
+        map_io_res!(Write::flush(self))
     }
 
     fn close(&mut self) -> Result<()> {
@@ -117,45 +111,45 @@ impl File for SysFile {
     }
 
     fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
-        w_io_result!(Seek::seek(self, pos))
+        map_io_res!(Seek::seek(self, pos))
     }
 
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         let mut reader = BufReader::new(self);
         let r = reader.read(buf);
-        w_io_result!(r)
+        map_io_res!(r)
     }
 
     fn read_all(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
         let mut reader = BufReader::new(self);
         let r = reader.read_to_end(buf);
-        w_io_result!(r)
+        map_io_res!(r)
     }
 
     fn len(&self) -> Result<u64> {
         match SysFile::metadata(self) {
             Ok(v) => Ok(v.len()),
-            Err(e) => Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e))),
+            Err(e) => Err(Error::IO(e)),
         }
     }
 
     fn lock(&self) -> Result<()> {
-        w_io_result!(SysFile::try_lock_exclusive(self))
+        map_io_res!(SysFile::try_lock_exclusive(self))
     }
 
     fn unlock(&self) -> Result<()> {
-        w_io_result!(FileExt::unlock(self))
+        map_io_res!(FileExt::unlock(self))
     }
 
     #[cfg(unix)]
     fn read_at(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
         let r = std::os::unix::prelude::FileExt::read_at(self, buf, offset);
-        w_io_result!(r)
+        map_io_res!(r)
     }
     #[cfg(windows)]
     fn read_at(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
         let r = std::os::windows::prelude::FileExt::seek_read(self, buf, offset);
-        w_io_result!(r)
+        map_io_res!(r)
     }
 }
 #[cfg(test)]

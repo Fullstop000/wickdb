@@ -20,7 +20,6 @@ use crate::record::{RecordType, BLOCK_SIZE, HEADER_SIZE};
 use crate::storage::File;
 use crate::util::coding::decode_fixed_32;
 use crate::util::crc32::{unmask, value};
-use std::error::Error;
 use std::io::SeekFrom;
 
 enum ReaderError {
@@ -249,7 +248,7 @@ impl Reader {
                             }
                         }
                         Err(e) => {
-                            self.report_drop(BLOCK_SIZE as u64, e.description());
+                            self.report_drop(BLOCK_SIZE as u64, &e.to_string());
                             self.eof = true;
                             return Err(ReaderError::EOF);
                         }
@@ -355,7 +354,7 @@ impl Reader {
         self.end_of_buffer_offset = block_start_location;
         if block_start_location > 0 {
             if let Err(e) = self.file.seek(SeekFrom::Start(block_start_location)) {
-                self.report_drop(block_start_location, e.description());
+                self.report_drop(block_start_location, &e.to_string());
                 return false;
             }
         }

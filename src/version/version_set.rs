@@ -33,12 +33,13 @@ use crate::util::coding::decode_fixed_64;
 use crate::util::collection::HashSet;
 use crate::util::comparator::{BytewiseComparator, Comparator};
 use crate::util::reporter::LogReporter;
-use crate::util::status::{Result, Status, WickErr};
 use crate::version::version_edit::{FileDelta, FileMetaData, VersionEdit};
 use crate::version::{LevelFileNumIterator, Version, FILE_META_LENGTH};
 use crate::ReadOptions;
+use crate::{Error, Result};
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::vec_deque::VecDeque;
+use std::ops::Add;
 use std::path::MAIN_SEPARATOR;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -624,22 +625,18 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         let (current_manifest, file_name) = match String::from_utf8(buf) {
             Ok(s) => {
                 if s.is_empty() {
-                    return Err(WickErr::new(
-                        Status::Corruption,
-                        Some("CURRENT file is empty"),
-                    ));
+                    return Err(Error::Corruption("CURRENT file is empty".to_owned()));
                 }
-                let mut prefix = self.db_name.to_owned();
-                prefix.push(MAIN_SEPARATOR);
-                let file_name = prefix + s.as_str();
+                let mut file_name = self.db_name.to_owned();
+                file_name.push(MAIN_SEPARATOR);
+                let file_name = file_name.add(&s);
                 (env.open(&file_name)?, file_name)
             }
             Err(e) => {
-                return Err(WickErr::new_from_raw(
-                    Status::Corruption,
-                    Some("Invalid CURRENT file content"),
-                    Box::new(e),
-                ));
+                return Err(Error::Corruption(format!(
+                    "Invalid CURRENT file content: {}",
+                    e
+                )));
             }
         };
         let file_length = current_manifest.len();
@@ -665,12 +662,8 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
             edit.decoded_from(&buf)?;
             if let Some(ref cmp_name) = edit.comparator_name {
                 if cmp_name.as_str() != self.icmp.user_comparator.name() {
-                    return Err(WickErr::new(
-                        Status::InvalidArgument,
-                        Some(Box::leak(
-                            (cmp_name.clone() + " does not match existing compactor")
-                                .into_boxed_str(),
-                        )),
+                    return Err(Error::InvalidArgument(
+                        cmp_name.clone() + " does not match existing compactor",
                     ));
                 }
             }
@@ -695,21 +688,18 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         }
 
         if !has_next_file_number {
-            return Err(WickErr::new(
-                Status::Corruption,
-                Some("no meta-nextfile entry in manifest"),
+            return Err(Error::Corruption(
+                "no meta-nextfile entry in manifest".to_owned(),
             ));
         }
         if !has_log_number {
-            return Err(WickErr::new(
-                Status::Corruption,
-                Some("no meta-lognumber entry in manifest"),
+            return Err(Error::Corruption(
+                "no meta-lognumber entry in manifest".to_owned(),
             ));
         }
         if !has_last_sequence {
-            return Err(WickErr::new(
-                Status::Corruption,
-                Some("no last-sequence-number entry in manifest"),
+            return Err(Error::Corruption(
+                "no last-sequence-number entry in manifest".to_owned(),
             ));
         }
 
@@ -996,9 +986,8 @@ impl<S: Storage + Clone> DerivedIterFactory for FileIterFactory<S> {
 
     fn derive(&self, value: &[u8]) -> Result<Self::Iter> {
         if value.len() != 2 * FILE_META_LENGTH {
-            Err(WickErr::new(
-                Status::Corruption,
-                Some("file reader invoked with unexpected value"),
+            Err(Error::Corruption(
+                "file reader invoked with unexpected value".to_owned(),
             ))
         } else {
             let file_number = decode_fixed_64(value);
