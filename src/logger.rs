@@ -17,16 +17,16 @@ use std::sync::Mutex;
 
 /// A simple file based Logger
 // TODO: maybe use slog-rs instead
-pub struct Logger {
-    file: Mutex<Box<dyn File>>,
+pub struct Logger<F: File> {
+    file: Mutex<F>,
     level: LevelFilter,
 }
 
-unsafe impl Send for Logger {}
-unsafe impl Sync for Logger {}
+// unsafe impl Send for Logger {}
+// unsafe impl Sync for Logger {}
 
-impl Logger {
-    pub fn new(file: Box<dyn File>, level: LevelFilter) -> Self {
+impl<F: File> Logger<F> {
+    pub fn new(file: F, level: LevelFilter) -> Self {
         Self {
             file: Mutex::new(file),
             level,
@@ -34,7 +34,7 @@ impl Logger {
     }
 }
 
-impl Log for Logger {
+impl<F: File> Log for Logger<F> {
     fn enabled(&self, metadata: &Metadata) -> bool {
         metadata.level() <= self.level
     }

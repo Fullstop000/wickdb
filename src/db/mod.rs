@@ -86,6 +86,7 @@ pub trait DB {
 
 /// The wrapper of `DBImpl` for concurrency control.
 /// `WickDB` is thread safe and is able to be shared by `clone()` in different threads.
+#[derive(Clone)]
 pub struct WickDB<S: Storage + Clone + 'static> {
     inner: Arc<DBImpl<S>>,
 }
@@ -333,21 +334,13 @@ impl<S: Storage + Clone> WickDB<S> {
     }
 }
 
-impl<S: Storage + Clone> Clone for WickDB<S> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-        }
-    }
-}
-
 pub struct DBImpl<S: Storage + Clone> {
     env: S,
     internal_comparator: InternalKeyComparator,
     options: Arc<Options>,
     // The physical path of wickdb
     db_name: &'static str,
-    db_lock: Option<Box<dyn File>>,
+    db_lock: Option<S::F>,
 
     /*
      * Fields for write batch scheduling
@@ -923,7 +916,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
 
     // Merging files in level n into file in level n + 1 and
     // keep the still-in-use files
-    fn do_compaction(&self, c: &mut Compaction) -> MutexGuard<VersionSet<S>> {
+    fn do_compaction(&self, c: &mut Compaction<S::F>) -> MutexGuard<VersionSet<S>> {
         let now = SystemTime::now();
         let mut input_iter =
             c.new_input_iterator(self.internal_comparator.clone(), self.table_cache.clone());
@@ -1110,7 +1103,11 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
     }
 
     // Finish the current output file by calling `buidler.finish` and insert it into the table cache
-    fn finish_output_file(&self, compact: &mut Compaction, input_iter_valid: bool) -> Result<()> {
+    fn finish_output_file(
+        &self,
+        compact: &mut Compaction<S::F>,
+        input_iter_valid: bool,
+    ) -> Result<()> {
         assert!(!compact.outputs.is_empty());
         assert!(compact.builder.is_some());
         let current_entries = compact.builder.as_ref().unwrap().num_entries();

@@ -19,7 +19,7 @@ use crate::db::format::{InternalKey, InternalKeyComparator};
 use crate::iterator::{ConcatenateIterator, Iterator, MergingIterator};
 use crate::options::{Options, ReadOptions};
 use crate::sstable::table::TableBuilder;
-use crate::storage::Storage;
+use crate::storage::{File, Storage};
 use crate::table_cache::TableCache;
 use crate::util::comparator::Comparator;
 use crate::version::version_edit::{FileMetaData, VersionEdit};
@@ -44,7 +44,7 @@ pub enum CompactionInputsRelation {
 }
 
 /// A Compaction encapsulates information about a compaction
-pub struct Compaction {
+pub struct Compaction<F: File> {
     options: Arc<Options>,
     // Target level to be compacted
     pub level: usize,
@@ -84,13 +84,13 @@ pub struct Compaction {
     // current table builder for output sst file
     // we rotate a new builder when the inputs hit
     // the `should_stop_before`
-    pub builder: Option<TableBuilder>,
+    pub builder: Option<TableBuilder<F>>,
 
     // total bytes has been written
     pub total_bytes: u64,
 }
 
-impl Compaction {
+impl<O: File> Compaction<O> {
     pub fn new(options: Arc<Options>, level: usize) -> Self {
         let max_levels = options.max_levels as usize;
         let mut level_ptrs = Vec::with_capacity(max_levels);
@@ -113,61 +113,6 @@ impl Compaction {
             builder: None,
             total_bytes: 0,
         }
-    }
-
-    /// Returns the minimal range that covers all entries in `files`
-    pub fn base_range<'a>(
-        files: &'a [Arc<FileMetaData>],
-        level: usize,
-        icmp: &InternalKeyComparator,
-    ) -> (&'a InternalKey, &'a InternalKey) {
-        assert!(
-            !files.is_empty(),
-            "[compaction] the input[0] shouldn't be empty when trying to get covered range"
-        );
-        if level == 0 {
-            // level 0 files are possible to overlaps with each other
-            let mut smallest = &files.first().unwrap().smallest;
-            let mut largest = &files.last().unwrap().largest;
-            for f in files.iter().skip(1) {
-                if icmp.compare(f.smallest.data(), smallest.data()) == CmpOrdering::Less {
-                    smallest = &f.smallest;
-                }
-                if icmp.compare(f.largest.data(), largest.data()) == CmpOrdering::Greater {
-                    largest = &f.largest;
-                }
-            }
-            (smallest, largest)
-        } else {
-            // no overlapping in level > 0 and file is ordered by smallest key
-            (
-                &files.first().unwrap().smallest,
-                &files.last().unwrap().largest,
-            )
-        }
-    }
-
-    /// Returns the minimal range that covers all key ranges in `current_l_files` and `next_l_files`
-    /// `current_l_files` means current level files to be compacted
-    /// `next_l_files` means next level files to be compacted
-    pub fn total_range<'a>(
-        current_l_files: &'a [Arc<FileMetaData>],
-        next_l_files: &'a [Arc<FileMetaData>],
-        level: usize,
-        icmp: &InternalKeyComparator,
-    ) -> (&'a InternalKey, &'a InternalKey) {
-        let (mut smallest, mut largest) = Self::base_range(current_l_files, level, icmp);
-        if !next_l_files.is_empty() {
-            let first = next_l_files.first().unwrap();
-            if icmp.compare(first.smallest.data(), smallest.data()) == CmpOrdering::Less {
-                smallest = &first.smallest
-            }
-            let last = next_l_files.last().unwrap();
-            if icmp.compare(last.largest.data(), largest.data()) == CmpOrdering::Greater {
-                largest = &last.largest
-            }
-        }
-        (smallest, largest)
     }
 
     /// Is this a trivial compaction that can be implemented by just
@@ -310,6 +255,60 @@ impl Compaction {
     }
 }
 
+/// Returns the minimal range that covers all entries in `files`
+pub fn base_range<'a>(
+    files: &'a [Arc<FileMetaData>],
+    level: usize,
+    icmp: &InternalKeyComparator,
+) -> (&'a InternalKey, &'a InternalKey) {
+    assert!(
+        !files.is_empty(),
+        "[compaction] the input[0] shouldn't be empty when trying to get covered range"
+    );
+    if level == 0 {
+        // level 0 files are possible to overlaps with each other
+        let mut smallest = &files.first().unwrap().smallest;
+        let mut largest = &files.last().unwrap().largest;
+        for f in files.iter().skip(1) {
+            if icmp.compare(f.smallest.data(), smallest.data()) == CmpOrdering::Less {
+                smallest = &f.smallest;
+            }
+            if icmp.compare(f.largest.data(), largest.data()) == CmpOrdering::Greater {
+                largest = &f.largest;
+            }
+        }
+        (smallest, largest)
+    } else {
+        // no overlapping in level > 0 and file is ordered by smallest key
+        (
+            &files.first().unwrap().smallest,
+            &files.last().unwrap().largest,
+        )
+    }
+}
+
+/// Returns the minimal range that covers all key ranges in `current_l_files` and `next_l_files`
+/// `current_l_files` means current level files to be compacted
+/// `next_l_files` means next level files to be compacted
+pub fn total_range<'a>(
+    current_l_files: &'a [Arc<FileMetaData>],
+    next_l_files: &'a [Arc<FileMetaData>],
+    level: usize,
+    icmp: &InternalKeyComparator,
+) -> (&'a InternalKey, &'a InternalKey) {
+    let (mut smallest, mut largest) = base_range(current_l_files, level, icmp);
+    if !next_l_files.is_empty() {
+        let first = next_l_files.first().unwrap();
+        if icmp.compare(first.smallest.data(), smallest.data()) == CmpOrdering::Less {
+            smallest = &first.smallest
+        }
+        let last = next_l_files.last().unwrap();
+        if icmp.compare(last.largest.data(), largest.data()) == CmpOrdering::Greater {
+            largest = &last.largest
+        }
+    }
+    (smallest, largest)
+}
 /// A helper struct for recording the statistics in compactions
 pub struct CompactionStats {
     micros: u64,

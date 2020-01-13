@@ -22,8 +22,8 @@ use crate::util::crc32;
 use crate::Result;
 
 /// Writer writes records to an underlying log `File`.
-pub struct Writer {
-    dest: Box<dyn File>,
+pub struct Writer<F: File> {
+    dest: F,
     //Current offset in block
     block_offset: usize,
     // crc32c values for all supported record types.  These are
@@ -32,8 +32,8 @@ pub struct Writer {
     crc_cache: [u32; (RecordType::Last as usize + 1) as usize],
 }
 
-impl Writer {
-    pub fn new(dest: Box<dyn File>) -> Self {
+impl<F: File> Writer<F> {
+    pub fn new(dest: F) -> Self {
         let n = RecordType::Last as usize;
         let mut cache = [0; RecordType::Last as usize + 1];
         for h in 1..=n {

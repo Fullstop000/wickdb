@@ -30,11 +30,12 @@ use std::path::PathBuf;
 ///
 /// `Storage` should be thread safe
 pub trait Storage: Send + Sync {
+    type F: File + 'static;
     /// Create a file if it does not exist and will truncate it if it does.
-    fn create(&self, name: &str) -> Result<Box<dyn File>>;
+    fn create(&self, name: &str) -> Result<Self::F>;
 
     /// Open a file for writing and reading
-    fn open(&self, name: &str) -> Result<Box<dyn File>>;
+    fn open(&self, name: &str) -> Result<Self::F>;
 
     /// Delete the named file
     fn remove(&self, name: &str) -> Result<()>;
@@ -58,7 +59,7 @@ pub trait Storage: Send + Sync {
 }
 
 /// A file abstraction for IO operations
-pub trait File {
+pub trait File: Send + Sync {
     fn write(&mut self, buf: &[u8]) -> Result<usize>;
     fn flush(&mut self) -> Result<()>;
     fn close(&mut self) -> Result<()>;
@@ -123,8 +124,8 @@ pub trait File {
 }
 
 /// Write given `data` into underlying `env` file and flush file iff `should_sync` is true
-pub fn do_write_string_to_file(
-    env: &dyn Storage,
+pub fn do_write_string_to_file<S: Storage>(
+    env: &S,
     data: String,
     file_name: &str,
     should_sync: bool,

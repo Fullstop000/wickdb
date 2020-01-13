@@ -107,7 +107,7 @@ pub fn parse_filename<P: AsRef<Path>>(filename: P) -> Option<(FileType, u64)> {
 }
 
 /// Update the CURRENT file to point to new MANIFEST file
-pub fn update_current(env: &dyn Storage, dbname: &str, manifest_file_num: u64) -> Result<()> {
+pub fn update_current<S: Storage>(env: &S, dbname: &str, manifest_file_num: u64) -> Result<()> {
     // Remove leading "dbname/" and add newline to manifest file nam
     let mut manifest = generate_filename(dbname, FileType::Manifest, manifest_file_num);
     manifest.drain(0..=dbname.len());

@@ -15,7 +15,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use crate::compaction::{Compaction, CompactionStats, ManualCompaction};
+use crate::compaction::{base_range, total_range, Compaction, CompactionStats, ManualCompaction};
 use crate::db::build_table;
 use crate::db::filename::{generate_filename, parse_filename, update_current, FileType};
 use crate::db::format::{InternalKey, InternalKeyComparator};
@@ -27,7 +27,7 @@ use crate::snapshot::{Snapshot, SnapshotList};
 use crate::sstable::block::BlockIterator;
 use crate::sstable::table::TableBuilder;
 use crate::sstable::table::TableIterFactory;
-use crate::storage::Storage;
+use crate::storage::{File, Storage};
 use crate::table_cache::TableCache;
 use crate::util::coding::decode_fixed_64;
 use crate::util::collection::HashSet;
@@ -161,7 +161,7 @@ pub struct VersionSet<S: Storage + Clone> {
     // Represent a manual compaction, temporarily just for test
     pub manual_compaction: Option<ManualCompaction>,
     // WAL writer
-    pub record_writer: Option<Writer>,
+    pub record_writer: Option<Writer<S::F>>,
 
     // db path
     db_name: &'static str,
@@ -179,7 +179,7 @@ pub struct VersionSet<S: Storage + Clone> {
 
     // the current manifest file number
     manifest_file_number: u64,
-    manifest_writer: Option<Writer>,
+    manifest_writer: Option<Writer<S::F>>,
 
     versions: VecDeque<Arc<Version>>,
 
@@ -440,7 +440,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         level: usize,
         begin: Option<&InternalKey>,
         end: Option<&InternalKey>,
-    ) -> Option<Compaction> {
+    ) -> Option<Compaction<S::F>> {
         let version = self.current();
         let mut overlapping_inputs = version.get_overlapping_inputs(level, begin, end);
         if overlapping_inputs.is_empty() {
@@ -471,7 +471,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
     /// Returns `None` if there is no compaction to be done.
     /// Otherwise returns compaction object that
     /// describes the compaction.
-    pub fn pick_compaction(&mut self) -> Option<Compaction> {
+    pub fn pick_compaction(&mut self) -> Option<Compaction<S::F>> {
         let current = self.current();
         let size_compaction = current.compaction_score >= 1.0;
         let mut file_to_compact = Arc::new(FileMetaData::default());
@@ -527,7 +527,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         // Files in level 0 may overlap each other, so pick up all overlapping ones
         if compaction.level == 0 {
             let (smallest, largest) =
-                Compaction::base_range(&compaction.inputs[0], compaction.level, &self.icmp);
+                base_range(&compaction.inputs[0], compaction.level, &self.icmp);
             // Note that the next call will discard the file we placed in
             // inputs[0] earlier and replace it with an overlapping set
             // which will include the picked file.
@@ -602,7 +602,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
     }
 
     /// Create new table builder and physical file for current output in Compaction
-    pub fn open_compaction_output_file(&mut self, compact: &mut Compaction) -> Result<()> {
+    pub fn open_compaction_output_file(&mut self, compact: &mut Compaction<S::F>) -> Result<()> {
         assert!(compact.builder.is_none());
         let file_number = self.inc_next_file_number();
         self.pending_outputs.insert(file_number);
@@ -735,7 +735,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
 
     // Create snapshot of current version and persistent to manifest file.
     // Only be called when initializing a new db
-    fn write_snapshot(&self, writer: &mut Writer) -> Result<()> {
+    fn write_snapshot(&self, writer: &mut Writer<S::F>) -> Result<()> {
         let mut edit = VersionEdit::new(self.options.max_levels);
         // Save metadata
         edit.set_comparator_name(String::from(self.icmp.user_comparator.name()));
@@ -770,19 +770,19 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
     // Pick up files to compact in `c.level+1` based on given compaction
     // The input files in `c.level` might expand because of getting a large key range from newly picked files
     // in `c.level + 1`. And the final key range in `c.level + 1` should be a subset of `c.level`
-    fn setup_other_inputs(&mut self, c: Compaction) -> Compaction {
+    fn setup_other_inputs(&mut self, c: Compaction<S::F>) -> Compaction<S::F> {
         let mut c = self.add_boundary_inputs(c);
         let current = &self.current();
         // TODO: remove this clone
         let not_expand = std::mem::replace(&mut c.inputs, [vec![], vec![]])[0].clone();
         // Calculate the key range in current level after `add_boundary_inputs`
-        let (smallest, largest) = Compaction::base_range(&not_expand, c.level, &self.icmp);
+        let (smallest, largest) = base_range(&not_expand, c.level, &self.icmp);
         // figure out the overlapping files in next level
         let overlapping_next_level =
             current.get_overlapping_inputs(c.level + 1, Some(smallest), Some(largest));
         // Re-calculate total key range of inputting files for compaction
         let (all_smallest, all_largest) =
-            Compaction::total_range(&not_expand, &overlapping_next_level, c.level, &self.icmp);
+            total_range(&not_expand, &overlapping_next_level, c.level, &self.icmp);
 
         // See whether we can grow the number of inputs in "level" without
         // changing the number of "level+1" files we pick up.
@@ -801,8 +801,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
             if expanded0.len() > not_expand.len()
                 && next_size + expanded0_size <= self.options.expanded_compaction_byte_size_limit()
             {
-                let (new_smallest, new_largest) =
-                    Compaction::base_range(&expanded0, c.level, &self.icmp);
+                let (new_smallest, new_largest) = base_range(&expanded0, c.level, &self.icmp);
                 // TODO: use a more sufficient way to checking expanding in L(n+1) ?
                 let expanded_next = current.get_overlapping_inputs(
                     c.level + 1,
@@ -839,7 +838,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         };
 
         let (final_smallest, final_largest) =
-            Compaction::total_range(&current_files, &next_files, c.level, &self.icmp);
+            total_range(&current_files, &next_files, c.level, &self.icmp);
         // Compute the set of grandparent files that overlap this compaction
         // (parent == level+1; grandparent == level+2)
         if c.level + 2 < self.options.max_levels as usize {
@@ -864,7 +863,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
     }
 
     // A helper of 'add_boundary_input_for_compact_files' for files in `c.level`
-    fn add_boundary_inputs(&self, mut c: Compaction) -> Compaction {
+    fn add_boundary_inputs(&self, mut c: Compaction<S::F>) -> Compaction<S::F> {
         self.add_boundary_inputs_for_compact_files(c.level, &mut c.inputs[0]);
         c
     }
@@ -982,7 +981,7 @@ impl<S: Storage + Clone> FileIterFactory<S> {
 }
 
 impl<S: Storage + Clone> DerivedIterFactory for FileIterFactory<S> {
-    type Iter = IterWithCleanup<ConcatenateIterator<BlockIterator, TableIterFactory>>;
+    type Iter = IterWithCleanup<ConcatenateIterator<BlockIterator, TableIterFactory<S::F>>>;
 
     fn derive(&self, value: &[u8]) -> Result<Self::Iter> {
         if value.len() != 2 * FILE_META_LENGTH {

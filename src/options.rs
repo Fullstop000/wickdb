@@ -23,7 +23,7 @@ use crate::logger::Logger;
 use crate::options::CompressionType::{NoCompression, SnappyCompression, Unknown};
 use crate::snapshot::Snapshot;
 use crate::sstable::block::Block;
-use crate::storage::Storage;
+use crate::storage::{File, Storage};
 use crate::util::comparator::{BytewiseComparator, Comparator};
 use crate::LevelFilter;
 use crate::Log;
@@ -206,7 +206,11 @@ impl Options {
     }
 
     /// Initialize Options by limiting ranges of some flags, applying customized Logger and etc.
-    pub(crate) fn initialize(&mut self, db_name: String, storage: &dyn Storage) {
+    pub(crate) fn initialize<O: File + 'static, S: Storage<F = O>>(
+        &mut self,
+        db_name: String,
+        storage: &S,
+    ) {
         self.max_open_files =
             Self::clip_range(self.max_open_files, 64 + self.non_table_cache_files, 50000);
         self.write_buffer_size = Self::clip_range(self.write_buffer_size, 64 << 10, 1 << 30);
