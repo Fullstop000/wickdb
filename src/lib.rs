@@ -21,6 +21,9 @@ extern crate log;
 extern crate crc32c;
 extern crate crossbeam_channel;
 extern crate crossbeam_utils;
+extern crate num;
+#[macro_use]
+extern crate num_derive;
 extern crate quick_error;
 extern crate rand;
 extern crate snap;

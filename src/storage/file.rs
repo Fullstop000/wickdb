@@ -30,7 +30,7 @@ pub struct FileStorage;
 
 impl Storage for FileStorage {
     type F = SysFile;
-    fn create(&self, name: &str) -> Result<Self::F> {
+    fn create<P: AsRef<Path>>(&self, name: P) -> Result<Self::F> {
         match OpenOptions::new()
             .write(true)
             .read(true)
@@ -43,19 +43,19 @@ impl Storage for FileStorage {
         }
     }
 
-    fn open(&self, name: &str) -> Result<Self::F> {
+    fn open<P: AsRef<Path>>(&self, name: P) -> Result<Self::F> {
         match OpenOptions::new().write(true).read(true).open(name) {
             Ok(f) => Ok(f),
             Err(e) => Err(Error::IO(e)),
         }
     }
 
-    fn remove(&self, name: &str) -> Result<()> {
+    fn remove<P: AsRef<Path>>(&self, name: P) -> Result<()> {
         let r = remove_file(name);
         map_io_res!(r)
     }
 
-    fn remove_dir(&self, dir: &str, recursively: bool) -> Result<()> {
+    fn remove_dir<P: AsRef<Path>>(&self, dir: P, recursively: bool) -> Result<()> {
         let r = if recursively {
             remove_dir_all(dir)
         } else {
@@ -64,24 +64,23 @@ impl Storage for FileStorage {
         map_io_res!(r)
     }
 
-    fn exists(&self, name: &str) -> bool {
-        Path::new(name).exists()
+    fn exists<P: AsRef<Path>>(&self, name: P) -> bool {
+        name.as_ref().exists()
     }
 
-    fn rename(&self, old: &str, new: &str) -> Result<()> {
+    fn rename<P: AsRef<Path>>(&self, old: P, new: P) -> Result<()> {
         map_io_res!(rename(old, new))
     }
 
-    fn mkdir_all(&self, dir: &str) -> Result<()> {
+    fn mkdir_all<P: AsRef<Path>>(&self, dir: P) -> Result<()> {
         let r = create_dir_all(dir);
         map_io_res!(r)
     }
 
-    fn list(&self, dir: &str) -> Result<Vec<PathBuf>> {
-        let path = Path::new(dir);
-        if path.is_dir() {
+    fn list<P: AsRef<Path>>(&self, dir: P) -> Result<Vec<PathBuf>> {
+        if dir.as_ref().is_dir() {
             let mut v = vec![];
-            match read_dir(path) {
+            match read_dir(dir) {
                 Ok(rd) => {
                     for entry in rd {
                         match entry {

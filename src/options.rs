@@ -20,7 +20,6 @@ use crate::cache::Cache;
 use crate::db::filename::{generate_filename, FileType};
 use crate::filter::FilterPolicy;
 use crate::logger::Logger;
-use crate::options::CompressionType::{NoCompression, SnappyCompression, Unknown};
 use crate::snapshot::Snapshot;
 use crate::sstable::block::Block;
 use crate::storage::{File, Storage};
@@ -30,7 +29,7 @@ use crate::Log;
 use std::rc::Rc;
 use std::sync::Arc;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, FromPrimitive)]
 pub enum CompressionType {
     NoCompression = 0,
     SnappyCompression = 1,
@@ -39,11 +38,7 @@ pub enum CompressionType {
 
 impl From<u8> for CompressionType {
     fn from(i: u8) -> Self {
-        match i {
-            0 => NoCompression,
-            1 => SnappyCompression,
-            _ => Unknown,
-        }
+        num::FromPrimitive::from_u8(i).unwrap()
     }
 }
 
@@ -273,7 +268,7 @@ impl Default for Options {
             block_size: 4 * 1024, // 4KB
             block_restart_interval: 16,
             max_file_size: 2 * 1024 * 1024, // 2MB
-            compression: SnappyCompression,
+            compression: CompressionType::SnappyCompression,
             reuse_logs: true,
             filter_policy: None,
             logger: None,
