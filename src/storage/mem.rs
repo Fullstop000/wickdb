@@ -865,13 +865,23 @@ mod tests {
     }
     #[test]
     fn test_path_clean() {
-        let tests = vec![
-            ("/path/../test/", "/path/test"),
-            ("/path/./test/..", "/path/test"),
-            ("path", "/path"),
-            ("/", "/"),
-            ("///", "/"),
-        ];
+        let tests = if cfg!(windows) {
+            vec![
+                ("\\path\\..\\test\\", "\\path]\\test"),
+                ("\\path\\.\\test\\..", "\\path\\test"),
+                ("path", "\\path"),
+                ("\\", "\\"),
+                (r#"\\\"#, "\\"),
+            ]
+        } else {
+            vec![
+                ("/path/../test/", "/path/test"),
+                ("/path/./test/..", "/path/test"),
+                ("path", "/path"),
+                ("/", "/"),
+                ("///", "/"),
+            ]
+        };
         for (input, expected) in tests {
             let res = clean(input);
             assert_eq!(res.to_str().unwrap(), expected);

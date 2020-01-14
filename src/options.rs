@@ -38,7 +38,7 @@ pub enum CompressionType {
 
 impl From<u8> for CompressionType {
     fn from(i: u8) -> Self {
-        num::FromPrimitive::from_u8(i).unwrap()
+        num_traits::FromPrimitive::from_u8(i).unwrap()
     }
 }
 
