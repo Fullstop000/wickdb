@@ -867,7 +867,7 @@ mod tests {
     fn test_path_clean() {
         let tests = if cfg!(windows) {
             vec![
-                ("\\path\\..\\test\\", "\\path]\\test"),
+                ("\\path\\..\\test\\", "\\path\\test"),
                 ("\\path\\.\\test\\..", "\\path\\test"),
                 ("path", "\\path"),
                 ("\\", "\\"),
