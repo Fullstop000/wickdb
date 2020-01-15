@@ -674,13 +674,9 @@ mod tests {
         assert!(store.exists("test1"));
         f.write(b"hello world").unwrap();
 
-        // Test `open`
+        // Test `open` a non-exist file
         let expected_not_found = store.open("not exist");
         assert!(expected_not_found.is_err());
-        assert_eq!(
-            expected_not_found.err().unwrap().to_string(),
-            "I/O operation error: /not exist: No such file"
-        );
 
         f = store.open("test1").unwrap();
         let mut read_buf = vec![];
@@ -689,10 +685,6 @@ mod tests {
 
         let expected_not_found = store.rename("not exist", "test3");
         assert!(expected_not_found.is_err());
-        assert_eq!(
-            expected_not_found.unwrap_err().to_string(),
-            "I/O operation error: /not exist: No such file or directory"
-        );
 
         // Test `rename`
         store.rename("test1", "test2").unwrap();
