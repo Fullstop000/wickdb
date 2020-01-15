@@ -14,6 +14,8 @@ crc32c = "0.4.0"
 fs2 = "0.4.3"
 fxhash = "0.2.1"
 quick-error = "1.2.3"
+num-traits = "0.2"
+num-derive = "0.3"
 
 [dev-dependencies]
 criterion = "0.3.0"

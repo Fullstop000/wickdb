@@ -123,7 +123,7 @@ impl<F: File> Table<F> {
             let mut cache_key_buffer = vec![0; 16];
             put_fixed_64(&mut cache_key_buffer, self.cache_id);
             put_fixed_64(&mut cache_key_buffer, data_block_handle.offset);
-            if let Some(cache_handle) = cache.look_up(&cache_key_buffer.as_slice()) {
+            if let Some(cache_handle) = cache.look_up(&cache_key_buffer) {
                 let b = cache_handle.value().unwrap();
                 cache.release(cache_handle);
                 b

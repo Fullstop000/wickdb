@@ -21,7 +21,7 @@ pub mod mem;
 use crate::{Error, Result};
 use std::io;
 use std::io::SeekFrom;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// `Storage` is a namespace for files.
 ///
@@ -31,31 +31,31 @@ use std::path::PathBuf;
 /// `Storage` should be thread safe
 pub trait Storage: Send + Sync {
     type F: File + 'static;
-    /// Create a file if it does not exist and will truncate it if it does.
-    fn create(&self, name: &str) -> Result<Self::F>;
+    /// Create a file if it does not exist and truncates exist one.
+    fn create<P: AsRef<Path>>(&self, name: P) -> Result<Self::F>;
 
     /// Open a file for writing and reading
-    fn open(&self, name: &str) -> Result<Self::F>;
+    fn open<P: AsRef<Path>>(&self, name: P) -> Result<Self::F>;
 
     /// Delete the named file
-    fn remove(&self, name: &str) -> Result<()>;
+    fn remove<P: AsRef<Path>>(&self, name: P) -> Result<()>;
 
     /// Removes a directory at this path. If `recursively`, removes all its contents.
-    fn remove_dir(&self, dir: &str, recursively: bool) -> Result<()>;
+    fn remove_dir<P: AsRef<Path>>(&self, dir: P, recursively: bool) -> Result<()>;
 
     /// Returns true iff the named file exists.
-    fn exists(&self, name: &str) -> bool;
+    fn exists<P: AsRef<Path>>(&self, name: P) -> bool;
 
     /// Rename a file or directory to a new name, replacing the original file if
     /// `new` already exists.
-    fn rename(&self, old: &str, new: &str) -> Result<()>;
+    fn rename<P: AsRef<Path>>(&self, old: P, new: P) -> Result<()>;
 
     /// Recursively create a directory and all of its parent components if they
     /// are missing.
-    fn mkdir_all(&self, dir: &str) -> Result<()>;
+    fn mkdir_all<P: AsRef<Path>>(&self, dir: P) -> Result<()>;
 
-    /// Returns a list of file names in given
-    fn list(&self, dir: &str) -> Result<Vec<PathBuf>>;
+    /// Returns a list of the full-path to each file in given directory
+    fn list<P: AsRef<Path>>(&self, dir: P) -> Result<Vec<PathBuf>>;
 }
 
 /// A file abstraction for IO operations
