@@ -47,8 +47,8 @@ impl<S: Storage + Clone> TableCache<S> {
         }
     }
 
-    // Try to find the sst file from cache. If not found, try to find the file from storage and insert it into the cache
-    fn find_table<C: Comparator + Clone>(
+    /// Try to find the sst file from cache. If not found, try to find the file from storage and insert it into the cache
+    pub fn find_table<C: Comparator + Clone>(
         &self,
         cmp: C,
         file_number: u64,

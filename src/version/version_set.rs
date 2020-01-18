@@ -15,7 +15,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use crate::compaction::{base_range, total_range, Compaction, CompactionStats, ManualCompaction};
+use crate::compaction::{base_range, total_range, Compaction, CompactionStats};
 use crate::db::build_table;
 use crate::db::filename::{generate_filename, parse_filename, update_current, FileType};
 use crate::db::format::{InternalKey, InternalKeyComparator};
@@ -158,8 +158,6 @@ pub struct VersionSet<S: Storage + Clone> {
     pub compaction_stats: Vec<CompactionStats>,
     // Set of table files to protect from deletion because they are part of ongoing compaction
     pub pending_outputs: HashSet<u64>,
-    // Represent a manual compaction, temporarily just for test
-    pub manual_compaction: Option<ManualCompaction>,
     // WAL writer
     pub record_writer: Option<Writer<S::F>>,
 
@@ -199,7 +197,6 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
             snapshots: SnapshotList::new(),
             compaction_stats,
             pending_outputs: HashSet::default(),
-            manual_compaction: None,
             db_name,
             storage,
             record_writer: None,
@@ -219,7 +216,8 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
     #[inline]
     pub fn level_files_count(&self, level: usize) -> usize {
         assert!(level < self.options.max_levels as usize);
-        self.versions.front().unwrap().files[level].len()
+        let level_files = &self.versions.front().unwrap().files;
+        level_files.get(level).map_or(0, |files| files.len())
     }
 
     /// Returns `prev_log_number`
@@ -238,17 +236,6 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
     #[inline]
     pub fn set_log_number(&mut self, log_num: u64) {
         self.log_number = log_num;
-    }
-
-    /// Whether the current version needs to be compacted
-    #[inline]
-    pub fn needs_compaction(&self) -> bool {
-        if self.manual_compaction.is_some() {
-            true
-        } else {
-            let current = self.current();
-            current.compaction_score > 1.0 || current.file_to_compact.read().unwrap().is_some()
-        }
     }
 
     /// Returns the next file number

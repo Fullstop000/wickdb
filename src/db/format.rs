@@ -171,7 +171,7 @@ impl InternalKey {
     #[inline]
     pub fn user_key(&self) -> &[u8] {
         let length = self.data.len();
-        &self.data.as_slice()[..length - INTERNAL_KEY_TAIL]
+        &self.data[..length - INTERNAL_KEY_TAIL]
     }
 
     /// Returns a `ParsedInternalKey`

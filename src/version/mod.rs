@@ -16,7 +16,7 @@
 // found in the LICENSE file.
 
 use crate::db::format::{
-    InternalKey, InternalKeyComparator, LookupKey, ParsedInternalKey, ValueType,
+    InternalKey, InternalKeyComparator, LookupKey, ParsedInternalKey, ValueType, MAX_KEY_SEQUENCE,
     VALUE_TYPE_FOR_SEEK,
 };
 use crate::iterator::Iterator;
@@ -135,13 +135,14 @@ impl Version {
                 // overlap user_key and process them in order from newest to oldest because
                 // the last level-0 file always has the newest entries.
                 for f in files.iter().rev() {
-                    if ucmp.compare(ukey, f.largest.data()) != CmpOrdering::Greater
-                        && ucmp.compare(ukey, f.smallest.data()) != CmpOrdering::Less
+                    if ucmp.compare(ukey, f.largest.user_key()) != CmpOrdering::Greater
+                        && ucmp.compare(ukey, f.smallest.user_key()) != CmpOrdering::Less
                     {
                         files_to_seek.push(f.clone());
                     }
                 }
                 files_to_seek.sort_by(|a, b| b.number.cmp(&a.number));
+                dbg!(files_to_seek.len());
             } else {
                 let index = Self::find_file(self.icmp.clone(), self.files[level].as_slice(), &ikey);
                 if index >= files.len() {
@@ -210,6 +211,11 @@ impl Version {
         false
     }
 
+    /// Whether the version needs to be compacted
+    pub fn needs_compaction(&self) -> bool {
+        self.compaction_score > 1.0 || self.file_to_compact.read().unwrap().is_some()
+    }
+
     /// Return a String includes number of files in every level
     pub fn level_summary(&self) -> String {
         let mut s = String::from("files[ ");
@@ -255,14 +261,14 @@ impl Version {
         largest_ukey: &[u8],
     ) -> usize {
         let mut level = 0;
-        if !self.overlap_in_level(level, smallest_ukey, largest_ukey) {
+        if !self.overlap_in_level(level, Some(smallest_ukey), Some(largest_ukey)) {
             // No overlapping in level 0
             // we might directly push files to next level if there is no overlap in next level
             let smallest_ikey =
-                InternalKey::new(smallest_ukey, u64::max_value(), VALUE_TYPE_FOR_SEEK);
+                InternalKey::new(smallest_ukey, MAX_KEY_SEQUENCE, VALUE_TYPE_FOR_SEEK);
             let largest_ikey = InternalKey::new(largest_ukey, 0, ValueType::Deletion);
             while level < self.options.max_mem_compact_level {
-                if self.overlap_in_level(level + 1, smallest_ukey, largest_ukey) {
+                if self.overlap_in_level(level + 1, Some(smallest_ukey), Some(largest_ukey)) {
                     break;
                 }
                 if level + 2 < self.options.max_levels as usize {
@@ -427,17 +433,23 @@ impl Version {
         false
     }
 
-    // Returns true iff some file in the specified level overlaps
-    // some part of `[smallest_ukey,largest_ukey]`.
-    // `smallest_ukey` is empty represents a key smaller than all the DB's keys.
-    // `largest_ukey` is empty represents a key largest than all the DB's keys.
-    fn overlap_in_level(&self, level: usize, smallest_ukey: &[u8], largest_ukey: &[u8]) -> bool {
+    /// Returns true iff some file in the specified level overlaps
+    /// some part of `[smallest_ukey,largest_ukey]`.
+    /// `smallest_ukey` is `None` represents a key smaller than all the DB's keys.
+    /// `largest_ukey` is `None` represents a key largest than all the DB's keys.
+    pub fn overlap_in_level(
+        &self,
+        level: usize,
+        smallest_ukey: Option<&[u8]>,
+        largest_ukey: Option<&[u8]>,
+    ) -> bool {
         if level == 0 {
             // need to check against all files in level 0
             for file in self.files[0].iter() {
                 if self.key_is_after_file(file.clone(), smallest_ukey)
                     || self.key_is_before_file(file.clone(), largest_ukey)
                 {
+                    // No overlap
                     continue;
                 } else {
                     return true;
@@ -447,9 +459,8 @@ impl Version {
         }
         // binary search in level > 0
         let index = {
-            if !smallest_ukey.is_empty() {
-                let smallest_ikey =
-                    InternalKey::new(smallest_ukey, u64::max_value(), VALUE_TYPE_FOR_SEEK);
+            if let Some(s_ukey) = smallest_ukey {
+                let smallest_ikey = InternalKey::new(s_ukey, MAX_KEY_SEQUENCE, VALUE_TYPE_FOR_SEEK);
                 Self::find_file(self.icmp.clone(), &self.files[level], smallest_ikey.data())
             } else {
                 0
@@ -463,21 +474,58 @@ impl Version {
         !self.key_is_before_file(self.files[level][index].clone(), largest_ukey)
     }
 
-    fn key_is_after_file(&self, file: Arc<FileMetaData>, ukey: &[u8]) -> bool {
-        !ukey.is_empty()
+    /// Return the approximate offset in the database of the data for
+    /// given `ikey` in this version
+    // TODO: remove this later
+    #[allow(dead_code)]
+    pub fn approximate_offset_of<S: Storage + Clone>(
+        &self,
+        ikey: &InternalKey,
+        table_cache: &TableCache<S>,
+    ) -> u64 {
+        let mut result = 0;
+        for (level, files) in self.files.iter().enumerate() {
+            for f in files {
+                if self.icmp.compare(f.largest.data(), ikey.data()) != CmpOrdering::Greater {
+                    // Entire file is before "ikey", so just add the file size
+                    result += f.file_size;
+                } else if self.icmp.compare(f.smallest.data(), ikey.data()) == CmpOrdering::Greater
+                {
+                    // Entire file is after "ikey", so ignore
+                    if level > 0 {
+                        // Files other than level 0 are sorted by `smallest`, so
+                        // no further files in this level will contain data for
+                        // "ikey"
+                        break;
+                    }
+                } else {
+                    // "ikey" falls in the range for this table.  Add the
+                    // approximate offset of "ikey" within the table.
+                    if let Ok(table) = table_cache.find_table(self.icmp.clone(), f.number, f.file_size) {
+                        result += table.approximate_offset_of(self.icmp.clone(), ikey.data());
+                    }
+                }
+            }
+        }
+        result
+    }
+    // used for smallest user key
+    fn key_is_after_file(&self, file: Arc<FileMetaData>, ukey: Option<&[u8]>) -> bool {
+        ukey.is_some()
             && self
                 .icmp
                 .user_comparator
-                .compare(ukey, file.largest.user_key())
+                .compare(ukey.unwrap(), file.largest.user_key())
                 == CmpOrdering::Greater
     }
 
-    fn key_is_before_file(&self, file: Arc<FileMetaData>, ukey: &[u8]) -> bool {
-        !ukey.is_empty()
+    // used for biggest user key
+    fn key_is_before_file(&self, file: Arc<FileMetaData>, ukey: Option<&[u8]>) -> bool {
+        ukey.is_some()
             && self
                 .icmp
                 .user_comparator
-                .compare(ukey, file.smallest.user_key())
+                .compare(ukey.unwrap(), file.smallest.user_key())
                 == CmpOrdering::Less
     }
 
