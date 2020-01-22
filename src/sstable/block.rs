@@ -23,7 +23,6 @@ use crate::util::varint::VarintU32;
 use crate::{Error, Result};
 use std::cmp::{min, Ordering};
 use std::rc::Rc;
-use std::sync::Arc;
 
 // TODO: remove all magic number
 
@@ -341,9 +340,9 @@ impl<C: Comparator> Iterator for BlockIterator<C> {
 /// restart points, and can be used to do a binary search when looking
 /// for a particular key.  Values are stored as-is (without compression)
 /// immediately following the corresponding key.
-pub struct BlockBuilder {
+pub struct BlockBuilder<C: Comparator> {
     block_restart_interval: usize,
-    cmp: Arc<dyn Comparator>,
+    cmp: C,
     // destination buffer
     buffer: Vec<u8>,
     // restart points
@@ -354,8 +353,8 @@ pub struct BlockBuilder {
     last_key: Vec<u8>,
 }
 
-impl BlockBuilder {
-    pub fn new(block_restart_interval: usize, cmp: Arc<dyn Comparator>) -> Self {
+impl<C: Comparator> BlockBuilder<C> {
+    pub fn new(block_restart_interval: usize, cmp: C) -> Self {
         assert!(
             block_restart_interval >= 1,
             "[block builder] invalid 'block_restart_interval' {} ",
@@ -473,12 +472,10 @@ mod tests {
     use crate::util::coding::{decode_fixed_32, put_fixed_32};
     use crate::util::comparator::BytewiseComparator;
     use crate::util::varint::VarintU32;
-    use std::sync::Arc;
 
     fn new_test_block() -> Vec<u8> {
         let mut samples = vec!["1", "12", "123", "abc", "abd", "acd", "bbb"];
-        let cmp = Arc::new(BytewiseComparator::default());
-        let mut builder = BlockBuilder::new(3, cmp.clone());
+        let mut builder = BlockBuilder::new(3, BytewiseComparator::default());
         for key in samples.drain(..) {
             builder.add(key.as_bytes(), key.as_bytes());
         }
@@ -508,8 +505,7 @@ mod tests {
     #[test]
     fn test_new_empty_block() {
         let ucmp = BytewiseComparator::default();
-        let cmp = Arc::new(ucmp.clone());
-        let mut builder = BlockBuilder::new(2, cmp.clone());
+        let mut builder = BlockBuilder::new(2, ucmp);
         let data = builder.finish();
         let length = data.len();
         let restarts_len = decode_fixed_32(&data[length - 4..length]);
@@ -533,8 +529,7 @@ mod tests {
     #[test]
     fn test_simple_empty_key() {
         let ucmp = BytewiseComparator::default();
-        let cmp = Arc::new(ucmp);
-        let mut builder = BlockBuilder::new(2, cmp.clone());
+        let mut builder = BlockBuilder::new(2, ucmp);
         builder.add(b"", b"test");
         let data = builder.finish();
         let block = Block::new(Vec::from(data)).expect("New block should work");
@@ -552,16 +547,14 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_add_inconsistent_key() {
-        let cmp = Arc::new(BytewiseComparator::default());
-        let mut builder = BlockBuilder::new(2, cmp.clone());
+        let mut builder = BlockBuilder::new(2, BytewiseComparator::default());
         builder.add(b"ffffff", b"");
         builder.add(b"a", b"");
     }
 
     #[test]
     fn test_write_entries() {
-        let cmp = Arc::new(BytewiseComparator::default());
-        let mut builder = BlockBuilder::new(2, cmp.clone());
+        let mut builder = BlockBuilder::new(2, BytewiseComparator::default());
         assert!(builder.last_key.is_empty());
         // Basic key
         builder.add(b"1111", b"val1");
@@ -607,14 +600,13 @@ mod tests {
     #[test]
     fn test_write_restarts() {
         let samples = vec!["1", "12", "123", "abc", "abd", "acd", "bbb"];
-        let cmp = Arc::new(BytewiseComparator::default());
         let mut tests = vec![
             (1, vec![0, 4, 9, 15, 21, 27, 33], 39),
             (2, vec![0, 8, 20, 31], 37),
             (3, vec![0, 12, 27], 33),
         ];
         for (restarts_interval, expected, buffer_size) in tests.drain(..) {
-            let mut builder = BlockBuilder::new(restarts_interval, cmp.clone());
+            let mut builder = BlockBuilder::new(restarts_interval, BytewiseComparator::default());
             for key in samples.clone().drain(..) {
                 builder.add(key.as_bytes(), b"");
             }
@@ -663,8 +655,7 @@ mod tests {
     #[test]
     fn test_read_write() {
         let ucmp = BytewiseComparator::default();
-        let cmp = Arc::new(ucmp);
-        let mut builder = BlockBuilder::new(2, cmp.clone());
+        let mut builder = BlockBuilder::new(2, ucmp);
         let tests = vec![
             ("", "empty"),
             ("1111", "val1"),
@@ -677,7 +668,7 @@ mod tests {
             builder.add(key.as_bytes(), val.as_bytes());
         }
         let data = builder.finish();
-        let block = Block::new(Vec::from(data)).expect("New block should work");
+        let block = Block::new(Vec::from(data)).unwrap();
         let mut iter = block.iter(ucmp);
         assert!(!iter.valid());
         iter.seek_to_first();
