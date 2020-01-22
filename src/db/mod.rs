@@ -453,6 +453,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         }
         dbg!("nothing in memtable");
         let current = self.versions.lock().unwrap().current();
+        dbg!(self.background_compaction_scheduled.load(Ordering::Acquire));
         let (value, seek_stats) = current.get(options, lookup_key, &self.table_cache)?;
         if current.update_stats(seek_stats) {
             self.maybe_schedule_compaction(current)
@@ -1429,7 +1430,7 @@ mod tests {
             res.trim_end_matches("0,").trim_end_matches(",").to_owned()
         }
 
-        fn wait_for_compaction_complete(&self) -> Receiver<()> {
+        fn subscribe_compaction_complete(&self) -> Receiver<()> {
             let db = self.inner.clone();
             let (sender, recv) = crossbeam_channel::bounded(0);
             thread::spawn(move || {
@@ -1697,23 +1698,25 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_get_from_immutable_layer() {
         for t in cases(|mut opt| {
             opt.write_buffer_size = 100000; // Small write buffer
             opt
         }) {
             t.assert_put_get("foo", "v1");
+            let r = t.db.subscribe_compaction_complete();
             // block `flush()`
-            let r = t.db.wait_for_compaction_complete();
             t.store.delay_data_sync.store(true, Ordering::Release);
             dbg!("k1");
             t.put("k1", &"x".repeat(100000)).unwrap(); // fill memtable
+            assert_eq!("v1", dbg!(t.get("foo", None)).unwrap()); // "v1" on immutable table
             dbg!("k2");
             t.put("k2", &"y".repeat(100000)).unwrap(); // trigger compaction
-                                                       // Waiting for compaction finish
+            // Waiting for compaction finish
             r.recv().unwrap();
             // Try to retrieve key "foo" from level 0 files
-            assert_eq!("v1", dbg!(t.get("foo", None)).unwrap());
+            assert_eq!("v1", dbg!(t.get("foo", None)).unwrap()); // "v1" on level0 files
             dbg!("end");
         }
     }

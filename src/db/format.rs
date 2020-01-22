@@ -243,22 +243,19 @@ impl LookupKey {
     }
 
     /// Returns a key suitable for lookup in a MemTable.
-    /// NOTICE: the LookupKey self should live at least as long as the returning Slice
     pub fn mem_key(&self) -> &[u8] {
-        self.data.as_slice()
+        &self.data
     }
 
     /// Returns an internal key (suitable for passing to an internal iterator)
-    /// NOTICE: the LookupKey self should live at least as long as the returning Slice
     pub fn internal_key(&self) -> &[u8] {
-        &self.data.as_slice()[self.ukey_start..]
+        &self.data[self.ukey_start..]
     }
 
     /// Returns the user key
-    /// NOTICE: the LookupKey self should live at least as long as the returning Slice
     pub fn user_key(&self) -> &[u8] {
         let len = self.data.len();
-        &self.data.as_slice()[self.ukey_start..len - INTERNAL_KEY_TAIL]
+        &self.data[self.ukey_start..len - INTERNAL_KEY_TAIL]
     }
 }
 

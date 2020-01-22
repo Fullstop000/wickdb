@@ -112,23 +112,26 @@ impl VersionBuilder {
     }
 
     /// Apply all the changes on the base Version and produce a new Version based on it
-    /// same as `save_to` in C++ implementation
+    /// same as `SaveTo` in C++ implementation
     pub fn apply_to_new(&mut self) -> Version {
         // TODO: config this to the option
         let icmp = InternalKeyComparator::new(Arc::new(BytewiseComparator::default()));
         let mut v = Version::new(self.base.options.clone(), icmp.clone());
-        for (level, (mut base_files, delta)) in self
+        for (level, (base_files, delta)) in self
             .base
             .files
             .drain(..)
             .zip(self.levels.drain(..))
             .enumerate()
         {
-            for file in base_files.drain(..) {
+            for file in base_files {
                 // filter the deleted files
                 if !delta.deleted_files.contains(&file.number) {
                     v.files[level].push(file)
                 }
+            }
+            for added_file in delta.added_files {
+                v.files[level].push(Arc::new(added_file));
             }
             if level == 0 {
                 // sort by file number
@@ -145,8 +148,22 @@ impl VersionBuilder {
                 // sort by smallest key
                 v.files[level].sort_by(|a, b| icmp.compare(a.smallest.data(), b.smallest.data()))
             }
+            if level > 0 {
+                debug_assert!(!Self::has_overlapping(&icmp, &v.files[level]));
+            }
         }
         v
+    }
+
+    // Returns true if the given collection of files has overlapping with each other.
+    // Only used for files in level > 0
+    fn has_overlapping(icmp: &InternalKeyComparator, files: &[Arc<FileMetaData>]) -> bool {
+        for fs in files.windows(2) {
+            if icmp.compare(fs[0].largest.data(), fs[1].smallest.data()) != CmpOrdering::Less {
+                return true
+            }
+        }
+        false
     }
 }
 
@@ -530,7 +547,9 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         Some(self.setup_other_inputs(compaction))
     }
 
-    /// Persistent given memtable into a single level0 file.
+    /// Persistent given memtable into a single sst file and the 
+    /// file could be pushed into level1 or level2 if there's no too much
+    /// overlapping.
     pub fn write_level0_files(
         &mut self,
         db_name: &str,

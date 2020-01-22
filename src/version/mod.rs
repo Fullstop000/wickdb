@@ -79,6 +79,7 @@ pub struct Version {
     compaction_score: f32,
     compaction_level: usize,
 }
+
 /// A helper for representing the file has been seeked
 pub struct SeekStats {
     // the file has been seeked
@@ -124,9 +125,9 @@ impl Version {
         let ikey = key.internal_key();
         let ukey = key.user_key();
         let ucmp = self.icmp.user_comparator.as_ref();
-        let mut files_to_seek = vec![];
         let mut seek_stats = SeekStats::new();
         for (level, files) in self.files.iter().enumerate() {
+            let mut files_to_seek = vec![];
             if files.is_empty() {
                 continue;
             }
@@ -142,22 +143,23 @@ impl Version {
                     }
                 }
                 files_to_seek.sort_by(|a, b| b.number.cmp(&a.number));
-                dbg!(files_to_seek.len());
             } else {
-                let index = Self::find_file(self.icmp.clone(), self.files[level].as_slice(), &ikey);
+                let index = Self::find_file(self.icmp.clone(), &self.files[level], &ikey);
                 if index >= files.len() {
-                    // TODO: maybe '==' is enough ?
                     // we reach the end but not found a file matches
                 } else {
                     let target = files[index].clone();
-                    // if what we found is just the first file, it could still not includes the target
-                    if ucmp.compare(ukey, target.smallest.data()) != CmpOrdering::Less {
-                        files_to_seek = vec![target];
+                    // If what we found is the first file, it could still not includes the target
+                    // so let's check the smallest ukey. We use `ukey` because of the given `LookupKey`
+                    // could has the same `ukey` as the `smallest` but a bigger `seq` number than it, which is smaller
+                    // in a comparsion by `icmp`.
+                    if ucmp.compare(ukey, target.smallest.user_key()) != CmpOrdering::Less {
+                        files_to_seek.push(target)
                     }
                 }
             }
 
-            for file in files_to_seek.iter() {
+            for file in files_to_seek {
                 seek_stats.seek_file_level = Some(level);
                 seek_stats.seek_file = Some(file.clone());
                 match table_cache.get(
@@ -168,10 +170,15 @@ impl Version {
                     file.file_size,
                 )? {
                     None => continue, // keep searching
+<<<<<<< HEAD
                     Some(block_iter) => {
                         let encoded_key = block_iter.key();
                         let value = block_iter.value();
                         match ParsedInternalKey::decode_from(encoded_key.as_slice()) {
+=======
+                    Some((encoded_key, value)) => {
+                        match dbg!(ParsedInternalKey::decode_from(encoded_key.as_slice())) {
+>>>>>>> make things work
                             None => return Err(Error::Corruption("bad internal key".to_owned())),
                             Some(parsed_key) => {
                                 if self
@@ -228,7 +235,7 @@ impl Version {
         s
     }
 
-    /// Binary search given files to find earliest index of index whose largest key >= ikey.
+    /// Binary search given files to find earliest index of index whose largest ikey >= given ikey.
     /// If not found, returns the length of files.
     pub fn find_file(
         icmp: InternalKeyComparator,

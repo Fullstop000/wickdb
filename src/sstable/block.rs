@@ -59,7 +59,7 @@ impl Block {
         let size = data.len();
         if size >= 4 {
             let max_restarts_allowed = (size - 4) / 4;
-            let restarts_len = Self::restarts_len(data.as_slice()) as usize;
+            let restarts_len = Self::restarts_len(&data) as usize;
             // make sure the size is enough for restarts
             if restarts_len <= max_restarts_allowed {
                 return Ok(Self {
@@ -147,7 +147,7 @@ impl<C: Comparator> BlockIterator<C> {
         }
     }
 
-    // return the offset in data just past the end of the current entry
+    // Returns the offset just pasts the end of the current entry
     #[inline]
     fn next_entry_offset(&self) -> u32 {
         self.key_offset + self.not_shared + self.value_len
@@ -267,11 +267,15 @@ impl<C: Comparator> Iterator for BlockIterator<C> {
         // linear search (with restart block) for first key >= target
         // if all the keys > target, we seek to the start
         // if all the keys < target, we seek to the last
+        dbg!(&self.current);
         self.seek_to_restart_point(left);
+        dbg!(&self.current);
         loop {
             if !self.parse_block_entry() {
                 return;
             }
+            dbg!(target);
+            dbg!(self.key.as_slice());
             match self.cmp.compare(self.key.as_slice(), target) {
                 Ordering::Less => {}
                 _ => return,
@@ -312,7 +316,7 @@ impl<C: Comparator> Iterator for BlockIterator<C> {
     // when call this in the loop
     fn key(&self) -> Slice {
         self.valid_or_panic();
-        Slice::from(self.key.as_slice())
+        Slice::from(&self.key)
     }
 
     fn value(&self) -> Slice {
@@ -559,14 +563,23 @@ mod tests {
         // Basic key
         builder.add(b"1111", b"val1");
         assert_eq!(1, builder.counter);
+<<<<<<< HEAD
         assert_eq!(&builder.last_key, b"1111");
+=======
+        assert_eq!(builder.last_key.as_slice(), b"1111");
+>>>>>>> make things work
         let (shared, n1) = VarintU32::common_read(&builder.buffer);
         assert_eq!(0, shared);
         assert_eq!(1, n1);
         let (non_shared, n2) = VarintU32::common_read(&builder.buffer[n1 as usize..]);
         assert_eq!(4, non_shared);
         assert_eq!(1, n2);
+<<<<<<< HEAD
         let (value_len, n3) = VarintU32::common_read(&builder.buffer[(n1 + n2) as usize..]);
+=======
+        let (value_len, n3) =
+            VarintU32::common_read(&builder.buffer[(n1 + n2) as usize..]);
+>>>>>>> make things work
         assert_eq!(4, value_len);
         assert_eq!(1, n3);
         let key_len = shared + non_shared;
@@ -583,7 +596,12 @@ mod tests {
         builder.add(b"11122", b"val2");
         let (shared, n1) = VarintU32::common_read(&builder.buffer[current..]);
         assert_eq!(shared, 3);
+<<<<<<< HEAD
         let (non_shared, n2) = VarintU32::common_read(&builder.buffer[current + n1 as usize..]);
+=======
+        let (non_shared, n2) =
+            VarintU32::common_read(&builder.buffer[current + n1 as usize..]);
+>>>>>>> make things work
         assert_eq!(non_shared, 2);
         let (value_len, n3) =
             VarintU32::common_read(&builder.buffer[current + (n1 + n2) as usize..]);
@@ -660,12 +678,18 @@ mod tests {
         assert_eq!(iter.key().as_str(), "bbb");
         assert_eq!(iter.value().as_str(), "bbb");
         // Seek
-        iter.seek("abd".as_bytes());
-        assert_eq!(iter.key().as_str(), "abd");
-        assert_eq!(iter.value().as_str(), "abd");
+        iter.seek("1".as_bytes());
+        assert_eq!(iter.key().as_str(), "1");
+        assert_eq!(iter.value().as_str(), "1");
         iter.seek("".as_bytes());
         assert_eq!(iter.key().as_str(), "1");
         assert_eq!(iter.value().as_str(), "1");
+        iter.seek("abd".as_bytes());
+        assert_eq!(iter.key().as_str(), "abd");
+        assert_eq!(iter.value().as_str(), "abd");
+        iter.seek("bbb".as_bytes());
+        assert_eq!(iter.key().as_str(), "bbb");
+        assert_eq!(iter.value().as_str(), "bbb");
         iter.seek("zzzzzzzzzzzzzzz".as_bytes());
         assert!(!iter.valid());
     }
