@@ -23,6 +23,7 @@ use crate::options::{Options, ReadOptions};
 use crate::sstable::block::BlockIterator;
 use crate::sstable::table::{new_table_iterator, Table, TableIterFactory};
 use crate::storage::Storage;
+use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
 use crate::util::varint::VarintU64;
 use crate::Result;
@@ -49,7 +50,12 @@ impl<S: Storage + Clone> TableCache<S> {
     }
 
     // Try to find the sst file from cache. If not found, try to find the file from storage and insert it into the cache
-    fn find_table(&self, file_number: u64, file_size: u64) -> Result<HandleRef<Arc<Table<S::F>>>> {
+    fn find_table<C: Comparator + Clone>(
+        &self,
+        cmp: C,
+        file_number: u64,
+        file_size: u64,
+    ) -> Result<HandleRef<Arc<Table<S::F>>>> {
         let mut key = vec![];
         VarintU64::put_varint(&mut key, file_number);
         match self.cache.look_up(key.as_slice()) {
@@ -57,7 +63,7 @@ impl<S: Storage + Clone> TableCache<S> {
             None => {
                 let filename = generate_filename(self.db_name, FileType::Table, file_number);
                 let table_file = self.storage.open(filename.as_str())?;
-                let table = Table::open(table_file, file_size, self.options.clone())?;
+                let table = Table::open(table_file, file_size, self.options.clone(), cmp)?;
                 Ok(self.cache.insert(key, Arc::new(table), 1, None))
             }
         }
@@ -71,16 +77,17 @@ impl<S: Storage + Clone> TableCache<S> {
     }
 
     /// Returns the result of a seek to internal key `key` in specified file
-    pub fn get(
+    pub fn get<C: Comparator + Clone>(
         &self,
+        cmp: C,
         options: ReadOptions,
         key: &[u8],
         file_number: u64,
         file_size: u64,
     ) -> Result<Option<(Slice, Slice)>> {
-        let handle = self.find_table(file_number, file_size)?;
+        let handle = self.find_table(cmp.clone(), file_number, file_size)?;
         // every value should be valid so unwrap is safe here
-        let res = handle.value().unwrap().internal_get(options, key)?;
+        let res = handle.value().unwrap().internal_get(options, cmp, key)?;
         self.cache.release(handle);
         Ok(res)
     }
@@ -92,16 +99,17 @@ impl<S: Storage + Clone> TableCache<S> {
     /// Entry format:
     ///     key: internal key
     ///     value: value of user key
-    pub fn new_iter(
+    pub fn new_iter<C: Comparator + Clone>(
         &self,
+        cmp: C,
         options: ReadOptions,
         file_number: u64,
         file_size: u64,
-    ) -> IterWithCleanup<ConcatenateIterator<BlockIterator, TableIterFactory<S::F>>> {
-        match self.find_table(file_number, file_size) {
+    ) -> IterWithCleanup<ConcatenateIterator<BlockIterator<C>, TableIterFactory<C, S::F>>> {
+        match self.find_table(cmp.clone(), file_number, file_size) {
             Ok(h) => {
                 let table = h.value().unwrap();
-                let mut iter = IterWithCleanup::new(new_table_iterator(table, options));
+                let mut iter = IterWithCleanup::new(new_table_iterator(cmp, table, options));
                 let cache = self.cache.clone();
                 iter.register_task(Box::new(move || cache.release(h.clone())));
                 iter

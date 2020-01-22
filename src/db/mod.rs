@@ -1126,9 +1126,12 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         if status.is_ok() && current_entries > 0 {
             let output_number = compact.outputs[length - 1].number;
             // make sure that the new file is in the cache
-            let mut it =
-                self.table_cache
-                    .new_iter(ReadOptions::default(), output_number, current_bytes);
+            let mut it = self.table_cache.new_iter(
+                self.internal_comparator.clone(),
+                ReadOptions::default(),
+                output_number,
+                current_bytes,
+            );
             it.status()?;
             info!(
                 "Generated table #{}@{}: {} keys, {} bytes",
@@ -1175,6 +1178,7 @@ pub(crate) fn build_table<S: Storage + Clone>(
     let mut status = Ok(());
     if iter.valid() {
         let file = storage.create(file_name.as_str())?;
+        let icmp = InternalKeyComparator::new(options.comparator.clone());
         let mut builder = TableBuilder::new(file, options);
         let mut prev_key = Slice::default();
         let smallest_key = iter.key();
@@ -1196,7 +1200,7 @@ pub(crate) fn build_table<S: Storage + Clone>(
                 meta.file_size = builder.file_size();
                 // make sure that the new file is in the cache
                 let mut it =
-                    table_cache.new_iter(ReadOptions::default(), meta.number, meta.file_size);
+                    table_cache.new_iter(icmp, ReadOptions::default(), meta.number, meta.file_size);
                 it.status()
             })
         }

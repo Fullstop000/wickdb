@@ -75,7 +75,7 @@ impl Block {
     }
 
     /// Create a BlockIterator for current block.
-    pub fn iter(&self, cmp: Arc<dyn Comparator>) -> BlockIterator {
+    pub fn iter<C: Comparator>(&self, cmp: C) -> BlockIterator<C> {
         let num_restarts = Self::restarts_len(self.data.as_slice());
         BlockIterator::new(cmp, self.data.clone(), self.restart_offset, num_restarts)
     }
@@ -98,8 +98,8 @@ impl Default for Block {
 }
 
 /// Iterator for every entry in the block
-pub struct BlockIterator {
-    cmp: Arc<dyn Comparator>,
+pub struct BlockIterator<C: Comparator> {
+    cmp: C,
 
     err: Option<Error>,
     // underlying block data
@@ -129,13 +129,8 @@ pub struct BlockIterator {
     key: Vec<u8>, // buffer for a completed key
 }
 
-impl BlockIterator {
-    pub fn new(
-        cmp: Arc<dyn Comparator>,
-        data: Rc<Vec<u8>>,
-        restarts: u32,
-        restarts_len: u32,
-    ) -> Self {
+impl<C: Comparator> BlockIterator<C> {
+    pub fn new(cmp: C, data: Rc<Vec<u8>>, restarts: u32, restarts_len: u32) -> Self {
         // should be 0
         Self {
             cmp,
@@ -223,7 +218,7 @@ impl BlockIterator {
     }
 }
 
-impl Iterator for BlockIterator {
+impl<C: Comparator> Iterator for BlockIterator<C> {
     #[inline]
     fn valid(&self) -> bool {
         self.current < self.restarts
@@ -512,7 +507,8 @@ mod tests {
 
     #[test]
     fn test_new_empty_block() {
-        let cmp = Arc::new(BytewiseComparator::default());
+        let ucmp = BytewiseComparator::default();
+        let cmp = Arc::new(ucmp.clone());
         let mut builder = BlockBuilder::new(2, cmp.clone());
         let data = builder.finish();
         let length = data.len();
@@ -522,7 +518,7 @@ mod tests {
         assert_eq!(restarts.len() as u32 / 4, restarts_len);
         assert_eq!(decode_fixed_32(restarts), 0);
         let block = Block::new(Vec::from(data)).expect("New block should work");
-        let iter = block.iter(cmp.clone());
+        let iter = block.iter(ucmp);
         assert!(!iter.valid());
     }
 
@@ -536,12 +532,13 @@ mod tests {
 
     #[test]
     fn test_simple_empty_key() {
-        let cmp = Arc::new(BytewiseComparator::default());
+        let ucmp = BytewiseComparator::default();
+        let cmp = Arc::new(ucmp);
         let mut builder = BlockBuilder::new(2, cmp.clone());
         builder.add(b"", b"test");
         let data = builder.finish();
         let block = Block::new(Vec::from(data)).expect("New block should work");
-        let mut iter = block.iter(cmp.clone());
+        let mut iter = block.iter(ucmp);
         iter.seek("".as_bytes());
         assert!(iter.valid());
         let k = iter.key();
@@ -628,13 +625,13 @@ mod tests {
 
     #[test]
     fn test_block_iter() {
-        let cmp = Arc::new(BytewiseComparator::default());
+        let ucmp = BytewiseComparator::default();
         // keys ["1", "12", "123", "abc", "abd", "acd", "bbb"]
         let data = new_test_block();
         let restarts_len = Block::restarts_len(&data);
         let block = Block::new(data).expect("");
         let mut iter =
-            BlockIterator::new(cmp, block.data.clone(), block.restart_offset, restarts_len);
+            BlockIterator::new(ucmp, block.data.clone(), block.restart_offset, restarts_len);
         assert!(!iter.valid());
         iter.seek_to_first();
         assert_eq!(iter.current, 0);
@@ -665,7 +662,8 @@ mod tests {
 
     #[test]
     fn test_read_write() {
-        let cmp = Arc::new(BytewiseComparator::default());
+        let ucmp = BytewiseComparator::default();
+        let cmp = Arc::new(ucmp);
         let mut builder = BlockBuilder::new(2, cmp.clone());
         let tests = vec![
             ("", "empty"),
@@ -680,7 +678,7 @@ mod tests {
         }
         let data = builder.finish();
         let block = Block::new(Vec::from(data)).expect("New block should work");
-        let mut iter = block.iter(cmp.clone());
+        let mut iter = block.iter(ucmp);
         assert!(!iter.valid());
         iter.seek_to_first();
         for (key, val) in tests.clone().drain(..) {

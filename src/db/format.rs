@@ -267,8 +267,10 @@ impl LookupKey {
 ///    decreasing sequence number
 ///    decreasing type (though sequence# should be enough to disambiguate)
 #[derive(Clone)]
+// TODO: Make this impl Copy
 pub struct InternalKeyComparator {
     /// The comparator defined in `Options`
+    // TODO: Remove this Arc
     pub user_comparator: Arc<dyn Comparator>,
 }
 

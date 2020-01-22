@@ -312,6 +312,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         // Merge all level zero files together since they may overlap
         for file in version.files[0].iter() {
             res.push(Box::new(table_cache.new_iter(
+                self.icmp.clone(),
                 read_opt,
                 file.number,
                 file.file_size,
@@ -327,7 +328,8 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
                     InternalKeyComparator::new(self.options.comparator.clone()),
                     files.clone(),
                 );
-                let factory = FileIterFactory::new(read_opt, table_cache.clone());
+                let factory =
+                    FileIterFactory::new(self.icmp.clone(), read_opt, table_cache.clone());
                 let iter = ConcatenateIterator::new(level_file_iter, factory);
                 res.push(Box::new(iter));
             }
@@ -969,19 +971,30 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
 pub struct FileIterFactory<S: Storage + Clone> {
     options: ReadOptions,
     table_cache: TableCache<S>,
+    icmp: InternalKeyComparator,
 }
 
 impl<S: Storage + Clone> FileIterFactory<S> {
-    pub fn new(options: ReadOptions, table_cache: TableCache<S>) -> Self {
+    pub fn new(
+        icmp: InternalKeyComparator,
+        options: ReadOptions,
+        table_cache: TableCache<S>,
+    ) -> Self {
         Self {
             options,
             table_cache,
+            icmp,
         }
     }
 }
 
 impl<S: Storage + Clone> DerivedIterFactory for FileIterFactory<S> {
-    type Iter = IterWithCleanup<ConcatenateIterator<BlockIterator, TableIterFactory<S::F>>>;
+    type Iter = IterWithCleanup<
+        ConcatenateIterator<
+            BlockIterator<InternalKeyComparator>,
+            TableIterFactory<InternalKeyComparator, S::F>,
+        >,
+    >;
 
     fn derive(&self, value: &[u8]) -> Result<Self::Iter> {
         if value.len() != 2 * FILE_META_LENGTH {
@@ -991,9 +1004,12 @@ impl<S: Storage + Clone> DerivedIterFactory for FileIterFactory<S> {
         } else {
             let file_number = decode_fixed_64(value);
             let file_size = decode_fixed_64(&value[8..]);
-            Ok(self
-                .table_cache
-                .new_iter(self.options.clone(), file_number, file_size))
+            Ok(self.table_cache.new_iter(
+                self.icmp.clone(),
+                self.options.clone(),
+                file_number,
+                file_size,
+            ))
         }
     }
 }

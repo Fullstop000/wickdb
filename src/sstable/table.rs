@@ -30,9 +30,9 @@ use snap::max_compress_len;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-/// A `Table` is a sorted map from strings to strings.  Tables are
-/// immutable and persistent.  A Table may be safely accessed from
-/// multiple threads without external synchronization.
+/// A `Table` is a sorted map from strings to strings, which must be immutable and persistent.
+/// A `Table` may be safely accessed from multiple threads
+/// without external synchronization.
 pub struct Table<F: File> {
     options: Arc<Options>,
     file: F,
@@ -47,7 +47,12 @@ impl<F: File> Table<F> {
     /// Attempt to open the table that is stored in bytes `[0..size)`
     /// of `file`, and read the metadata entries necessary to allow
     /// retrieving data from the table.
-    pub fn open(file: F, size: u64, options: Arc<Options>) -> Result<Self> {
+    pub fn open<C: Comparator + Clone>(
+        file: F,
+        size: u64,
+        options: Arc<Options>,
+        cmp: C,
+    ) -> Result<Self> {
         if size < FOOTER_ENCODED_LENGTH as u64 {
             return Err(Error::Corruption(
                 "file is too short to be an sstable".to_owned(),
@@ -85,7 +90,7 @@ impl<F: File> Table<F> {
             {
                 if let Ok(meta_block) = Block::new(meta_block_contents) {
                     t.meta_block_handle = Some(footer.meta_index_handle);
-                    let mut iter = meta_block.iter(options.comparator.clone());
+                    let mut iter = meta_block.iter(cmp);
                     let filter_key = if let Some(fp) = &options.filter_policy {
                         "filter.".to_owned() + fp.name()
                     } else {
@@ -114,42 +119,48 @@ impl<F: File> Table<F> {
     }
 
     /// Converts an BlockHandle into an iterator over the contents of the corresponding block.
-    pub fn block_reader(
+    pub fn block_reader<C: Comparator + Clone>(
         &self,
+        cmp: C,
         data_block_handle: BlockHandle,
         options: ReadOptions,
-    ) -> Result<BlockIterator> {
-        let block = if let Some(cache) = &self.options.block_cache {
+    ) -> Result<BlockIterator<C>> {
+        let iter = if let Some(cache) = &self.options.block_cache {
             let mut cache_key_buffer = vec![0; 16];
             put_fixed_64(&mut cache_key_buffer, self.cache_id);
             put_fixed_64(&mut cache_key_buffer, data_block_handle.offset);
             if let Some(cache_handle) = cache.look_up(&cache_key_buffer) {
                 let b = cache_handle.value().unwrap();
                 cache.release(cache_handle);
-                b
+                b.iter(cmp)
             } else {
                 let data = read_block(&self.file, &data_block_handle, options.verify_checksums)?;
                 let charge = data.len();
                 let new_block = Block::new(data)?;
                 let b = Arc::new(new_block);
+                let iter = b.iter(cmp);
                 if options.fill_cache {
-                    // TODO: avoid clone
-                    cache.insert(cache_key_buffer, b.clone(), charge, None);
+                    cache.insert(cache_key_buffer, b, charge, None);
                 }
-                b
+                iter
             }
         } else {
             let data = read_block(&self.file, &data_block_handle, options.verify_checksums)?;
             let b = Block::new(data)?;
-            Arc::new(b)
+            b.iter(cmp)
         };
-        Ok(block.iter(self.options.comparator.clone()))
+        Ok(iter)
     }
 
     /// Gets the first entry with the key equal or greater than target.
     /// The given `key` is a user key
-    pub fn internal_get(&self, options: ReadOptions, key: &[u8]) -> Result<Option<(Slice, Slice)>> {
-        let mut index_iter = self.index_block.iter(self.options.comparator.clone());
+    pub fn internal_get<C: Comparator + Clone>(
+        &self,
+        options: ReadOptions,
+        cmp: C,
+        key: &[u8],
+    ) -> Result<Option<(Slice, Slice)>> {
+        let mut index_iter = self.index_block.iter(cmp.clone());
         // seek to the first 'last key' bigger than 'key'
         index_iter.seek(key);
         if index_iter.valid() {
@@ -169,7 +180,7 @@ impl<F: File> Table<F> {
             }
             if maybe_contained {
                 let (data_block_handle, _) = BlockHandle::decode_from(handle_val.as_slice())?;
-                let mut block_iter = self.block_reader(data_block_handle, options)?;
+                let mut block_iter = self.block_reader(cmp, data_block_handle, options)?;
                 block_iter.seek(key);
                 if block_iter.valid() {
                     return Ok(Some((block_iter.key(), block_iter.value())));
@@ -189,8 +200,8 @@ impl<F: File> Table<F> {
     /// be close to the file length.
     /// Temporary only used in tests.
     #[allow(dead_code)]
-    pub(crate) fn approximate_offset_of(&self, key: &[u8]) -> u64 {
-        let mut index_iter = self.index_block.iter(self.options.comparator.clone());
+    pub(crate) fn approximate_offset_of<C: Comparator + Clone>(&self, cmp: C, key: &[u8]) -> u64 {
+        let mut index_iter = self.index_block.iter(cmp);
         index_iter.seek(key);
         if index_iter.valid() {
             let val = index_iter.value();
@@ -205,20 +216,23 @@ impl<F: File> Table<F> {
     }
 }
 
-pub struct TableIterFactory<F: File> {
+pub struct TableIterFactory<C: Comparator + Clone, F: File> {
     options: ReadOptions,
     table: Arc<Table<F>>,
+    cmp: C,
 }
 
-impl<F: File> DerivedIterFactory for TableIterFactory<F> {
-    type Iter = BlockIterator;
+impl<C: Comparator + Clone, F: File> DerivedIterFactory for TableIterFactory<C, F> {
+    type Iter = BlockIterator<C>;
     fn derive(&self, value: &[u8]) -> Result<Self::Iter> {
-        BlockHandle::decode_from(value)
-            .and_then(|(handle, _)| self.table.block_reader(handle, self.options))
+        BlockHandle::decode_from(value).and_then(|(handle, _)| {
+            self.table
+                .block_reader(self.cmp.clone(), handle, self.options)
+        })
     }
 }
 
-pub type TableIterator<F> = ConcatenateIterator<BlockIterator, TableIterFactory<F>>;
+pub type TableIterator<C, F> = ConcatenateIterator<BlockIterator<C>, TableIterFactory<C, F>>;
 
 /// Create a new `ConcatenateIterator` as table iterator.
 /// This iterator is able to yield all the key/values in the given `table` file
@@ -226,10 +240,17 @@ pub type TableIterator<F> = ConcatenateIterator<BlockIterator, TableIterFactory<
 /// Entry format:
 ///     key: internal key
 ///     value: value of user key
-pub fn new_table_iterator<F: File>(table: Arc<Table<F>>, options: ReadOptions) -> TableIterator<F> {
-    let cmp = table.options.comparator.clone();
-    let index_iter = table.index_block.iter(cmp);
-    let factory = TableIterFactory { options, table };
+pub fn new_table_iterator<C: Comparator + Clone, F: File>(
+    cmp: C,
+    table: Arc<Table<F>>,
+    options: ReadOptions,
+) -> TableIterator<C, F> {
+    let index_iter = table.index_block.iter(cmp.clone());
+    let factory = TableIterFactory {
+        options,
+        table,
+        cmp,
+    };
     ConcatenateIterator::new(index_iter, factory)
 }
 
@@ -615,12 +636,13 @@ mod tests {
         let bf = BloomFilter::new(16);
         o.filter_policy = Some(Rc::new(bf));
         let opt = Arc::new(o);
-        let new_file = s.create("test").expect("");
+        let new_file = s.create("test").unwrap();
         let mut tb = TableBuilder::new(new_file, opt.clone());
-        tb.finish(false).expect("");
-        let file = s.open("test").expect("");
-        let file_len = file.len().expect("");
-        let table = Table::open(file, file_len, opt.clone()).expect("");
+        tb.finish(false).unwrap();
+        let file = s.open("test").unwrap();
+        let file_len = file.len().unwrap();
+        let cmp = BytewiseComparator::default();
+        let table = Table::open(file, file_len, opt.clone(), cmp).unwrap();
         assert!(table.filter_reader.is_some());
         assert!(table.meta_block_handle.is_some());
     }
@@ -628,17 +650,19 @@ mod tests {
     #[test]
     fn test_build_empty_table_without_meta_block() {
         let s = MemStorage::default();
-        let new_file = s.create("test").expect("");
+        let new_file = s.create("test").unwrap();
         let opt = Arc::new(Options::default()); // no filter block on default
         let mut tb = TableBuilder::new(new_file, opt.clone());
-        tb.finish(false).expect("");
-        let file = s.open("test").expect("");
-        let file_len = file.len().expect("");
-        let table = Table::open(file, file_len, opt.clone()).expect("");
+        tb.finish(false).unwrap();
+        let file = s.open("test").unwrap();
+        let file_len = file.len().unwrap();
+        let cmp = BytewiseComparator::default();
+        let table = Table::open(file, file_len, opt.clone(), cmp).unwrap();
         assert!(table.filter_reader.is_none());
         assert!(table.meta_block_handle.is_none()); // no filter block means no meta block
         let read_opt = ReadOptions::default();
-        let res = table.internal_get(read_opt, b"test");
+        let cmp = BytewiseComparator::default();
+        let res = table.internal_get(read_opt, cmp, b"test");
         assert!(res.is_err());
     }
 
@@ -649,8 +673,8 @@ mod tests {
         let new_file = s.create("test").expect("file create should work");
         let opt = Arc::new(Options::default());
         let mut tb = TableBuilder::new(new_file, opt.clone());
-        tb.add(b"222", b"").expect("");
-        tb.add(b"1", b"").expect("");
+        tb.add(b"222", b"").unwrap();
+        tb.add(b"1", b"").unwrap();
     }
 
     #[test]
@@ -665,12 +689,12 @@ mod tests {
         }
         let block = Vec::from(tb.data_block.finish());
         let mut bh = BlockHandle::new(0, 0);
-        tb.write_block(&block, &mut bh).expect("");
+        tb.write_block(&block, &mut bh).unwrap();
         let file = s.open("test").expect("file open should work");
-        let res = read_block(&file, &bh, true).expect("");
+        let res = read_block(&file, &bh, true).unwrap();
         assert_eq!(res, block);
-        let block = Block::new(res).expect("");
-        let cmp = Arc::new(BytewiseComparator::default());
+        let block = Block::new(res).unwrap();
+        let cmp = BytewiseComparator::default();
         let mut iter = block.iter(cmp);
         iter.seek_to_first();
         let mut result_pairs = vec![];
@@ -688,17 +712,18 @@ mod tests {
     #[test]
     fn test_table_write_and_read() {
         let s = MemStorage::default();
-        let new_file = s.create("test").expect("file create should work");
+        let new_file = s.create("test").unwrap();
         let opt = Arc::new(Options::default());
         let mut tb = TableBuilder::new(new_file, opt.clone());
         let tests = vec![("", "test"), ("a", "aa"), ("b", "bb")];
         for (key, val) in tests.clone().drain(..) {
-            tb.add(key.as_bytes(), val.as_bytes()).expect("");
+            tb.add(key.as_bytes(), val.as_bytes()).unwrap();
         }
-        tb.finish(false).expect("TableBuilder 'finish' should work");
-        let file = s.open("test").expect("file open should work");
-        let file_len = file.len().expect("file len should work");
-        let table = Table::open(file, file_len, opt.clone()).expect("table open should work");
+        tb.finish(false).unwrap();
+        let file = s.open("test").unwrap();
+        let file_len = file.len().unwrap();
+        let cmp = BytewiseComparator::default();
+        let table = Table::open(file, file_len, opt.clone(), cmp).unwrap();
         let read_opt = ReadOptions {
             verify_checksums: true,
             fill_cache: true,
@@ -708,8 +733,8 @@ mod tests {
             assert_eq!(
                 val,
                 table
-                    .internal_get(read_opt, key.as_bytes())
-                    .expect("")
+                    .internal_get(read_opt, cmp, key.as_bytes())
+                    .unwrap()
                     .unwrap()
                     .1
                     .as_str()
