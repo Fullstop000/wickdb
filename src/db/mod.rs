@@ -1179,7 +1179,7 @@ pub(crate) fn build_table<S: Storage + Clone>(
     if iter.valid() {
         let file = storage.create(file_name.as_str())?;
         let icmp = InternalKeyComparator::new(options.comparator.clone());
-        let mut builder = TableBuilder::new(file, options);
+        let mut builder = TableBuilder::new(file, icmp.clone(), options);
         let mut prev_key = Slice::default();
         let smallest_key = iter.key();
         while iter.valid() {

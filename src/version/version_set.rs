@@ -612,7 +612,11 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         output.number = file_number;
         let file_name = generate_filename(self.db_name, FileType::Table, file_number);
         let file = self.storage.create(file_name.as_str())?;
-        compact.builder = Some(TableBuilder::new(file, self.options.clone()));
+        compact.builder = Some(TableBuilder::new(
+            file,
+            self.icmp.clone(),
+            self.options.clone(),
+        ));
         Ok(())
     }
 

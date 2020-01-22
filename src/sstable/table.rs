@@ -257,16 +257,16 @@ pub fn new_table_iterator<C: Comparator + Clone, F: File>(
 /// Temporarily stores the contents of the table it is
 /// building in .sst file but does not close the file. It is up to the
 /// caller to close the file after calling `Finish()`.
-pub struct TableBuilder<F: File> {
+pub struct TableBuilder<C: Comparator + Clone, F: File> {
     options: Arc<Options>,
-    cmp: Arc<dyn Comparator>,
+    cmp: C,
     // underlying sst file
     file: F,
     // the written data length
     // updated only after the pending_handle is stored in the index block
     offset: u64,
-    data_block: BlockBuilder,
-    index_block: BlockBuilder,
+    data_block: BlockBuilder<C>,
+    index_block: BlockBuilder<C>,
     // the last added key
     // can be used when adding a new entry into index block
     last_key: Vec<u8>,
@@ -284,13 +284,11 @@ pub struct TableBuilder<F: File> {
     pending_handle: BlockHandle,
 }
 
-impl<F: File> TableBuilder<F> {
-    pub fn new(file: F, options: Arc<Options>) -> Self {
+impl<C: Comparator + Clone, F: File> TableBuilder<C, F> {
+    pub fn new(file: F, cmp: C, options: Arc<Options>) -> Self {
         let opt = options.clone();
-        let db_builder =
-            BlockBuilder::new(options.block_restart_interval, options.comparator.clone());
-        let ib_builder =
-            BlockBuilder::new(options.block_restart_interval, options.comparator.clone());
+        let db_builder = BlockBuilder::new(options.block_restart_interval, cmp.clone());
+        let ib_builder = BlockBuilder::new(options.block_restart_interval, cmp.clone());
         let fb = {
             if let Some(policy) = opt.filter_policy.clone() {
                 let mut f = FilterBlockBuilder::new(policy.clone());
@@ -303,7 +301,7 @@ impl<F: File> TableBuilder<F> {
         Self {
             options: opt,
             file,
-            cmp: options.comparator.clone(),
+            cmp,
             offset: 0,
             data_block: db_builder,
             index_block: ib_builder,
@@ -637,11 +635,11 @@ mod tests {
         o.filter_policy = Some(Rc::new(bf));
         let opt = Arc::new(o);
         let new_file = s.create("test").unwrap();
-        let mut tb = TableBuilder::new(new_file, opt.clone());
+        let cmp = BytewiseComparator::default();
+        let mut tb = TableBuilder::new(new_file, cmp, opt.clone());
         tb.finish(false).unwrap();
         let file = s.open("test").unwrap();
         let file_len = file.len().unwrap();
-        let cmp = BytewiseComparator::default();
         let table = Table::open(file, file_len, opt.clone(), cmp).unwrap();
         assert!(table.filter_reader.is_some());
         assert!(table.meta_block_handle.is_some());
@@ -652,7 +650,8 @@ mod tests {
         let s = MemStorage::default();
         let new_file = s.create("test").unwrap();
         let opt = Arc::new(Options::default()); // no filter block on default
-        let mut tb = TableBuilder::new(new_file, opt.clone());
+        let cmp = BytewiseComparator::default();
+        let mut tb = TableBuilder::new(new_file, cmp, opt.clone());
         tb.finish(false).unwrap();
         let file = s.open("test").unwrap();
         let file_len = file.len().unwrap();
@@ -661,7 +660,6 @@ mod tests {
         assert!(table.filter_reader.is_none());
         assert!(table.meta_block_handle.is_none()); // no filter block means no meta block
         let read_opt = ReadOptions::default();
-        let cmp = BytewiseComparator::default();
         let res = table.internal_get(read_opt, cmp, b"test");
         assert!(res.is_err());
     }
@@ -672,7 +670,7 @@ mod tests {
         let s = MemStorage::default();
         let new_file = s.create("test").expect("file create should work");
         let opt = Arc::new(Options::default());
-        let mut tb = TableBuilder::new(new_file, opt.clone());
+        let mut tb = TableBuilder::new(new_file, BytewiseComparator::default(), opt.clone());
         tb.add(b"222", b"").unwrap();
         tb.add(b"1", b"").unwrap();
     }
@@ -682,7 +680,8 @@ mod tests {
         let s = MemStorage::default();
         let new_file = s.create("test").expect("file create should work");
         let opt = Arc::new(Options::default());
-        let mut tb = TableBuilder::new(new_file, opt.clone());
+        let cmp = BytewiseComparator::default();
+        let mut tb = TableBuilder::new(new_file, cmp, opt.clone());
         let test_pairs = vec![("", "test"), ("aaa", "123"), ("bbb", "456"), ("ccc", "789")];
         for (key, val) in test_pairs.clone().drain(..) {
             tb.data_block.add(key.as_bytes(), val.as_bytes());
@@ -694,7 +693,6 @@ mod tests {
         let res = read_block(&file, &bh, true).unwrap();
         assert_eq!(res, block);
         let block = Block::new(res).unwrap();
-        let cmp = BytewiseComparator::default();
         let mut iter = block.iter(cmp);
         iter.seek_to_first();
         let mut result_pairs = vec![];
@@ -714,7 +712,8 @@ mod tests {
         let s = MemStorage::default();
         let new_file = s.create("test").unwrap();
         let opt = Arc::new(Options::default());
-        let mut tb = TableBuilder::new(new_file, opt.clone());
+        let cmp = BytewiseComparator::default();
+        let mut tb = TableBuilder::new(new_file, cmp, opt.clone());
         let tests = vec![("", "test"), ("a", "aa"), ("b", "bb")];
         for (key, val) in tests.clone().drain(..) {
             tb.add(key.as_bytes(), val.as_bytes()).unwrap();
@@ -722,7 +721,6 @@ mod tests {
         tb.finish(false).unwrap();
         let file = s.open("test").unwrap();
         let file_len = file.len().unwrap();
-        let cmp = BytewiseComparator::default();
         let table = Table::open(file, file_len, opt.clone(), cmp).unwrap();
         let read_opt = ReadOptions {
             verify_checksums: true,

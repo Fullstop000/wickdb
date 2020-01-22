@@ -84,7 +84,7 @@ pub struct Compaction<F: File> {
     // current table builder for output sst file
     // we rotate a new builder when the inputs hit
     // the `should_stop_before`
-    pub builder: Option<TableBuilder<F>>,
+    pub builder: Option<TableBuilder<InternalKeyComparator, F>>,
 
     // total bytes has been written
     pub total_bytes: u64,

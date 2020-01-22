@@ -428,6 +428,51 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy)]
+    enum TestComparator {
+        Normal(BytewiseComparator),
+        Reverse(ReverseComparator),
+    }
+
+    impl TestComparator {
+        fn new(is_reversed: bool) -> Self {
+            match is_reversed {
+                true => TestComparator::Reverse(ReverseComparator::default()),
+                false => TestComparator::Normal(BytewiseComparator::default()),
+            }
+        }
+    }
+
+    impl Comparator for TestComparator {
+        fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
+            match &self {
+                TestComparator::Normal(c) => c.compare(a, b),
+                TestComparator::Reverse(c) => c.compare(a, b),
+            }
+        }
+
+        fn name(&self) -> &str {
+            match &self {
+                TestComparator::Normal(c) => c.name(),
+                TestComparator::Reverse(c) => c.name(),
+            }
+        }
+
+        fn separator(&self, a: &[u8], b: &[u8]) -> Vec<u8> {
+            match &self {
+                TestComparator::Normal(c) => c.separator(a, b),
+                TestComparator::Reverse(c) => c.separator(a, b),
+            }
+        }
+
+        fn successor(&self, key: &[u8]) -> Vec<u8> {
+            match &self {
+                TestComparator::Normal(c) => c.successor(key),
+                TestComparator::Reverse(c) => c.successor(key),
+            }
+        }
+    }
+
     // Helper class for tests to unify the interface between
     // BlockBuilder/TableBuilder and Block/Table
     trait Constructor {
@@ -445,14 +490,14 @@ mod tests {
 
     struct BlockConstructor {
         block: Block,
-        is_reverse: bool,
+        is_reversed: bool,
     }
 
     impl BlockConstructor {
-        fn new(is_reverse: bool) -> Self {
+        fn new(is_reversed: bool) -> Self {
             Self {
                 block: Block::default(),
-                is_reverse,
+                is_reversed,
             }
         }
     }
@@ -464,8 +509,10 @@ mod tests {
             _storage: &MemStorage,
             data: &[(Vec<u8>, Vec<u8>)],
         ) -> Result<()> {
-            let mut builder =
-                BlockBuilder::new(options.block_restart_interval, options.comparator.clone());
+            let mut builder = BlockBuilder::new(
+                options.block_restart_interval,
+                TestComparator::new(self.is_reversed),
+            );
             for (key, value) in data {
                 builder.add(key.as_slice(), value.as_slice())
             }
@@ -476,25 +523,20 @@ mod tests {
         }
 
         fn iter(&self) -> Box<dyn Iterator> {
-            let iter: Box<dyn Iterator> = if self.is_reverse {
-                Box::new(self.block.iter(ReverseComparator::default()))
-            } else {
-                Box::new(self.block.iter(BytewiseComparator::default()))
-            };
-            iter
+            Box::new(self.block.iter(TestComparator::new(self.is_reversed)))
         }
     }
 
     struct TableConstructor {
         table: Option<Arc<Table<FileNode>>>,
-        is_reversed: bool,
+        cmp: TestComparator,
     }
 
     impl TableConstructor {
         fn new(is_reversed: bool) -> Self {
             Self {
                 table: None,
-                is_reversed,
+                cmp: TestComparator::new(is_reversed),
             }
         }
     }
@@ -508,39 +550,25 @@ mod tests {
         ) -> Result<()> {
             let file_name = "test_table";
             let file = storage.create(file_name)?;
-            let mut builder = TableBuilder::new(file, options.clone());
+            let mut builder = TableBuilder::new(file, self.cmp, options.clone());
             for (key, value) in data {
-                builder
-                    .add(key.as_slice(), value.as_slice())
-                    .expect("TableBuilder add should work");
+                builder.add(key.as_slice(), value.as_slice()).unwrap();
             }
-            builder
-                .finish(false)
-                .expect("TableBuilder finish should work");
+            builder.finish(false).unwrap();
             let file = storage.open(file_name)?;
             let file_len = file.len()?;
-            let table = if self.is_reversed {
-                let cmp = ReverseComparator::default();
-                Table::open(file, file_len, options.clone(), cmp)?
-            } else {
-                let cmp = BytewiseComparator::default();
-                Table::open(file, file_len, options.clone(), cmp)?
-            };
+            let table = Table::open(file, file_len, options.clone(), self.cmp)?;
             self.table = Some(Arc::new(table));
             Ok(())
         }
 
         fn iter(&self) -> Box<dyn Iterator> {
             match &self.table {
-                Some(t) => {
-                    if self.is_reversed {
-                        let cmp = ReverseComparator::default();
-                        Box::new(new_table_iterator(cmp, t.clone(), ReadOptions::default()))
-                    } else {
-                        let cmp = BytewiseComparator::default();
-                        Box::new(new_table_iterator(cmp, t.clone(), ReadOptions::default()))
-                    }
-                }
+                Some(t) => Box::new(new_table_iterator(
+                    self.cmp,
+                    t.clone(),
+                    ReadOptions::default(),
+                )),
                 None => Box::new(EmptyIterator::new()),
             }
         }
@@ -698,11 +726,7 @@ mod tests {
 
     impl MemTableConstructor {
         fn new(is_reversed: bool) -> Self {
-            let icmp = if is_reversed {
-                InternalKeyComparator::new(Arc::new(ReverseComparator::default()))
-            } else {
-                InternalKeyComparator::new(Arc::new(BytewiseComparator::default()))
-            };
+            let icmp = InternalKeyComparator::new(Arc::new(TestComparator::new(is_reversed)));
             Self {
                 inner: MemTable::new(icmp),
             }
