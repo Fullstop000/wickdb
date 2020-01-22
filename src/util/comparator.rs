@@ -90,7 +90,7 @@ impl Comparator for BytewiseComparator {
                 return res;
             }
         }
-        Vec::from(a)
+        a.to_owned()
     }
 
     #[inline]
@@ -105,7 +105,7 @@ impl Comparator for BytewiseComparator {
                 return res;
             }
         }
-        Vec::from(key)
+        key.to_owned()
     }
 }
 
@@ -129,7 +129,7 @@ mod tests {
         let c = BytewiseComparator::default();
         for (a, b, expect) in tests.drain(..) {
             let res = c.separator(a.as_bytes(), b.as_bytes());
-            assert_eq!(String::from_utf8(res).unwrap().as_str(), expect);
+            assert_eq!(std::str::from_utf8(&res).unwrap(), expect);
         }
         // special 0xff case
         let a: Vec<u8> = vec![48, 255];
@@ -144,7 +144,7 @@ mod tests {
         let c = BytewiseComparator::default();
         for (input, expect) in tests.drain(..) {
             let res = c.successor(input.as_bytes());
-            assert_eq!(String::from_utf8(res).unwrap().as_str(), expect);
+            assert_eq!(std::str::from_utf8(&res).unwrap(), expect);
         }
         // special 0xff case
         let mut corner_tests = vec![

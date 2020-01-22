@@ -312,12 +312,36 @@ impl Comparator for InternalKeyComparator {
         "leveldb.InternalKeyComparator"
     }
 
-    fn separator(&self, _a: &[u8], _b: &[u8]) -> Vec<u8> {
-        unimplemented!()
+    fn separator(&self, a: &[u8], b: &[u8]) -> Vec<u8> {
+        let start = extract_user_key(a);
+        let end = extract_user_key(b);
+        let mut s = self.user_comparator.separator(start, end);
+        if s.len() < start.len() && self.user_comparator.compare(start, &s) == Ordering::Less {
+            // Only a shorter separator is valid. Otherwise we just use `a`
+            // User key has become shorter physically, but larger logically.
+            // Tack on the earliest possible number to the shortened user key
+            put_fixed_64(
+                &mut s,
+                pack_seq_and_type(MAX_KEY_SEQUENCE, VALUE_TYPE_FOR_SEEK),
+            );
+            s
+        } else {
+            a.to_owned()
+        }
     }
 
-    fn successor(&self, _s: &[u8]) -> Vec<u8> {
-        unimplemented!()
+    fn successor(&self, s: &[u8]) -> Vec<u8> {
+        let ukey = extract_user_key(s);
+        let mut suc = self.user_comparator.successor(ukey);
+        if suc.len() < ukey.len() && self.user_comparator.compare(ukey, &suc) == Ordering::Less {
+            put_fixed_64(
+                &mut suc,
+                pack_seq_and_type(MAX_KEY_SEQUENCE, VALUE_TYPE_FOR_SEEK),
+            );
+            suc
+        } else {
+            s.to_owned()
+        }
     }
 }
 
@@ -353,7 +377,8 @@ pub fn extract_user_key(key: &[u8]) -> &[u8] {
     let size = key.len();
     assert!(
         size >= INTERNAL_KEY_TAIL,
-        "[internal key] invalid size of internal key : expect >= 8 but got {}",
+        "[internal key] invalid size of internal key : expect >= {} but got {}",
+        INTERNAL_KEY_TAIL,
         size
     );
     &key[..size - INTERNAL_KEY_TAIL]
@@ -386,6 +411,7 @@ fn pack_seq_and_type(seq: u64, v_type: ValueType) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::comparator::BytewiseComparator;
 
     #[test]
     fn test_pack_seq_and_type() {
@@ -441,6 +467,118 @@ mod tests {
                 assert_encoded_decoded(test_keys[i], test_seqs[j], ValueType::Value);
                 assert_encoded_decoded(test_keys[i], test_seqs[j], ValueType::Deletion);
             }
+        }
+    }
+
+    #[test]
+    fn test_icmp_cmp() {
+        let icmp = InternalKeyComparator::new(Arc::new(BytewiseComparator::default()));
+        let tests = vec![
+            (
+                ("", 100, ValueType::Value),
+                ("", 100, ValueType::Value),
+                Ordering::Equal,
+            ),
+            (
+                ("", 90, ValueType::Value),
+                ("", 100, ValueType::Value),
+                Ordering::Greater,
+            ), // physically less but logically larger
+            (
+                ("", 90, ValueType::Value),
+                ("", 90, ValueType::Deletion),
+                Ordering::Equal,
+            ), // Only cmp value seq if the user keys are same
+            (
+                ("a", 90, ValueType::Value),
+                ("b", 100, ValueType::Value),
+                Ordering::Less,
+            ),
+        ];
+        for (a, b, expected) in tests {
+            let ka = InternalKey::new(a.0.as_bytes(), a.1, a.2);
+            let kb = InternalKey::new(b.0.as_bytes(), b.1, b.2);
+            assert_eq!(expected, icmp.compare(ka.data(), kb.data()));
+        }
+    }
+
+    #[test]
+    fn test_icmp_separator() {
+        let tests = vec![
+            // ukey are the same
+            (
+                ("foo", 100, ValueType::Value),
+                ("foo", 99, ValueType::Value),
+                ("foo", 100, ValueType::Value),
+            ),
+            (
+                ("foo", 100, ValueType::Value),
+                ("foo", 101, ValueType::Value),
+                ("foo", 100, ValueType::Value),
+            ),
+            (
+                ("foo", 100, ValueType::Value),
+                ("foo", 100, ValueType::Value),
+                ("foo", 100, ValueType::Value),
+            ),
+            // ukey are disordered
+            (
+                ("foo", 100, ValueType::Value),
+                ("bar", 99, ValueType::Value),
+                ("foo", 100, ValueType::Value),
+            ),
+            // ukey are different but correctly ordered
+            (
+                ("foo", 100, ValueType::Value),
+                ("hello", 200, ValueType::Value),
+                ("g", MAX_KEY_SEQUENCE, VALUE_TYPE_FOR_SEEK),
+            ),
+            // When a's ukey is the prefix of b's
+            (
+                ("foo", 100, ValueType::Value),
+                ("foobar", 200, ValueType::Value),
+                ("foo", 100, ValueType::Value),
+            ),
+            // When b's ukey is the prefix of a's
+            (
+                ("foobar", 100, ValueType::Value),
+                ("foo", 200, ValueType::Value),
+                ("foobar", 100, ValueType::Value),
+            ),
+        ];
+        let icmp = InternalKeyComparator::new(Arc::new(BytewiseComparator::default()));
+        for (a, b, expected) in tests {
+            let ka = InternalKey::new(a.0.as_bytes(), a.1, a.2);
+            let kb = InternalKey::new(b.0.as_bytes(), b.1, b.2);
+            assert_eq!(
+                InternalKey::new(expected.0.as_bytes(), expected.1, expected.2).data(),
+                icmp.separator(ka.data(), kb.data()).as_slice()
+            );
+        }
+    }
+
+    #[test]
+    fn test_icmp_successor() {
+        let tests = vec![
+            (
+                (Vec::from("foo".as_bytes()), 100, ValueType::Value),
+                (
+                    Vec::from("g".as_bytes()),
+                    MAX_KEY_SEQUENCE,
+                    VALUE_TYPE_FOR_SEEK,
+                ),
+            ),
+            (
+                (vec![255u8, 255u8], 100, ValueType::Value),
+                (vec![255u8, 255u8], 100, ValueType::Value),
+            ),
+        ];
+        let icmp = InternalKeyComparator::new(Arc::new(BytewiseComparator::default()));
+        for (k, expected) in tests {
+            assert_eq!(
+                icmp.successor(InternalKey::new(k.0.as_slice(), k.1, k.2).data()),
+                InternalKey::new(expected.0.as_slice(), expected.1, expected.2).data()
+            );
         }
     }
 }
