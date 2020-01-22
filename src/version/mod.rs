@@ -159,7 +159,13 @@ impl Version {
             for file in files_to_seek.iter() {
                 seek_stats.seek_file_level = Some(level);
                 seek_stats.seek_file = Some(file.clone());
-                match table_cache.get(options, &ikey, file.number, file.file_size)? {
+                match table_cache.get(
+                    self.icmp.clone(),
+                    options,
+                    &ikey,
+                    file.number,
+                    file.file_size,
+                )? {
                     None => continue, // keep searching
                     Some((encoded_key, value)) => {
                         match ParsedInternalKey::decode_from(encoded_key.as_slice()) {

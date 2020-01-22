@@ -403,16 +403,9 @@ mod tests {
         v
     }
 
+    #[derive(Default, Clone, Copy)]
     struct ReverseComparator {
         cmp: BytewiseComparator,
-    }
-
-    impl ReverseComparator {
-        fn new() -> Self {
-            Self {
-                cmp: BytewiseComparator::default(),
-            }
-        }
     }
 
     impl Comparator for ReverseComparator {
@@ -452,14 +445,14 @@ mod tests {
 
     struct BlockConstructor {
         block: Block,
-        cmp: Arc<dyn Comparator>,
+        is_reverse: bool,
     }
 
     impl BlockConstructor {
-        fn new(cmp: Arc<dyn Comparator>) -> Self {
+        fn new(is_reverse: bool) -> Self {
             Self {
                 block: Block::default(),
-                cmp,
+                is_reverse,
             }
         }
     }
@@ -483,25 +476,25 @@ mod tests {
         }
 
         fn iter(&self) -> Box<dyn Iterator> {
-            Box::new(self.block.iter(self.cmp.clone()))
+            let iter: Box<dyn Iterator> = if self.is_reverse {
+                Box::new(self.block.iter(ReverseComparator::default()))
+            } else {
+                Box::new(self.block.iter(BytewiseComparator::default()))
+            };
+            iter
         }
     }
 
     struct TableConstructor {
         table: Option<Arc<Table<FileNode>>>,
+        is_reversed: bool,
     }
 
     impl TableConstructor {
-        fn new(_cmp: Arc<dyn Comparator>) -> Self {
-            Self { table: None }
-        }
-
-        #[allow(dead_code)]
-        fn approximate_offset_of(&self, key: &[u8]) -> u64 {
-            if let Some(t) = &self.table {
-                t.approximate_offset_of(key)
-            } else {
-                0
+        fn new(is_reversed: bool) -> Self {
+            Self {
+                table: None,
+                is_reversed,
             }
         }
     }
@@ -526,14 +519,28 @@ mod tests {
                 .expect("TableBuilder finish should work");
             let file = storage.open(file_name)?;
             let file_len = file.len()?;
-            let table = Table::open(file, file_len, options.clone())?;
+            let table = if self.is_reversed {
+                let cmp = ReverseComparator::default();
+                Table::open(file, file_len, options.clone(), cmp)?
+            } else {
+                let cmp = BytewiseComparator::default();
+                Table::open(file, file_len, options.clone(), cmp)?
+            };
             self.table = Some(Arc::new(table));
             Ok(())
         }
 
         fn iter(&self) -> Box<dyn Iterator> {
             match &self.table {
-                Some(t) => Box::new(new_table_iterator(t.clone(), ReadOptions::default())),
+                Some(t) => {
+                    if self.is_reversed {
+                        let cmp = ReverseComparator::default();
+                        Box::new(new_table_iterator(cmp, t.clone(), ReadOptions::default()))
+                    } else {
+                        let cmp = BytewiseComparator::default();
+                        Box::new(new_table_iterator(cmp, t.clone(), ReadOptions::default()))
+                    }
+                }
                 None => Box::new(EmptyIterator::new()),
             }
         }
@@ -690,9 +697,14 @@ mod tests {
     }
 
     impl MemTableConstructor {
-        fn new(cmp: Arc<dyn Comparator>) -> Self {
+        fn new(is_reversed: bool) -> Self {
+            let icmp = if is_reversed {
+                InternalKeyComparator::new(Arc::new(ReverseComparator::default()))
+            } else {
+                InternalKeyComparator::new(Arc::new(BytewiseComparator::default()))
+            };
             Self {
-                inner: MemTable::new(InternalKeyComparator::new(cmp)),
+                inner: MemTable::new(icmp),
             }
         }
     }
@@ -818,14 +830,12 @@ mod tests {
             options.block_size = 256;
             options.paranoid_checks = true;
             if reverse_cmp {
-                options.comparator = Arc::new(ReverseComparator::new());
+                options.comparator = Arc::new(ReverseComparator::default());
             }
             let constructor: Box<dyn Constructor> = match t {
-                TestType::Table => Box::new(TableConstructor::new(options.comparator.clone())),
-                TestType::Block => Box::new(BlockConstructor::new(options.comparator.clone())),
-                TestType::Memtable => {
-                    Box::new(MemTableConstructor::new(options.comparator.clone()))
-                }
+                TestType::Table => Box::new(TableConstructor::new(reverse_cmp)),
+                TestType::Block => Box::new(BlockConstructor::new(reverse_cmp)),
+                TestType::Memtable => Box::new(MemTableConstructor::new(reverse_cmp)),
                 TestType::DB => Box::new(DBConstructor::new(options.comparator.clone())),
             };
             let storage = MemStorage::default();

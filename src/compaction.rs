@@ -158,6 +158,7 @@ impl<O: File> Compaction<O> {
                     for file in self.inputs[CompactionInputsRelation::Source as usize].iter() {
                         // all the level0 tables are guaranteed being added into the table_cache via minor compaction
                         iter_list.push(Box::new(table_cache.new_iter(
+                            icmp.clone(),
                             read_options.clone(),
                             file.number,
                             file.file_size,
@@ -165,7 +166,8 @@ impl<O: File> Compaction<O> {
                     }
                 } else {
                     let origin = LevelFileNumIterator::new(icmp.clone(), self.inputs[i].clone());
-                    let factory = FileIterFactory::new(read_options, table_cache.clone());
+                    let factory =
+                        FileIterFactory::new(icmp.clone(), read_options, table_cache.clone());
                     iter_list.push(Box::new(ConcatenateIterator::new(origin, factory)));
                 }
             }
