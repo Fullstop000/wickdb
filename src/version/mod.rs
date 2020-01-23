@@ -170,15 +170,10 @@ impl Version {
                     file.file_size,
                 )? {
                     None => continue, // keep searching
-<<<<<<< HEAD
                     Some(block_iter) => {
                         let encoded_key = block_iter.key();
                         let value = block_iter.value();
                         match ParsedInternalKey::decode_from(encoded_key.as_slice()) {
-=======
-                    Some((encoded_key, value)) => {
-                        match dbg!(ParsedInternalKey::decode_from(encoded_key.as_slice())) {
->>>>>>> make things work
                             None => return Err(Error::Corruption("bad internal key".to_owned())),
                             Some(parsed_key) => {
                                 if self

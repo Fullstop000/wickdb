@@ -104,6 +104,7 @@ impl<F: File> Table<F> {
                             if let Ok(filter_block) =
                                 read_block(&t.file, &filter_handle, options.paranoid_checks)
                             {
+                                dbg!("read filter block");
                                 t.filter_reader = Some(FilterBlockReader::new(
                                     t.options.filter_policy.clone().unwrap(),
                                     filter_block,
@@ -173,7 +174,9 @@ impl<F: File> Table<F> {
             // check the filter block
             if let Some(filter) = &self.filter_reader {
                 if let Ok((handle, _)) = BlockHandle::decode_from(handle_val.as_slice()) {
+                    dbg!("has filter block");
                     if !filter.key_may_match(handle.offset, key) {
+                        dbg!("no key exist in filter block");
                         maybe_contained = false;
                     }
                 }
@@ -181,9 +184,19 @@ impl<F: File> Table<F> {
             if maybe_contained {
                 let (data_block_handle, _) = BlockHandle::decode_from(handle_val.as_slice())?;
                 let mut block_iter = self.block_reader(cmp, data_block_handle, options)?;
+                dbg!("seek key in data block");
                 block_iter.seek(key);
                 if block_iter.valid() {
+                    dbg!(block_iter.key().as_slice());
+                    dbg!(block_iter.value());
                     return Ok(Some(block_iter));
+                }
+                dbg!("no key found in data block");
+                block_iter.seek_to_first();
+                while block_iter.valid() {
+                    dbg!(block_iter.key());
+                    dbg!(block_iter.value());
+                    block_iter.next();
                 }
                 block_iter.status()?;
             }

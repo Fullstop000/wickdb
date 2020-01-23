@@ -563,23 +563,14 @@ mod tests {
         // Basic key
         builder.add(b"1111", b"val1");
         assert_eq!(1, builder.counter);
-<<<<<<< HEAD
         assert_eq!(&builder.last_key, b"1111");
-=======
-        assert_eq!(builder.last_key.as_slice(), b"1111");
->>>>>>> make things work
         let (shared, n1) = VarintU32::common_read(&builder.buffer);
         assert_eq!(0, shared);
         assert_eq!(1, n1);
         let (non_shared, n2) = VarintU32::common_read(&builder.buffer[n1 as usize..]);
         assert_eq!(4, non_shared);
         assert_eq!(1, n2);
-<<<<<<< HEAD
         let (value_len, n3) = VarintU32::common_read(&builder.buffer[(n1 + n2) as usize..]);
-=======
-        let (value_len, n3) =
-            VarintU32::common_read(&builder.buffer[(n1 + n2) as usize..]);
->>>>>>> make things work
         assert_eq!(4, value_len);
         assert_eq!(1, n3);
         let key_len = shared + non_shared;
@@ -596,12 +587,7 @@ mod tests {
         builder.add(b"11122", b"val2");
         let (shared, n1) = VarintU32::common_read(&builder.buffer[current..]);
         assert_eq!(shared, 3);
-<<<<<<< HEAD
         let (non_shared, n2) = VarintU32::common_read(&builder.buffer[current + n1 as usize..]);
-=======
-        let (non_shared, n2) =
-            VarintU32::common_read(&builder.buffer[current + n1 as usize..]);
->>>>>>> make things work
         assert_eq!(non_shared, 2);
         let (value_len, n3) =
             VarintU32::common_read(&builder.buffer[current + (n1 + n2) as usize..]);

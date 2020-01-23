@@ -1502,9 +1502,9 @@ mod tests {
     {
         vec![
             TestOption::Default,
-            TestOption::Reuse,
-            TestOption::FilterPolicy,
-            TestOption::UnCompressed,
+            // TestOption::Reuse,
+            // TestOption::FilterPolicy,
+            // TestOption::UnCompressed,
         ]
         .into_iter()
         .map(|opt| {
@@ -1698,12 +1698,12 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_get_from_immutable_layer() {
-        for t in cases(|mut opt| {
+        for (i, t) in cases(|mut opt| {
             opt.write_buffer_size = 100000; // Small write buffer
             opt
-        }) {
+        }).into_iter().enumerate() {
+            dbg!(i);
             t.assert_put_get("foo", "v1");
             let r = t.db.subscribe_compaction_complete();
             // block `flush()`

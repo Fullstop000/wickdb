@@ -54,7 +54,7 @@ impl FilterBlockBuilder {
         self.keys.push(key);
     }
 
-    /// generates filter data for the data block on given `block_offset`
+    /// Generates filter data for the data block on given `block_offset`
     pub fn start_block(&mut self, block_offset: u64) {
         // calc the filter index for the given block offset
         // the filter with the index i filters the block data
@@ -139,7 +139,7 @@ impl FilterBlockReader {
         r
     }
 
-    /// Returns iff the given key is probably contained in the given `block_offset` block
+    /// Returns true if the given key is probably contained in the given `block_offset` block
     pub fn key_may_match(&self, block_offset: u64, key: &[u8]) -> bool {
         let i = block_offset as usize >> self.base_lg; // a >> b == a / (1 << b)
         if i < self.num {
