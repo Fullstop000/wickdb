@@ -23,64 +23,63 @@ use crate::Result;
 use rand::random;
 use std::cmp::Ordering as CmpOrdering;
 use std::intrinsics::copy_nonoverlapping;
+use std::mem;
 use std::ptr;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
-use std::{mem, slice};
 
 const BRANCHING: u32 = 4;
 pub const MAX_HEIGHT: usize = 12;
 
 #[derive(Debug)]
 #[repr(C)]
-/// Node represents a skiplist node.
-/// The memory layout of Node should be stable but the default `repr(Rust)` causes the issue
-/// that fields can not be laid out in the order of their declaration.
-/// And `repr(C)` avoid it but it may add some padding bits for alignment purpose ( using 8 bits for u32 ).
-/// However, it seems we should not use `repr(C, packed)` by https://doc.rust-lang.org/nomicon/other-reprs.html#reprpacked
-/// As we use `#[repr(C)]`, the size of `usize` is always 8 so
-/// `MAX_NODE_SIZE = size of Node + MAX_HEIGHT * size_of(usize) (ptr size is same as usize) = 56 + 12 * 8 = 152`
-pub struct Node {
-    pub key: Slice,
-    // The inner memory of slices will be allocated dynamically
-    // and the length depends on the height of Node
-    pub next_nodes: Box<[AtomicPtr<Node>]>,
+// Node represents a skiplist node.
+//
+// This struct is marked with `repr(C)` so that the specific order of fields is enforced.
+struct Node {
+    // The pointer and length pointing to the memory location
+    key: Slice,
+    height: usize,
+    // The inner size of `next_nodes` is equal to `height`
+    next_nodes: [AtomicPtr<Node>; 0],
 }
 
 impl Node {
-    /// Allocates memory in the given arena for Node
+    // Allocates memory in the given arena for `Node`.
     #[allow(clippy::cast_ptr_alignment)]
-    pub fn new<A: Arena>(key: Slice, height: usize, arena: &A) -> *mut Node {
-        let size = mem::size_of::<Node>() + height * mem::size_of::<AtomicPtr<Node>>();
-        let ptr = arena.allocate_aligned(size);
+    fn new<A: Arena>(key_ptr: Slice, height: usize, arena: &A) -> *const Self {
+        let pointers_size = height * mem::size_of::<AtomicPtr<Self>>();
+        let size = mem::size_of::<Self>() + pointers_size;
+        let p = arena.allocate_aligned(size) as *const Self as *mut Self;
         unsafe {
-            let (node_part, nexts_part) =
-                slice::from_raw_parts_mut(ptr, size).split_at_mut(mem::size_of::<Node>());
-            let node = node_part.as_mut_ptr() as *mut Node;
-            let nexts = Vec::from_raw_parts(
-                nexts_part.as_mut_ptr() as *mut AtomicPtr<Node>,
-                height,
-                height,
-            );
-            (*node).key = key;
-            (*node).next_nodes = nexts.into_boxed_slice();
-            node
+            ptr::write(&mut (*p).key, key_ptr);
+            ptr::write(&mut (*p).height, height);
+            ptr::write_bytes(&mut (*p).next_nodes, 0, height);
+            p as *const Self
         }
     }
 
     #[inline]
-    pub fn get_next(&self, height: usize) -> *mut Node {
-        self.next_nodes[height - 1].load(Ordering::Acquire)
+    fn get_next(&self, height: usize) -> *mut Node {
+        unsafe {
+            self.next_nodes
+                .get_unchecked(height - 1)
+                .load(Ordering::Acquire)
+        }
     }
 
     #[inline]
-    pub fn set_next(&self, height: usize, node: *mut Node) {
-        self.next_nodes[height - 1].store(node, Ordering::Release);
+    fn set_next(&self, height: usize, node: *mut Node) {
+        unsafe {
+            self.next_nodes
+                .get_unchecked(height - 1)
+                .store(node, Ordering::Release);
+        }
     }
 
     #[inline]
-    pub fn key(&self) -> &Slice {
-        &self.key
+    fn key(&self) -> &[u8] {
+        self.key.as_slice()
     }
 }
 
@@ -89,11 +88,11 @@ impl Node {
 pub struct Skiplist<C: Comparator, A: Arena> {
     // current max height
     // Should be handled atomically
-    pub max_height: AtomicUsize,
+    max_height: AtomicUsize,
     // head node
-    pub head: *mut Node,
+    head: *const Node,
     // arena contains all the nodes data
-    pub arena: A,
+    pub(super) arena: A,
     // comparator is used to compare the key of node
     comparator: C,
 }
@@ -119,14 +118,13 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
     /// Concurrent insertion is not thread safe but concurrent reading with a
     /// single writer is safe.
     ///
-    pub fn insert(&self, key: Vec<u8>) {
-        let mut prev = [ptr::null_mut(); MAX_HEIGHT];
-        let slc = Slice::from(&key);
-        let node = self.find_greater_or_equal(slc.as_slice(), Some(&mut prev));
+    pub fn insert(&self, key: &[u8]) {
+        let mut prev = [ptr::null(); MAX_HEIGHT];
+        let node = self.find_greater_or_equal(key, Some(&mut prev));
         if !node.is_null() {
             unsafe {
                 assert_ne!(
-                    (&(*node)).key().compare(&slc),
+                    self.comparator.compare((&(*node)).key(), key),
                     CmpOrdering::Equal,
                     "[skiplist] duplicate insertion [key={:?}] is not allowed",
                     &key
@@ -148,22 +146,22 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
             copy_nonoverlapping(key.as_ptr(), k, key.len());
         }
         // allocate the node
-        let new_node = Node::new(Slice::new(k as *const u8, key.len()), height, &self.arena);
+        let new_node = Node::new(Slice::new(k, key.len()), height, &self.arena);
         unsafe {
             for i in 1..=height {
                 (*new_node).set_next(i, (*(prev[i - 1])).get_next(i));
-                (*(prev[i - 1])).set_next(i, new_node);
+                (*(prev[i - 1])).set_next(i, new_node as *mut Node);
             }
         }
     }
 
-    /// Find the nearest node with a key >= the given key.
-    /// Add prev node into `prev_nodes`
-    /// which can be helpful for adding new node to the skiplist.
-    pub fn find_greater_or_equal(
+    // Find the nearest node with a key >= the given key.
+    // Add prev node into `prev_nodes`
+    // which can be helpful for adding new node to the skiplist.
+    fn find_greater_or_equal(
         &self,
         key: &[u8],
-        mut prev_nodes: Option<&mut [*mut Node]>,
+        mut prev_nodes: Option<&mut [*const Node]>,
     ) -> *mut Node {
         let mut level = self.max_height.load(Ordering::Acquire);
         let mut node = self.head;
@@ -190,19 +188,16 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
         }
     }
 
-    /// Find the nearest node with a key < the given key.
-    /// Return head if there is no such node.
-    pub fn find_less_than(&self, key: &Slice) -> *mut Node {
+    // Find the nearest node with a key < the given key.
+    // Return head if there is no such node.
+    fn find_less_than(&self, key: &[u8]) -> *const Node {
         let mut level = self.max_height.load(Ordering::Acquire);
         let mut node = self.head;
         loop {
             unsafe {
                 let next = (*node).get_next(level);
                 if next.is_null()
-                    || self
-                        .comparator
-                        .compare(&((*next).key()).as_slice(), key.as_slice())
-                        != CmpOrdering::Less
+                    || self.comparator.compare(&((*next).key()), key) != CmpOrdering::Less
                 {
                     // next is nullptr or next.key >= key
                     if level == 1 {
@@ -220,8 +215,8 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
         }
     }
 
-    /// Find the last node
-    pub fn find_last(&self) -> *mut Node {
+    // Find the last node
+    fn find_last(&self) -> *const Node {
         let mut level = self.max_height.load(Ordering::Acquire);
         let mut node = self.head;
         loop {
@@ -241,13 +236,13 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
     }
 
     /// Return whether the give key is less than the given node's key.
-    pub(super) fn key_is_less_than_or_equal(&self, key: &[u8], n: *mut Node) -> bool {
+    fn key_is_less_than_or_equal(&self, key: &[u8], n: *const Node) -> bool {
         if n.is_null() {
             // take nullptr as +infinite large
             true
         } else {
             let node_key = unsafe { (*n).key() };
-            match self.comparator.compare(key, node_key.as_slice()) {
+            match self.comparator.compare(key, node_key) {
                 CmpOrdering::Greater => false,
                 _ => true,
             }
@@ -258,7 +253,7 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
 /// Iteration over the contents of a skip list
 pub struct SkiplistIterator<C: Comparator, A: Arena> {
     skl: Rc<Skiplist<C, A>>,
-    pub(super) node: *mut Node,
+    node: *const Node,
 }
 
 impl<C: Comparator, A: Arena> Iterator for SkiplistIterator<C, A> {
@@ -272,7 +267,10 @@ impl<C: Comparator, A: Arena> Iterator for SkiplistIterator<C, A> {
     #[inline]
     fn seek_to_first(&mut self) {
         unsafe {
-            self.node = (*(self.skl.head)).next_nodes[0].load(Ordering::Acquire);
+            self.node = (*self.skl.head)
+                .next_nodes
+                .get_unchecked(0)
+                .load(Ordering::Acquire);
         }
     }
 
@@ -281,7 +279,7 @@ impl<C: Comparator, A: Arena> Iterator for SkiplistIterator<C, A> {
     fn seek_to_last(&mut self) {
         self.node = self.skl.find_last();
         if self.node == self.skl.head {
-            self.node = ptr::null_mut();
+            self.node = ptr::null();
         }
     }
 
@@ -305,7 +303,7 @@ impl<C: Comparator, A: Arena> Iterator for SkiplistIterator<C, A> {
     fn prev(&mut self) {
         self.panic_valid();
         let key = self.key();
-        self.node = self.skl.find_less_than(&key);
+        self.node = self.skl.find_less_than(key.as_slice());
         if self.node == self.skl.head {
             self.node = ptr::null_mut();
         }
@@ -315,7 +313,7 @@ impl<C: Comparator, A: Arena> Iterator for SkiplistIterator<C, A> {
     #[inline]
     fn key(&self) -> Slice {
         self.panic_valid();
-        unsafe { (*(self.node)).key().clone() }
+        unsafe { (*(self.node)).key().into() }
     }
     /// Should not be used
     #[inline]
@@ -336,9 +334,9 @@ impl<C: Comparator, A: Arena> SkiplistIterator<C, A> {
         }
     }
 
-    /// If the head is nullptr, this method will panic. Otherwise return true.
+    // If the head is nullptr, this method will panic. Otherwise return true.
     #[inline]
-    pub fn panic_valid(&self) -> bool {
+    fn panic_valid(&self) -> bool {
         assert!(self.valid(), "[skl] invalid iterator head",);
         true
     }
@@ -389,7 +387,7 @@ mod tests {
             let n = Node::new(key, height, &mut skl.arena);
             for (h, prev_node) in prev_nodes[0..height].iter().enumerate() {
                 unsafe {
-                    (**prev_node).set_next(h + 1, n);
+                    (**prev_node).set_next(h + 1, n as *mut Node);
                 }
             }
             for i in 0..height {
@@ -415,8 +413,7 @@ mod tests {
     #[test]
     fn test_key_is_less_than_or_equal() {
         let skl = new_test_skl();
-        let vec = vec![1u8, 2u8, 3u8];
-        let key = Slice::from(vec.as_slice());
+        let key = vec![1u8, 2u8, 3u8];
 
         let tests = vec![
             (vec![1u8, 2u8], false),
@@ -424,17 +421,11 @@ mod tests {
             (vec![1u8, 2u8, 3u8], true),
         ];
         // nullptr should be considered as the largest
-        assert_eq!(
-            true,
-            skl.key_is_less_than_or_equal(key.as_slice(), ptr::null_mut())
-        );
+        assert_eq!(true, skl.key_is_less_than_or_equal(&key, ptr::null_mut()));
 
         for (node_key, expected) in tests {
-            let node = Node::new(Slice::from(node_key.as_slice()), 1, &skl.arena);
-            assert_eq!(
-                expected,
-                skl.key_is_less_than_or_equal(key.as_slice(), node)
-            )
+            let node = Node::new((&node_key).into(), 1, &skl.arena);
+            assert_eq!(expected, skl.key_is_less_than_or_equal(&key, node))
         }
     }
 
@@ -452,26 +443,26 @@ mod tests {
             .map(|(key, height)| (Slice::from(*key), *height))
             .collect();
         let skl = construct_skl_from_nodes(nodes);
-        let mut prev_nodes = vec![ptr::null_mut(); 5];
+        let mut prev_nodes = vec![ptr::null(); 5];
         // test the scenario for un-inserted key
         let res = skl.find_greater_or_equal("key4".as_bytes(), Some(&mut prev_nodes));
         unsafe {
-            assert_eq!((*res).key().as_str(), "key5");
+            assert_eq!((*res).key(), "key5".as_bytes());
             // prev_nodes should be correct
-            assert_eq!((*(prev_nodes[0])).key().as_str(), "key3");
+            assert_eq!((*(prev_nodes[0])).key(), "key3".as_bytes());
             for node in prev_nodes[1..5].iter() {
-                assert_eq!((**node).key().as_str(), "key1");
+                assert_eq!((**node).key(), "key1".as_bytes());
             }
         }
-        prev_nodes = vec![ptr::null_mut(); 5];
+        prev_nodes = vec![ptr::null(); 5];
         // test the scenario for inserted key
         let res2 = skl.find_greater_or_equal("key5".as_bytes(), Some(&mut prev_nodes));
         unsafe {
-            assert_eq!((*res2).key().as_str(), "key5");
+            assert_eq!((*res2).key(), "key5".as_bytes());
             // prev_nodes should be correct
-            assert_eq!((*(prev_nodes[0])).key().as_str(), "key3");
+            assert_eq!((*(prev_nodes[0])).key(), "key3".as_bytes());
             for node in prev_nodes[1..5].iter() {
-                assert_eq!((**node).key().as_str(), "key1");
+                assert_eq!((**node).key(), "key1".as_bytes());
             }
         }
     }
@@ -492,17 +483,15 @@ mod tests {
         let skl = construct_skl_from_nodes(nodes);
 
         // test scenario for un-inserted key
-        let target_key = Slice::from("key4");
-        let res = skl.find_less_than(&target_key);
+        let res = skl.find_less_than("key4".as_bytes());
         unsafe {
-            assert_eq!((*res).key().as_str(), "key3");
+            assert_eq!((*res).key(), "key3".as_bytes());
         }
 
         // test scenario for inserted key
-        let target_key = Slice::from("key5");
-        let res = skl.find_less_than(&target_key);
+        let res = skl.find_less_than("key5".as_bytes());
         unsafe {
-            assert_eq!((*res).key().as_str(), "key3");
+            assert_eq!((*res).key(), "key3".as_bytes());
         }
     }
 
@@ -522,7 +511,7 @@ mod tests {
         let skl = construct_skl_from_nodes(nodes);
         let last = skl.find_last();
         unsafe {
-            assert_eq!((*last).key().as_str(), "key9");
+            assert_eq!((*last).key(), "key9".as_bytes());
         }
     }
 
@@ -530,16 +519,16 @@ mod tests {
     fn test_insert() {
         let inputs = vec!["key1", "key3", "key5", "key7", "key9"];
         let skl = new_test_skl();
-        for key in inputs.clone().drain(..) {
-            skl.insert(Vec::from(key));
+        for key in inputs.clone() {
+            skl.insert(key.as_bytes());
         }
 
         let mut node = skl.head;
-        for input_key in inputs.clone().drain(..) {
+        for input_key in inputs {
             unsafe {
                 let next = (*node).get_next(1);
                 let key = (*next).key();
-                assert_eq!(key.as_str(), input_key);
+                assert_eq!(key, input_key.as_bytes());
                 node = next;
             }
         }
@@ -552,10 +541,10 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_duplicate_insert_should_panic() {
-        let mut inputs = vec!["key1", "key1"];
+        let inputs = vec!["key1", "key1"];
         let skl = new_test_skl();
-        for key in inputs.drain(..) {
-            skl.insert(Vec::from(key));
+        for key in inputs {
+            skl.insert(key.as_bytes());
         }
     }
 
@@ -571,15 +560,15 @@ mod tests {
     fn test_skiplist_basic() {
         let skl = new_test_skl();
         let inputs = vec!["key1", "key11", "key13", "key3", "key5", "key7", "key9"];
-        for key in inputs.clone().drain(..) {
-            skl.insert(Vec::from(key))
+        for key in inputs.clone() {
+            skl.insert(key.as_bytes())
         }
         let mut iter = SkiplistIterator::new(Rc::new(skl));
-        assert_eq!(ptr::null_mut(), iter.node,);
+        assert_eq!(ptr::null(), iter.node);
 
         iter.seek_to_first();
         assert_eq!("key1", iter.key().as_str());
-        for key in inputs.clone().drain(..) {
+        for key in inputs.clone() {
             if !iter.valid() {
                 break;
             }
@@ -594,7 +583,7 @@ mod tests {
         assert_eq!(inputs[0], iter.key().as_str());
         iter.seek_to_first();
         iter.seek_to_last();
-        for key in inputs.clone().drain(..).rev() {
+        for key in inputs.into_iter().rev() {
             if !iter.valid() {
                 break;
             }
@@ -736,7 +725,7 @@ mod tests {
             let key = make_key(k as u64, g as u64);
             let mut bytes = vec![];
             put_fixed_64(&mut bytes, key);
-            self.list.insert(bytes);
+            self.list.insert(&bytes);
             self.current.set(k, g);
         }
 

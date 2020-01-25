@@ -18,7 +18,7 @@ fn bench_insert(c: &mut Criterion) {
                             vec![0u8; *length],
                         )
                     },
-                    |(s, key)| s.insert(key),
+                    |(s, key)| s.insert(&key),
                     BatchSize::PerIteration,
                 )
             },

@@ -142,6 +142,16 @@ impl Hash for Slice {
     }
 }
 
+impl AsRef<[u8]> for Slice {
+    fn as_ref(&self) -> &[u8] {
+        if !self.data.is_null() {
+            unsafe { slice::from_raw_parts(self.data, self.size) }
+        } else {
+            panic!("try to convert a empty(invalid) Slice as a &[u8] ")
+        }
+    }
+}
+
 impl<'a> From<&'a [u8]> for Slice {
     #[inline]
     fn from(v: &'a [u8]) -> Self {
