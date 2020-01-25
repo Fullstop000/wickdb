@@ -30,45 +30,6 @@ use crate::{Error, Result};
 use std::cmp::Ordering;
 use std::rc::Rc;
 
-pub trait MemoryTable {
-    type Iter: Iterator;
-    /// Returns an estimate of the number of bytes of data in use by this
-    /// data structure. It is safe to call when MemTable is being modified.
-    fn approximate_memory_usage(&self) -> usize;
-
-    /// Return an iterator that yields the contents of the memtable.
-    fn iter(&self) -> Self::Iter;
-
-    /// Add an entry into memtable that maps key to value at the
-    /// specified sequence number and with the specified type.
-    /// Typically value will be empty if the type is `Deletion`.
-    ///
-    /// The 'key' and 'value' will be bundled together into an 'entry':
-    ///
-    /// ```text
-    ///   +=================================+
-    ///   |       format of the entry       |
-    ///   +=================================+
-    ///   | varint32 of internal key length |
-    ///   +---------------------------------+ ---------------
-    ///   | user key bytes                  |
-    ///   +---------------------------------+   internal key
-    ///   | sequence (7)       |   type (1) |
-    ///   +---------------------------------+ ---------------
-    ///   | varint32 of value length        |
-    ///   +---------------------------------+
-    ///   | value bytes                     |
-    ///   +---------------------------------+
-    /// ```
-    ///
-    fn add(&self, seq_number: u64, val_type: ValueType, key: &[u8], value: &[u8]);
-
-    /// If memtable contains a value for key, returns it in `Some(Ok())`.
-    /// If memtable contains a deletion for key, returns `Some(Err(Status::NotFound))` .
-    /// If memtable does not contain the key, return `None`
-    fn get(&self, key: &LookupKey) -> Option<Result<Slice>>;
-}
-
 // KeyComparator is a wrapper for InternalKeyComparator. It will convert the input mem key
 // to the internal key before comparing.
 #[derive(Clone)]
@@ -111,25 +72,49 @@ pub struct MemTable {
 }
 
 impl MemTable {
+
+    /// Creates a new memory table
     pub fn new(icmp: InternalKeyComparator) -> Self {
         let arena = BlockArena::default();
         let kcmp = KeyComparator { icmp };
         let table = Rc::new(Skiplist::new(kcmp.clone(), arena));
         Self { cmp: kcmp, table }
     }
-}
 
-impl MemoryTable for MemTable {
-    type Iter = MemTableIterator;
-    fn approximate_memory_usage(&self) -> usize {
+    /// Returns an estimate of the number of bytes of data in use by this
+    /// data structure. It is safe to call when MemTable is being modified.
+    pub fn approximate_memory_usage(&self) -> usize {
         self.table.arena.memory_used()
     }
 
-    fn iter(&self) -> Self::Iter {
+    /// Creates a new `MemTableIterator`
+    pub fn iter(&self) -> MemTableIterator {
         MemTableIterator::new(self.table.clone())
     }
 
-    fn add(&self, seq_number: u64, val_type: ValueType, key: &[u8], value: &[u8]) {
+    /// Add an entry into memtable that maps key to value at the
+    /// specified sequence number and with the specified type.
+    /// Typically value will be empty if the type is `Deletion`.
+    ///
+    /// The 'key' and 'value' will be bundled together into an 'entry':
+    ///
+    /// ```text
+    ///   +=================================+
+    ///   |       format of the entry       |
+    ///   +=================================+
+    ///   | varint32 of internal key length |
+    ///   +---------------------------------+ ---------------
+    ///   | user key bytes                  |
+    ///   +---------------------------------+   internal key
+    ///   | sequence (7)       |   type (1) |
+    ///   +---------------------------------+ ---------------
+    ///   | varint32 of value length        |
+    ///   +---------------------------------+
+    ///   | value bytes                     |
+    ///   +---------------------------------+
+    /// ```
+    ///
+    pub fn add(&self, seq_number: u64, val_type: ValueType, key: &[u8], value: &[u8]) {
         let key_size = key.len();
         let internal_key_size = key_size + 8;
         let mut buf = vec![];
@@ -140,7 +125,10 @@ impl MemoryTable for MemTable {
         self.table.insert(&buf);
     }
 
-    fn get(&self, key: &LookupKey) -> Option<Result<Slice>> {
+    /// If memtable contains a value for key, returns it in `Some(Ok())`.
+    /// If memtable contains a deletion for key, returns `Some(Err(Status::NotFound))` .
+    /// If memtable does not contain the key, return `None`
+    pub fn get(&self, key: &LookupKey) -> Option<Result<Slice>> {
         let mk = key.mem_key();
         // internal key
         let mut iter = self.iter();
@@ -233,7 +221,7 @@ fn extract_varint32_encoded_slice(origin: &mut Slice) -> Slice {
 mod tests {
     use crate::db::format::{InternalKeyComparator, LookupKey, ParsedInternalKey, ValueType};
     use crate::iterator::Iterator;
-    use crate::mem::{MemTable, MemoryTable};
+    use crate::mem::MemTable;
     use crate::util::comparator::BytewiseComparator;
     use std::sync::Arc;
 

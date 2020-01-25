@@ -376,7 +376,7 @@ mod tests {
     };
     use crate::db::{WickDB, DB};
     use crate::iterator::{EmptyIterator, Iterator};
-    use crate::mem::{MemTable, MemoryTable};
+    use crate::mem::MemTable;
     use crate::options::{Options, ReadOptions};
     use crate::sstable::block::*;
     use crate::sstable::table::*;

@@ -16,7 +16,7 @@
 // found in the LICENSE file.
 
 use crate::db::format::ValueType;
-use crate::mem::{MemTable, MemoryTable};
+use crate::mem::MemTable;
 use crate::util::coding::{decode_fixed_32, decode_fixed_64, encode_fixed_32, encode_fixed_64};
 use crate::util::slice::Slice;
 use crate::util::varint::VarintU32;
@@ -200,7 +200,7 @@ mod tests {
     use crate::batch::WriteBatch;
     use crate::db::format::{InternalKeyComparator, ParsedInternalKey, ValueType};
     use crate::iterator::Iterator;
-    use crate::mem::{MemTable, MemoryTable};
+    use crate::mem::MemTable;
     use crate::util::comparator::BytewiseComparator;
     use std::sync::Arc;
 

@@ -23,7 +23,7 @@ use crate::db::format::{
 };
 use crate::db::iterator::DBIterator;
 use crate::iterator::{Iterator, MergingIterator};
-use crate::mem::{MemTable, MemoryTable};
+use crate::mem::MemTable;
 use crate::options::{Options, ReadOptions, WriteOptions};
 use crate::record::reader::Reader;
 use crate::record::writer::Writer;
