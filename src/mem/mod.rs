@@ -137,7 +137,7 @@ impl MemoryTable for MemTable {
         buf.extend_from_slice(key);
         put_fixed_64(&mut buf, (seq_number << 8) | val_type as u64);
         VarintU32::put_varint_prefixed_slice(&mut buf, value);
-        self.table.insert(buf);
+        self.table.insert(&buf);
     }
 
     fn get(&self, key: &LookupKey) -> Option<Result<Slice>> {
