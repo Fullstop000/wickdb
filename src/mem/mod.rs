@@ -72,7 +72,6 @@ pub struct MemTable {
 }
 
 impl MemTable {
-
     /// Creates a new memory table
     pub fn new(icmp: InternalKeyComparator) -> Self {
         let arena = BlockArena::default();
