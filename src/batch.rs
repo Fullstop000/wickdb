@@ -18,7 +18,6 @@
 use crate::db::format::ValueType;
 use crate::mem::MemTable;
 use crate::util::coding::{decode_fixed_32, decode_fixed_64, encode_fixed_32, encode_fixed_64};
-use crate::util::slice::Slice;
 use crate::util::varint::VarintU32;
 use crate::{Error, Result};
 
@@ -56,7 +55,7 @@ pub const HEADER_SIZE: usize = 12;
 ///
 #[derive(Clone, Default)]
 pub struct WriteBatch {
-    pub(super) contents: Vec<u8>,
+    contents: Vec<u8>,
 }
 
 impl WriteBatch {
@@ -120,18 +119,18 @@ impl WriteBatch {
                 "[batch] malformed WriteBatch (too small)".to_owned(),
             ));
         }
-        let mut s = Slice::from(&self.contents.as_slice()[HEADER_SIZE..]);
+        let mut s = &self.contents[HEADER_SIZE..];
         let mut found = 0;
         let mut seq = self.get_sequence();
         while !s.is_empty() {
             found += 1;
             let tag = s[0];
-            s.remove_prefix(1);
+            s = &s[1..];
             match ValueType::from(u64::from(tag)) {
                 ValueType::Value => {
                     if let Some(key) = VarintU32::get_varint_prefixed_slice(&mut s) {
                         if let Some(value) = VarintU32::get_varint_prefixed_slice(&mut s) {
-                            mem.add(seq, ValueType::Value, key.as_slice(), value.as_slice());
+                            mem.add(seq, ValueType::Value, key, value);
                             seq += 1;
                             continue;
                         }
@@ -140,7 +139,7 @@ impl WriteBatch {
                 }
                 ValueType::Deletion => {
                     if let Some(key) = VarintU32::get_varint_prefixed_slice(&mut s) {
-                        mem.add(seq, ValueType::Deletion, key.as_slice(), b"");
+                        mem.add(seq, ValueType::Deletion, key, b"");
                         seq += 1;
                         continue;
                     }

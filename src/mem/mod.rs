@@ -38,14 +38,14 @@ pub struct KeyComparator {
 }
 
 impl Comparator for KeyComparator {
-    fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
-        let ia = extract_varint32_encoded_slice(&mut Slice::from(a));
-        let ib = extract_varint32_encoded_slice(&mut Slice::from(b));
+    fn compare(&self, mut a: &[u8], mut b: &[u8]) -> Ordering {
+        let ia = extract_varint32_encoded_slice(&mut a);
+        let ib = extract_varint32_encoded_slice(&mut b);
         if ia.is_empty() || ib.is_empty() {
             // Use memcmp directly
-            ia.compare(&ib)
+            ia.cmp(&ib)
         } else {
-            self.icmp.compare(ia.as_slice(), ib.as_slice())
+            self.icmp.compare(ia, ib)
         }
     }
 
@@ -53,15 +53,15 @@ impl Comparator for KeyComparator {
         self.icmp.name()
     }
 
-    fn separator(&self, a: &[u8], b: &[u8]) -> Vec<u8> {
-        let ia = extract_varint32_encoded_slice(&mut Slice::from(a));
-        let ib = extract_varint32_encoded_slice(&mut Slice::from(b));
-        self.icmp.separator(ia.as_slice(), ib.as_slice())
+    fn separator(&self, mut a: &[u8], mut b: &[u8]) -> Vec<u8> {
+        let ia = extract_varint32_encoded_slice(&mut a);
+        let ib = extract_varint32_encoded_slice(&mut b);
+        self.icmp.separator(ia, ib)
     }
 
-    fn successor(&self, key: &[u8]) -> Vec<u8> {
-        let ia = extract_varint32_encoded_slice(&mut Slice::from(key));
-        self.icmp.successor(ia.as_slice())
+    fn successor(&self, mut key: &[u8]) -> Vec<u8> {
+        let ia = extract_varint32_encoded_slice(&mut key);
+        self.icmp.successor(ia)
     }
 }
 
@@ -190,16 +190,19 @@ impl Iterator for MemTableIterator {
         self.iter.prev()
     }
 
-    // returns the internal key
+    // Returns the internal key
     fn key(&self) -> Slice {
-        extract_varint32_encoded_slice(&mut self.iter.key())
+        let key = self.iter.key();
+        let mut s = key.as_slice();
+        extract_varint32_encoded_slice(&mut s).into()
     }
 
-    // returns the Slice represents the value
+    // Returns the Slice represents the value
     fn value(&self) -> Slice {
-        let mut origin = self.iter.key();
-        extract_varint32_encoded_slice(&mut origin);
-        extract_varint32_encoded_slice(&mut origin)
+        let key = self.iter.key();
+        let mut src = key.as_slice();
+        extract_varint32_encoded_slice(&mut src);
+        extract_varint32_encoded_slice(&mut src).into()
     }
 
     fn status(&mut self) -> Result<()> {
@@ -207,13 +210,12 @@ impl Iterator for MemTableIterator {
     }
 }
 
-// Decodes the length (varint u32) from the first of the give slice and advance the origin slice.
-// Returns a new slice points to the data according to the extracted length
-fn extract_varint32_encoded_slice(origin: &mut Slice) -> Slice {
-    if origin.is_empty() {
-        return Slice::from("");
+// Decodes the length (varint u32) from `src` and advances it.
+fn extract_varint32_encoded_slice<'a>(src: &mut &'a [u8]) -> &'a [u8] {
+    if src.is_empty() {
+        return src;
     }
-    VarintU32::get_varint_prefixed_slice(origin).unwrap_or_else(|| Slice::from(""))
+    VarintU32::get_varint_prefixed_slice(src).unwrap_or(src)
 }
 
 #[cfg(test)]
