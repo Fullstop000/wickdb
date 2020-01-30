@@ -15,7 +15,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use crate::cache::lru::SharedLRUCache;
+// use crate::cache::lru::SharedLRUCache;
+use crate::cache::lru::LRUCache;
 use crate::cache::Cache;
 use crate::db::filename::{generate_filename, FileType};
 use crate::filter::FilterPolicy;
@@ -121,7 +122,7 @@ pub struct Options {
     // a block is the unit of reading from disk).
     /// If non-null, use the specified cache for blocks.
     /// If null, we will automatically create and use an 8MB internal cache.
-    pub block_cache: Option<Arc<dyn Cache<Arc<Block>>>>,
+    pub block_cache: Option<Arc<dyn Cache<Vec<u8>, Arc<Block>>>>,
 
     /// Number of sstables that remains out of table cache
     pub non_table_cache_files: usize,
@@ -222,7 +223,7 @@ impl Options {
         }
         self.apply_logger();
         if self.block_cache.is_none() {
-            self.block_cache = Some(Arc::new(SharedLRUCache::new(8 << 20)))
+            self.block_cache = Some(Arc::new(LRUCache::new(8 << 20, None)))
         }
     }
     #[allow(unused_must_use)]
@@ -263,7 +264,7 @@ impl Default for Options {
             read_bytes_period: 1048576,
             write_buffer_size: 4 * 1024 * 1024, // 4MB
             max_open_files: 500,
-            block_cache: Some(Arc::new(SharedLRUCache::new(8 << 20))),
+            block_cache: Some(Arc::new(LRUCache::new(8 << 20, None))),
             non_table_cache_files: 10,
             block_size: 4 * 1024, // 4KB
             block_restart_interval: 16,

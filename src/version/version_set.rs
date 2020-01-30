@@ -19,14 +19,13 @@ use crate::compaction::{base_range, total_range, Compaction, CompactionStats, Ma
 use crate::db::build_table;
 use crate::db::filename::{generate_filename, parse_filename, update_current, FileType};
 use crate::db::format::{InternalKey, InternalKeyComparator};
-use crate::iterator::{ConcatenateIterator, DerivedIterFactory, IterWithCleanup, Iterator};
+use crate::iterator::Iterator;
+use crate::iterator::{ConcatenateIterator, DerivedIterFactory};
 use crate::options::Options;
 use crate::record::reader::Reader;
 use crate::record::writer::Writer;
 use crate::snapshot::{Snapshot, SnapshotList};
-use crate::sstable::block::BlockIterator;
-use crate::sstable::table::TableBuilder;
-use crate::sstable::table::TableIterFactory;
+use crate::sstable::table::{TableBuilder, TableIterator};
 use crate::storage::{File, Storage};
 use crate::table_cache::TableCache;
 use crate::util::coding::decode_fixed_64;
@@ -306,7 +305,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         &self,
         read_opt: ReadOptions,
         table_cache: TableCache<S>,
-    ) -> Vec<Box<dyn Iterator>> {
+    ) -> Result<Vec<Box<dyn Iterator>>> {
         let version = self.current();
         let mut res: Vec<Box<dyn Iterator>> = vec![];
         // Merge all level zero files together since they may overlap
@@ -316,7 +315,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
                 read_opt,
                 file.number,
                 file.file_size,
-            )));
+            )?));
         }
 
         // For levels > 0, we can use a concatenating iterator that sequentially
@@ -334,7 +333,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
                 res.push(Box::new(iter));
             }
         }
-        res
+        Ok(res)
     }
 
     /// Apply `edit` to the current version to form a new descriptor that
@@ -993,12 +992,7 @@ impl<S: Storage + Clone> FileIterFactory<S> {
 }
 
 impl<S: Storage + Clone> DerivedIterFactory for FileIterFactory<S> {
-    type Iter = IterWithCleanup<
-        ConcatenateIterator<
-            BlockIterator<InternalKeyComparator>,
-            TableIterFactory<InternalKeyComparator, S::F>,
-        >,
-    >;
+    type Iter = TableIterator<InternalKeyComparator, S::F>;
 
     fn derive(&self, value: &[u8]) -> Result<Self::Iter> {
         if value.len() != 2 * FILE_META_LENGTH {
@@ -1008,12 +1002,12 @@ impl<S: Storage + Clone> DerivedIterFactory for FileIterFactory<S> {
         } else {
             let file_number = decode_fixed_64(value);
             let file_size = decode_fixed_64(&value[8..]);
-            Ok(self.table_cache.new_iter(
+            self.table_cache.new_iter(
                 self.icmp.clone(),
                 self.options.clone(),
                 file_number,
                 file_size,
-            ))
+            )
         }
     }
 }
