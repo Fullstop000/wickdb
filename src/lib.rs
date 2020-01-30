@@ -47,7 +47,7 @@ mod table_cache;
 mod version;
 
 pub use batch::WriteBatch;
-pub use cache::{Cache, HandleRef};
+pub use cache::Cache;
 pub use compaction::ManualCompaction;
 pub use db::{WickDB, DB};
 pub use error::{Error, Result};

@@ -63,7 +63,7 @@ pub trait DB {
     fn get(&self, read_opt: ReadOptions, key: &[u8]) -> Result<Option<Slice>>;
 
     /// Return an iterator over the contents of the database.
-    fn iter(&self, read_opt: ReadOptions) -> Self::Iterator;
+    fn iter(&self, read_opt: ReadOptions) -> Result<Self::Iterator>;
 
     /// `delete` deletes the value for the given key. It returns `Status::NotFound` if
     /// the DB does not contain the key.
@@ -104,7 +104,7 @@ impl<S: Storage + Clone> DB for WickDB<S> {
         self.inner.get(options, key)
     }
 
-    fn iter(&self, read_opt: ReadOptions) -> Self::Iterator {
+    fn iter(&self, read_opt: ReadOptions) -> Result<Self::Iterator> {
         let ucmp = self.inner.internal_comparator.user_comparator.clone();
         let sequence = if let Some(snapshot) = &read_opt.snapshot {
             snapshot.sequence()
@@ -121,10 +121,10 @@ impl<S: Storage + Clone> DB for WickDB<S> {
             .versions
             .lock()
             .unwrap()
-            .current_iters(read_opt, self.inner.table_cache.clone());
+            .current_iters(read_opt, self.inner.table_cache.clone())?;
         children.append(&mut table_iters);
         let iter = MergingIterator::new(self.inner.internal_comparator.clone(), children);
-        DBIterator::new(iter, self.inner.clone(), sequence, ucmp)
+        Ok(DBIterator::new(iter, self.inner.clone(), sequence, ucmp))
     }
 
     fn delete(&self, options: WriteOptions, key: Slice) -> Result<()> {
@@ -667,19 +667,17 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         if let Ok(files) = self.env.list(self.db_name) {
             for file in files.iter() {
                 if let Some((file_type, number)) = parse_filename(file) {
-                    let mut keep = true;
-                    match file_type {
+                    let keep = match file_type {
                         FileType::Log => {
-                            keep = number >= versions.log_number()
-                                || number == versions.prev_log_number()
+                            number >= versions.log_number() || number == versions.prev_log_number()
                         }
-                        FileType::Manifest => keep = number >= versions.manifest_number(),
-                        FileType::Table => keep = versions.pending_outputs.contains(&number),
+                        FileType::Manifest => number >= versions.manifest_number(),
+                        FileType::Table => versions.pending_outputs.contains(&number),
                         // Any temp files that are currently being written to must
                         // be recorded in pending_outputs
-                        FileType::Temp => keep = versions.pending_outputs.contains(&number),
-                        _ => {}
-                    }
+                        FileType::Temp => versions.pending_outputs.contains(&number),
+                        _ => true,
+                    };
                     if !keep {
                         if file_type == FileType::Table {
                             self.table_cache.evict(number)
@@ -918,8 +916,15 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
     // keep the still-in-use files
     fn do_compaction(&self, c: &mut Compaction<S::F>) -> MutexGuard<VersionSet<S>> {
         let now = SystemTime::now();
-        let mut input_iter =
-            c.new_input_iterator(self.internal_comparator.clone(), self.table_cache.clone());
+        let mut input_iter = match c
+            .new_input_iterator(self.internal_comparator.clone(), self.table_cache.clone())
+        {
+            Ok(iter) => iter,
+            Err(e) => {
+                self.record_bg_error(e);
+                return self.versions.lock().unwrap();
+            }
+        };
         let mut mem_compaction_duration = 0;
         input_iter.seek_to_first();
 
@@ -1126,13 +1131,12 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         if status.is_ok() && current_entries > 0 {
             let output_number = compact.outputs[length - 1].number;
             // make sure that the new file is in the cache
-            let mut it = self.table_cache.new_iter(
+            let _ = self.table_cache.new_iter(
                 self.internal_comparator.clone(),
                 ReadOptions::default(),
                 output_number,
                 current_bytes,
-            );
-            it.status()?;
+            )?;
             info!(
                 "Generated table #{}@{}: {} keys, {} bytes",
                 output_number, compact.level, current_entries, current_bytes
@@ -1199,8 +1203,12 @@ pub(crate) fn build_table<S: Storage + Clone>(
             status = builder.finish(true).and_then(|_| {
                 meta.file_size = builder.file_size();
                 // make sure that the new file is in the cache
-                let mut it =
-                    table_cache.new_iter(icmp, ReadOptions::default(), meta.number, meta.file_size);
+                let mut it = table_cache.new_iter(
+                    icmp,
+                    ReadOptions::default(),
+                    meta.number,
+                    meta.file_size,
+                )?;
                 it.status()
             })
         }

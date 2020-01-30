@@ -16,6 +16,7 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
 use crate::db::format::{InternalKey, InternalKeyComparator};
+use crate::error::Result;
 use crate::iterator::{ConcatenateIterator, Iterator, MergingIterator};
 use crate::options::{Options, ReadOptions};
 use crate::sstable::table::TableBuilder;
@@ -137,7 +138,7 @@ impl<O: File> Compaction<O> {
         &self,
         icmp: InternalKeyComparator,
         table_cache: TableCache<S>,
-    ) -> impl Iterator {
+    ) -> Result<impl Iterator> {
         let read_options = ReadOptions {
             verify_checksums: self.options.paranoid_checks,
             fill_cache: false,
@@ -162,7 +163,7 @@ impl<O: File> Compaction<O> {
                             read_options.clone(),
                             file.number,
                             file.file_size,
-                        )));
+                        )?));
                     }
                 } else {
                     let origin = LevelFileNumIterator::new(icmp.clone(), self.inputs[i].clone());
@@ -172,7 +173,7 @@ impl<O: File> Compaction<O> {
                 }
             }
         }
-        MergingIterator::new(icmp, iter_list)
+        Ok(MergingIterator::new(icmp, iter_list))
     }
 
     /// Returns true iff we should stop building the current output

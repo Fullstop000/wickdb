@@ -129,9 +129,7 @@ impl<F: File> Table<F> {
             let mut cache_key_buffer = vec![0; 16];
             put_fixed_64(&mut cache_key_buffer, self.cache_id);
             put_fixed_64(&mut cache_key_buffer, data_block_handle.offset);
-            if let Some(cache_handle) = cache.look_up(&cache_key_buffer) {
-                let b = cache_handle.value().unwrap();
-                cache.release(cache_handle);
+            if let Some(b) = cache.look_up(&cache_key_buffer) {
                 b.iter(cmp)
             } else {
                 let data = read_block(&self.file, &data_block_handle, options.verify_checksums)?;
@@ -140,7 +138,7 @@ impl<F: File> Table<F> {
                 let b = Arc::new(new_block);
                 let iter = b.iter(cmp);
                 if options.fill_cache {
-                    cache.insert(cache_key_buffer, b, charge, None);
+                    cache.insert(cache_key_buffer, b, charge);
                 }
                 iter
             }

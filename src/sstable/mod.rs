@@ -790,7 +790,7 @@ mod tests {
         }
 
         fn iter(&self) -> Box<dyn Iterator> {
-            Box::new(self.inner.iter(ReadOptions::default()))
+            Box::new(self.inner.iter(ReadOptions::default()).unwrap())
         }
     }
 

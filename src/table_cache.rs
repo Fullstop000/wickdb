@@ -15,13 +15,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use crate::cache::lru::SharedLRUCache;
-use crate::cache::{Cache, HandleRef};
+use crate::cache::lru::LRUCache;
+use crate::cache::Cache;
 use crate::db::filename::{generate_filename, FileType};
-use crate::iterator::{ConcatenateIterator, IterWithCleanup};
 use crate::options::{Options, ReadOptions};
-use crate::sstable::block::BlockIterator;
-use crate::sstable::table::{new_table_iterator, Table, TableIterFactory};
+use crate::sstable::table::{new_table_iterator, Table, TableIterator};
 use crate::storage::Storage;
 use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
@@ -35,12 +33,12 @@ pub struct TableCache<S: Storage + Clone> {
     db_name: &'static str,
     options: Arc<Options>,
     // the key of cache is the file number
-    cache: Arc<dyn Cache<Arc<Table<S::F>>>>,
+    cache: Arc<dyn Cache<Vec<u8>, Arc<Table<S::F>>>>,
 }
 
 impl<S: Storage + Clone> TableCache<S> {
     pub fn new(db_name: &'static str, options: Arc<Options>, size: usize, storage: S) -> Self {
-        let cache = Arc::new(SharedLRUCache::<Arc<Table<S::F>>>::new(size));
+        let cache = Arc::new(LRUCache::<Vec<u8>, Arc<Table<S::F>>>::new(size, None));
         Self {
             storage,
             db_name,
@@ -55,16 +53,18 @@ impl<S: Storage + Clone> TableCache<S> {
         cmp: C,
         file_number: u64,
         file_size: u64,
-    ) -> Result<HandleRef<Arc<Table<S::F>>>> {
+    ) -> Result<Arc<Table<S::F>>> {
         let mut key = vec![];
         VarintU64::put_varint(&mut key, file_number);
-        match self.cache.look_up(key.as_slice()) {
-            Some(handle) => Ok(handle),
+        match self.cache.look_up(&key) {
+            Some(v) => Ok(v.clone()),
             None => {
                 let filename = generate_filename(self.db_name, FileType::Table, file_number);
                 let table_file = self.storage.open(filename.as_str())?;
                 let table = Table::open(table_file, file_size, self.options.clone(), cmp)?;
-                Ok(self.cache.insert(key, Arc::new(table), 1, None))
+                let value = Arc::new(table);
+                self.cache.insert(key, value.clone(), 1).unwrap();
+                Ok(value)
             }
         }
     }
@@ -73,7 +73,7 @@ impl<S: Storage + Clone> TableCache<S> {
     pub fn evict(&self, file_number: u64) {
         let mut key = vec![];
         VarintU64::put_varint(&mut key, file_number);
-        self.cache.erase(key.as_slice());
+        self.cache.erase(&key);
     }
 
     /// Returns the result of a seek to internal key `key` in specified file
@@ -85,10 +85,9 @@ impl<S: Storage + Clone> TableCache<S> {
         file_number: u64,
         file_size: u64,
     ) -> Result<Option<(Slice, Slice)>> {
-        let handle = self.find_table(cmp.clone(), file_number, file_size)?;
+        let table = self.find_table(cmp.clone(), file_number, file_size)?;
         // every value should be valid so unwrap is safe here
-        let res = handle.value().unwrap().internal_get(options, cmp, key)?;
-        self.cache.release(handle);
+        let res = table.internal_get(options, cmp, key)?;
         Ok(res)
     }
 
@@ -105,17 +104,10 @@ impl<S: Storage + Clone> TableCache<S> {
         options: ReadOptions,
         file_number: u64,
         file_size: u64,
-    ) -> IterWithCleanup<ConcatenateIterator<BlockIterator<C>, TableIterFactory<C, S::F>>> {
-        match self.find_table(cmp.clone(), file_number, file_size) {
-            Ok(h) => {
-                let table = h.value().unwrap();
-                let mut iter = IterWithCleanup::new(new_table_iterator(cmp, table, options));
-                let cache = self.cache.clone();
-                iter.register_task(Box::new(move || cache.release(h.clone())));
-                iter
-            }
-            Err(e) => IterWithCleanup::new_with_err(e),
-        }
+    ) -> Result<TableIterator<C, S::F>> {
+        let t = self.find_table(cmp.clone(), file_number, file_size)?;
+        let iter = new_table_iterator(cmp, t, options);
+        Ok(iter)
     }
 }
 

@@ -68,96 +68,6 @@ pub trait Iterator {
     fn status(&mut self) -> Result<()>;
 }
 
-/// An special iterator calls all `tasks` before dropping
-pub struct IterWithCleanup<I: Iterator> {
-    inner_iter: Option<I>,
-    // Tasks to be executed when self is dropped
-    tasks: Vec<Box<dyn FnMut()>>,
-    err: Option<Error>,
-}
-
-impl<I: Iterator> IterWithCleanup<I> {
-    pub fn new(iter: I) -> Self {
-        Self {
-            inner_iter: Some(iter),
-            tasks: vec![],
-            err: None,
-        }
-    }
-
-    pub fn new_with_err(err: Error) -> Self {
-        Self {
-            inner_iter: None,
-            tasks: vec![],
-            err: Some(err),
-        }
-    }
-
-    pub fn register_task(&mut self, task: Box<dyn FnMut()>) {
-        self.tasks.push(task)
-    }
-}
-
-impl<I: Iterator> Drop for IterWithCleanup<I> {
-    fn drop(&mut self) {
-        for mut t in self.tasks.drain(..) {
-            t()
-        }
-    }
-}
-
-impl<I: Iterator> Iterator for IterWithCleanup<I> {
-    fn valid(&self) -> bool {
-        self.err.is_none() && self.inner_iter.as_ref().map_or(true, |i| i.valid())
-    }
-
-    fn seek_to_first(&mut self) {
-        if let Some(iter) = self.inner_iter.as_mut() {
-            iter.seek_to_first()
-        }
-    }
-
-    fn seek_to_last(&mut self) {
-        if let Some(iter) = self.inner_iter.as_mut() {
-            iter.seek_to_last()
-        }
-    }
-
-    fn seek(&mut self, target: &[u8]) {
-        if let Some(iter) = self.inner_iter.as_mut() {
-            iter.seek(target)
-        }
-    }
-
-    fn next(&mut self) {
-        if let Some(iter) = self.inner_iter.as_mut() {
-            iter.next()
-        }
-    }
-
-    fn prev(&mut self) {
-        if let Some(iter) = self.inner_iter.as_mut() {
-            iter.prev()
-        }
-    }
-
-    fn key(&self) -> Slice {
-        self.inner_iter
-            .as_ref()
-            .map_or(Slice::default(), |i| i.key())
-    }
-
-    fn value(&self) -> Slice {
-        self.inner_iter
-            .as_ref()
-            .map_or(Slice::default(), |i| i.value())
-    }
-
-    fn status(&mut self) -> Result<()> {
-        self.inner_iter.as_mut().map_or(Ok(()), |i| i.status())
-    }
-}
-
 /// A plain iterator used as default
 ///
 /// # Notice
@@ -583,31 +493,8 @@ mod tests {
     use crate::util::comparator::BytewiseComparator;
     use crate::util::slice::Slice;
     use crate::Result;
-    use std::cell::RefCell;
     use std::cmp::Ordering;
-    use std::mem;
-    use std::rc::Rc;
     use std::str;
-
-    struct TestCleanup {
-        results: Vec<usize>,
-    }
-
-    #[test]
-    fn test_iter_with_cleanup() {
-        let test_cleaned_up = Rc::new(RefCell::new(TestCleanup { results: vec![] }));
-
-        let mut iter = IterWithCleanup::new(EmptyIterator::new());
-        for i in 0..100 {
-            let cloned = test_cleaned_up.clone();
-            iter.register_task(Box::new(move || cloned.borrow_mut().results.push(i)));
-        }
-        mem::drop(iter);
-        assert_eq!(100, test_cleaned_up.borrow().results.len());
-        for i in 0..100 {
-            assert_eq!(i, test_cleaned_up.borrow().results[i]);
-        }
-    }
 
     // Divide given ordered `src` into `n` lists and then construct a `MergingIterator` with them
     fn new_test_merging_iter(
