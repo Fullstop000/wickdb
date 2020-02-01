@@ -790,7 +790,7 @@ mod tests {
         }
 
         fn iter(&self) -> Self::Iter {
-            self.inner.iter(ReadOptions::default())
+            self.inner.iter(ReadOptions::default()).unwrap()
         }
     }
 
