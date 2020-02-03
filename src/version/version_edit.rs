@@ -17,7 +17,6 @@
 
 use crate::db::format::InternalKey;
 use crate::util::collection::HashSet;
-use crate::util::slice::Slice;
 use crate::util::varint::{VarintU32, VarintU64};
 use crate::version::version_edit::Tag::{
     CompactPointer, Comparator, DeletedFile, LastSequence, LogNumber, NewFile, NextFileNumber,
@@ -255,7 +254,7 @@ impl VersionEdit {
     pub fn decoded_from(&mut self, src: &[u8]) -> Result<()> {
         self.clear();
         let mut msg = String::new();
-        let mut s = Slice::from(src);
+        let mut s = src;
         while !s.is_empty() {
             // decode tag
             if let Some(tag) = VarintU32::drain_read(&mut s) {
@@ -263,7 +262,10 @@ impl VersionEdit {
                     Comparator => {
                         // decode comparator name
                         if let Some(cmp) = VarintU32::get_varint_prefixed_slice(&mut s) {
-                            self.comparator_name = Some(String::from(cmp.as_str()))
+                            match String::from_utf8(cmp.to_owned()) {
+                                Ok(s) => self.comparator_name = Some(s),
+                                Err(e) => return Err(Error::UTF8Error(e)),
+                            }
                         } else {
                             msg.push_str("comparator name");
                             break;
@@ -411,23 +413,18 @@ impl Debug for VersionEdit {
     }
 }
 
-fn get_internal_key(mut src: &mut Slice) -> Option<InternalKey> {
-    if let Some(s) = VarintU32::get_varint_prefixed_slice(&mut src) {
-        return Some(InternalKey::decoded_from(s.as_slice()));
-    }
-    None
+fn get_internal_key(mut src: &mut &[u8]) -> Option<InternalKey> {
+    VarintU32::get_varint_prefixed_slice(&mut src).and_then(|s| Some(InternalKey::decoded_from(s)))
 }
 
-fn get_level(max_levels: u8, src: &mut Slice) -> Option<u32> {
-    match VarintU32::drain_read(src) {
-        Some(l) => {
-            if l <= u32::from(max_levels) {
-                return Some(l);
-            }
+fn get_level(max_levels: u8, src: &mut &[u8]) -> Option<u32> {
+    VarintU32::drain_read(src).and_then(|l| {
+        if l <= u32::from(max_levels) {
+            Some(l)
+        } else {
             None
         }
-        None => None,
-    }
+    })
 }
 
 #[cfg(test)]

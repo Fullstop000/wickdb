@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::util::slice::Slice;
-
 pub const MAX_VARINT_LEN_U32: usize = 5;
 pub const MAX_VARINT_LEN_U64: usize = 10;
 
@@ -83,22 +81,17 @@ macro_rules! impl_varint {
                 }
             }
 
-            /// Decodes a Slice from the slice using length-prefixed encoding, and advance the input slice
-            ///
-            /// NOTICE: the input Slice should be valid
-            pub fn get_varint_prefixed_slice(src: &mut Slice) -> Option<Slice> {
-                let origin = src.as_slice();
-                match Self::read(origin) {
-                    Some((len, n)) => {
-                        if len as usize + n > src.size() {
-                            return None;
-                        }
-                        let res = Slice::from(&origin[n..len as usize + n]);
-                        src.remove_prefix(len as usize + n);
-                        Some(res)
+            /// Decodes the varint-length-prefixed slice from `src, and advance `src`
+            pub fn get_varint_prefixed_slice<'a>(src: &mut &'a [u8]) -> Option<&'a [u8]> {
+                Self::read(src).and_then(|(len, n)| {
+                    let read_len = len as usize + n;
+                    if read_len > src.len() {
+                        return None;
                     }
-                    None => None,
-                }
+                    let res = &src[n..read_len];
+                    *src = &src[read_len..];
+                    Some(res)
+                })
             }
 
             /// Decodes a u64 from given bytes and returns that value and the
@@ -129,15 +122,11 @@ macro_rules! impl_varint {
             }
 
             /// Decodes a uint from the give slice , and advance the given slice
-            pub fn drain_read(src: &mut Slice) -> Option<$uint> {
-                let origin = src.as_slice();
-                match <$type>::read(origin) {
-                    Some((v, n)) => {
-                        src.remove_prefix(n);
-                        Some(v)
-                    }
-                    None => None,
-                }
+            pub fn drain_read(src: &mut &[u8]) -> Option<$uint> {
+                <$type>::read(src).and_then(|(v, n)| {
+                    *src = &src[n..];
+                    Some(v)
+                })
             }
         }
     };
@@ -239,14 +228,14 @@ mod tests {
     fn test_put_and_get_prefixed_slice() {
         let mut encoded = vec![];
         let tests: Vec<Vec<u8>> = vec![vec![1], vec![1, 2, 3, 4, 5], vec![0; 100]];
-        for input in tests.clone().drain(..) {
-            VarintU64::put_varint_prefixed_slice(&mut encoded, input.as_slice());
+        for input in tests.clone() {
+            VarintU64::put_varint_prefixed_slice(&mut encoded, &input);
         }
-        let mut s = Slice::from(encoded.as_slice());
+        let mut s = encoded.as_slice();
         let mut decoded = vec![];
-        while s.size() > 0 {
+        while s.len() > 0 {
             match VarintU64::get_varint_prefixed_slice(&mut s) {
-                Some(res) => decoded.push(Vec::from(res.as_slice())),
+                Some(res) => decoded.push(res.to_owned()),
                 None => break,
             }
         }

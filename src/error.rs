@@ -23,6 +23,9 @@ quick_error! {
         Corruption(hint: String) {
             display("data corruption: {}", hint)
         }
+        UTF8Error(err: std::string::FromUtf8Error) {
+            display("UTF8 error: {:?}", err)
+        }
         InvalidArgument(hint: String) {
             display("invalid argument: {}", hint)
         }
