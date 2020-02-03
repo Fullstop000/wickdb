@@ -414,7 +414,7 @@ impl Debug for VersionEdit {
 }
 
 fn get_internal_key(mut src: &mut &[u8]) -> Option<InternalKey> {
-    VarintU32::get_varint_prefixed_slice(&mut src).and_then(|s| Some(InternalKey::decoded_from(s)))
+    VarintU32::get_varint_prefixed_slice(&mut src).map(|s| InternalKey::decoded_from(s))
 }
 
 fn get_level(max_levels: u8, src: &mut &[u8]) -> Option<u32> {

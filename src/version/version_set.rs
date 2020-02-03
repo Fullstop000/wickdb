@@ -20,7 +20,7 @@ use crate::db::build_table;
 use crate::db::filename::{generate_filename, parse_filename, update_current, FileType};
 use crate::db::format::{InternalKey, InternalKeyComparator};
 use crate::iterator::Iterator;
-use crate::iterator::{ConcatenateIterator, DerivedIterFactory};
+use crate::iterator::{ConcatenateIterator, DerivedIterFactory, KMergeCore, KMergeIter};
 use crate::options::Options;
 use crate::record::reader::Reader;
 use crate::record::writer::Writer;
@@ -32,6 +32,7 @@ use crate::util::coding::decode_fixed_64;
 use crate::util::collection::HashSet;
 use crate::util::comparator::{BytewiseComparator, Comparator};
 use crate::util::reporter::LogReporter;
+use crate::util::slice::Slice;
 use crate::version::version_edit::{FileDelta, FileMetaData, VersionEdit};
 use crate::version::{LevelFileNumIterator, Version, FILE_META_LENGTH};
 use crate::ReadOptions;
@@ -301,39 +302,41 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
     }
 
     /// Returns the collection of all the file iterators in current version
-    pub fn current_iters(
+    pub fn current_sst_iter(
         &self,
         read_opt: ReadOptions,
         table_cache: TableCache<S>,
-    ) -> Result<Vec<Box<dyn Iterator>>> {
+    ) -> Result<KMergeIter<SSTableIters<S>>> {
         let version = self.current();
-        let mut res: Vec<Box<dyn Iterator>> = vec![];
+        let mut level0 = vec![];
         // Merge all level zero files together since they may overlap
         for file in version.files[0].iter() {
-            res.push(Box::new(table_cache.new_iter(
+            level0.push(table_cache.new_iter(
                 self.icmp.clone(),
                 read_opt,
                 file.number,
                 file.file_size,
-            )?));
+            )?);
         }
 
+        let mut leveln = vec![];
         // For levels > 0, we can use a concatenating iterator that sequentially
         // walks through the non-overlapping files in the level, opening them
         // lazily
         for files in version.files.iter().skip(1) {
             if !files.is_empty() {
-                let level_file_iter = LevelFileNumIterator::new(
-                    InternalKeyComparator::new(self.options.comparator.clone()),
-                    files.clone(),
-                );
+                let level_file_iter = LevelFileNumIterator::new(self.icmp.clone(), files.clone());
                 let factory =
                     FileIterFactory::new(self.icmp.clone(), read_opt, table_cache.clone());
-                let iter = ConcatenateIterator::new(level_file_iter, factory);
-                res.push(Box::new(iter));
+                leveln.push(ConcatenateIterator::new(level_file_iter, factory));
             }
         }
-        Ok(res)
+        let iter = KMergeIter::new(SSTableIters {
+            cmp: self.icmp.clone(),
+            level0,
+            leveln,
+        });
+        Ok(iter)
     }
 
     /// Apply `edit` to the current version to form a new descriptor that
@@ -995,13 +998,13 @@ impl<S: Storage + Clone> DerivedIterFactory for FileIterFactory<S> {
     type Iter = TableIterator<InternalKeyComparator, S::F>;
 
     fn derive(&self, value: &[u8]) -> Result<Self::Iter> {
-        if value.len() != 2 * FILE_META_LENGTH {
+        if value.len() != FILE_META_LENGTH {
             Err(Error::Corruption(
                 "file reader invoked with unexpected value".to_owned(),
             ))
         } else {
             let file_number = decode_fixed_64(value);
-            let file_size = decode_fixed_64(&value[8..]);
+            let file_size = decode_fixed_64(&value[std::mem::size_of::<u64>()..]);
             self.table_cache.new_iter(
                 self.icmp.clone(),
                 self.options.clone(),
@@ -1016,4 +1019,140 @@ impl<S: Storage + Clone> DerivedIterFactory for FileIterFactory<S> {
 #[inline]
 pub fn total_file_size(files: &[Arc<FileMetaData>]) -> u64 {
     files.iter().fold(0, |accum, file| accum + file.file_size)
+}
+
+/// An iterator that yields all the entries stored in SST files.
+/// The inner implementation is mostly like a merging iterator.
+pub struct SSTableIters<S: Storage + Clone> {
+    cmp: InternalKeyComparator,
+    // Level0 table iterators. An iterator represents a table
+    level0: Vec<TableIterator<InternalKeyComparator, S::F>>,
+    // ConcatenateIterators for opening SST in level n>1 lazily. An iterator represents a level
+    leveln: Vec<ConcatenateIterator<LevelFileNumIterator, FileIterFactory<S>>>,
+}
+
+impl<S: Storage + Clone> SSTableIters<S> {
+    pub fn new(
+        cmp: InternalKeyComparator,
+        level0: Vec<TableIterator<InternalKeyComparator, S::F>>,
+        leveln: Vec<ConcatenateIterator<LevelFileNumIterator, FileIterFactory<S>>>,
+    ) -> Self {
+        Self {
+            cmp,
+            level0,
+            leveln,
+        }
+    }
+}
+
+impl<S: Storage + Clone> KMergeCore for SSTableIters<S> {
+    fn cmp(&self) -> &dyn Comparator {
+        &self.cmp
+    }
+
+    fn iters_len(&self) -> usize {
+        self.level0.len() + self.leveln.len()
+    }
+
+    // Find the iterator with the smallest 'key' and set it as current
+    fn find_smallest(&mut self) -> usize {
+        let mut smallest: Option<Slice> = None;
+        let mut index = self.iters_len();
+        for (i, child) in self.level0.iter().enumerate() {
+            if self.smaller(&mut smallest, child) {
+                index = i
+            }
+        }
+
+        for (i, child) in self.leveln.iter().enumerate() {
+            if self.smaller(&mut smallest, child) {
+                index = i + self.level0.len()
+            }
+        }
+        index
+    }
+
+    // Find the iterator with the largest 'key' and set it as current
+    fn find_largest(&mut self) -> usize {
+        let mut largest: Option<Slice> = None;
+        let mut index = self.iters_len();
+        for (i, child) in self.level0.iter().enumerate() {
+            if self.larger(&mut largest, child) {
+                index = i
+            }
+        }
+
+        for (i, child) in self.leveln.iter().enumerate() {
+            if self.larger(&mut largest, child) {
+                index = i + self.level0.len()
+            }
+        }
+        index
+    }
+
+    fn get_child(&self, i: usize) -> &dyn Iterator {
+        if i < self.level0.len() {
+            self.leveln.get(i).unwrap() as &dyn Iterator
+        } else {
+            let current = i - self.level0.len();
+            self.leveln.get(current).unwrap() as &dyn Iterator
+        }
+    }
+
+    fn get_child_mut(&mut self, i: usize) -> &mut dyn Iterator {
+        if i < self.level0.len() {
+            self.leveln.get_mut(i).unwrap() as &mut dyn Iterator
+        } else {
+            let current = i - self.level0.len();
+            self.leveln.get_mut(current).unwrap() as &mut dyn Iterator
+        }
+    }
+
+    fn for_each_child<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut dyn Iterator),
+    {
+        self.level0
+            .iter_mut()
+            .for_each(|i| f(i as &mut dyn Iterator));
+        self.leveln
+            .iter_mut()
+            .for_each(|i| f(i as &mut dyn Iterator));
+    }
+
+    fn for_not_ith<F>(&mut self, n: usize, mut f: F)
+    where
+        F: FnMut(&mut dyn Iterator, &dyn Comparator),
+    {
+        if n < self.level0.len() {
+            for (i, child) in self.level0.iter_mut().enumerate() {
+                if i != n {
+                    f(child as &mut dyn Iterator, &self.cmp)
+                }
+            }
+        } else {
+            let current = n - self.level0.len();
+            for (i, child) in self.leveln.iter_mut().enumerate() {
+                if i != current {
+                    f(child as &mut dyn Iterator, &self.cmp)
+                }
+            }
+        }
+    }
+
+    fn take_err(&mut self) -> Result<()> {
+        for child in self.level0.iter_mut() {
+            let status = child.status();
+            if status.is_err() {
+                return status;
+            }
+        }
+        for child in self.leveln.iter_mut() {
+            let status = child.status();
+            if status.is_err() {
+                return status;
+            }
+        }
+        Ok(())
+    }
 }

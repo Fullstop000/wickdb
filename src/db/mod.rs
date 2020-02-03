@@ -21,9 +21,9 @@ use crate::db::filename::{generate_filename, parse_filename, update_current, Fil
 use crate::db::format::{
     InternalKey, InternalKeyComparator, LookupKey, ParsedInternalKey, ValueType,
 };
-use crate::db::iterator::DBIterator;
-use crate::iterator::{Iterator, MergingIterator};
-use crate::mem::MemTable;
+use crate::db::iterator::{DBIterator, DBIteratorCore};
+use crate::iterator::{Iterator, KMergeIter};
+use crate::mem::{MemTable, MemTableIterator};
 use crate::options::{Options, ReadOptions, WriteOptions};
 use crate::record::reader::Reader;
 use crate::record::writer::Writer;
@@ -34,7 +34,7 @@ use crate::table_cache::TableCache;
 use crate::util::reporter::LogReporter;
 use crate::util::slice::Slice;
 use crate::version::version_edit::{FileMetaData, VersionEdit};
-use crate::version::version_set::VersionSet;
+use crate::version::version_set::{SSTableIters, VersionSet};
 use crate::{Error, Result};
 use crossbeam_channel::{Receiver, Sender};
 use crossbeam_utils::sync::ShardedLock;
@@ -91,8 +91,15 @@ pub struct WickDB<S: Storage + Clone + 'static> {
     inner: Arc<DBImpl<S>>,
 }
 
+pub type WickDBIterator<S> = DBIterator<
+    KMergeIter<
+        DBIteratorCore<InternalKeyComparator, MemTableIterator, KMergeIter<SSTableIters<S>>>,
+    >,
+    S,
+>;
+
 impl<S: Storage + Clone> DB for WickDB<S> {
-    type Iterator = DBIterator<MergingIterator<InternalKeyComparator>, S>;
+    type Iterator = WickDBIterator<S>;
 
     fn put(&self, options: WriteOptions, key: &[u8], value: &[u8]) -> Result<()> {
         let mut batch = WriteBatch::new();
@@ -111,19 +118,23 @@ impl<S: Storage + Clone> DB for WickDB<S> {
         } else {
             self.inner.versions.lock().unwrap().last_sequence()
         };
-        let mut children: Vec<Box<dyn Iterator>> = vec![];
-        children.push(Box::new(self.inner.mem.read().unwrap().iter()));
+        let mut mem_iters = vec![];
+        mem_iters.push(self.inner.mem.read().unwrap().iter());
         if let Some(im_mem) = self.inner.im_mem.read().unwrap().as_ref() {
-            children.push(Box::new(im_mem.iter()));
+            mem_iters.push(im_mem.iter());
         }
-        let mut table_iters = self
+        let sst_iter = self
             .inner
             .versions
             .lock()
             .unwrap()
-            .current_iters(read_opt, self.inner.table_cache.clone())?;
-        children.append(&mut table_iters);
-        let iter = MergingIterator::new(self.inner.internal_comparator.clone(), children);
+            .current_sst_iter(read_opt, self.inner.table_cache.clone())?;
+        let iter_core = DBIteratorCore::new(
+            self.inner.internal_comparator.clone(),
+            mem_iters,
+            vec![sst_iter],
+        );
+        let iter = KMergeIter::new(iter_core);
         Ok(DBIterator::new(iter, self.inner.clone(), sequence, ucmp))
     }
 

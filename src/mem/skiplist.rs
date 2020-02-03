@@ -342,7 +342,7 @@ impl<C: Comparator, A: Arena> SkiplistIterator<C, A> {
     }
 }
 
-/// Generate a random height < MAX_HEIGHT for node
+// Generate a random height < MAX_HEIGHT for node
 fn rand_height() -> usize {
     let mut height = 1;
     loop {

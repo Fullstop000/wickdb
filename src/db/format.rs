@@ -132,6 +132,7 @@ impl<'a> Debug for ParsedInternalKey<'a> {
 ///              user key                  seq number        type
 /// ```
 ///
+// TODO: use &'a [u8] instead of Vec<u8>
 #[derive(Clone, PartialEq, Eq)]
 pub struct InternalKey {
     data: Vec<u8>,

@@ -262,179 +262,169 @@ impl<I: Iterator, F: DerivedIterFactory> Iterator for ConcatenateIterator<I, F> 
 }
 
 #[derive(Eq, PartialEq)]
-pub enum IterDirection {
+enum IterDirection {
     Forward,
     Reverse,
 }
 
-/// Return an iterator that provided the union of the data in
-/// `children[0..n-1]` with the correct order.
-/// This iterator performs just like a `merge sort` to its children.
-/// The result does no duplicate suppression.  I.e., if a particular
-/// key is present in K child iterators, it will be yielded K times.
-pub struct MergingIterator<C: Comparator> {
-    cmp: C,
+pub struct KMergeIter<T: KMergeCore> {
+    core: T,
+    current: usize,
     direction: IterDirection,
-    children: Vec<Box<dyn Iterator>>,
-    current_index: usize, // index in 'children' of current iterator
 }
 
-impl<C: Comparator> MergingIterator<C> {
-    pub fn new(cmp: C, children: Vec<Box<dyn Iterator>>) -> Self {
-        let len = children.len();
+impl<T: KMergeCore> KMergeIter<T> {
+    pub fn new(core: T) -> Self {
+        let current = core.iters_len();
         Self {
-            cmp,
+            core,
+            current,
             direction: IterDirection::Forward,
-            children,
-            current_index: len,
         }
-    }
-
-    fn valid_or_panic(&self) {
-        assert!(self.current_index < self.children.len());
-    }
-
-    // Find the iterator with the smallest 'key' and set it as current
-    fn find_smallest(&mut self) {
-        let mut smallest: Option<Slice> = None;
-        let mut index = self.current_index;
-        for (i, child) in self.children.iter().enumerate() {
-            if child.valid()
-                && (smallest.is_none()
-                    || self.cmp.compare(
-                        child.key().as_slice(),
-                        smallest.as_ref().unwrap().as_slice(),
-                    ) == Ordering::Less)
-            {
-                smallest = Some(child.key());
-                index = i
-            }
-        }
-        self.current_index = index;
-    }
-
-    // Find the iterator with the largest 'key' and set it as current
-    fn find_largest(&mut self) {
-        let mut largest: Option<Slice> = None;
-        let mut index = self.current_index;
-        for (i, child) in self.children.iter().enumerate() {
-            if child.valid()
-                && (largest.is_none()
-                    || self
-                        .cmp
-                        .compare(child.key().as_slice(), largest.as_ref().unwrap().as_slice())
-                        == Ordering::Greater)
-            {
-                largest = Some(child.key());
-                index = i
-            }
-        }
-        self.current_index = index;
-    }
-
-    fn get_current(&self) -> &dyn Iterator {
-        self.children.get(self.current_index).unwrap().as_ref()
-    }
-
-    fn get_current_mut(&mut self) -> &mut dyn Iterator {
-        self.children.get_mut(self.current_index).unwrap().as_mut()
     }
 }
 
-impl<C: Comparator> Iterator for MergingIterator<C> {
+/// An trait defines the operation in k merge sort
+pub trait KMergeCore {
+    /// Returns current comparator
+    fn cmp(&self) -> &dyn Comparator;
+
+    /// The inner child iterators size
+    fn iters_len(&self) -> usize;
+
+    /// Updates the smallest if given `iter` has a smaller value and returns true.
+    /// Otherwise returns false.
+    fn smaller(&self, smallest: &mut Option<Slice>, iter: &dyn Iterator) -> bool {
+        if iter.valid()
+            && (smallest.is_none()
+                || self
+                    .cmp()
+                    .compare(iter.key().as_slice(), smallest.as_ref().unwrap().as_slice())
+                    == Ordering::Less)
+        {
+            *smallest = Some(iter.key());
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Updates the smallest if given `iter` has a smaller value and returns true.
+    /// Otherwise returns false.
+    fn larger(&self, largest: &mut Option<Slice>, iter: &dyn Iterator) -> bool {
+        if iter.valid()
+            && (largest.is_none()
+                || self
+                    .cmp()
+                    .compare(iter.key().as_slice(), largest.as_ref().unwrap().as_slice())
+                    == Ordering::Greater)
+        {
+            *largest = Some(iter.key());
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Find the iterator with the smallest 'key' and set it as current
+    fn find_smallest(&mut self) -> usize;
+
+    /// Find the iterator with the largest 'key' and set it as current
+    fn find_largest(&mut self) -> usize;
+
+    /// Returns an immutable borrow of ith child iterator
+    fn get_child(&self, i: usize) -> &dyn Iterator;
+
+    /// Returns a mutable borrow of ith child iterator
+    fn get_child_mut(&mut self, i: usize) -> &mut dyn Iterator;
+
+    /// Iterate each child iterator and call `f`
+    fn for_each_child<F>(&mut self, f: F)
+    where
+        F: FnMut(&mut dyn Iterator);
+
+    /// Iterate each child iterator except the ith iterator and call `f`
+    fn for_not_ith<F>(&mut self, i: usize, f: F)
+    where
+        F: FnMut(&mut dyn Iterator, &dyn Comparator);
+
+    /// Returns `Err` if inner children has errors.
+    fn take_err(&mut self) -> Result<()>;
+}
+
+impl<T: KMergeCore> Iterator for KMergeIter<T> {
     fn valid(&self) -> bool {
-        let i = self.current_index;
-        if i < self.children.len() {
-            self.get_current().valid()
+        let i = self.current;
+        if i < self.core.iters_len() {
+            self.core.get_child(self.current).valid()
         } else {
             false
         }
     }
 
     fn seek_to_first(&mut self) {
-        for child in self.children.iter_mut() {
-            child.seek_to_first()
-        }
-        self.find_smallest();
+        self.core.for_each_child(|i| i.seek_to_first());
+        self.current = self.core.find_smallest();
         self.direction = IterDirection::Forward;
     }
 
     fn seek_to_last(&mut self) {
-        for child in self.children.iter_mut() {
-            child.seek_to_last()
-        }
-        self.find_largest();
+        self.core.for_each_child(|i| i.seek_to_last());
+        self.current = self.core.find_largest();
         self.direction = IterDirection::Reverse;
     }
 
     fn seek(&mut self, target: &[u8]) {
-        for child in self.children.iter_mut() {
-            child.seek(target)
-        }
-        self.find_smallest();
+        self.core.for_each_child(|i| i.seek(target));
+        self.current = self.core.find_smallest();
         self.direction = IterDirection::Forward;
     }
 
     fn next(&mut self) {
-        self.valid_or_panic();
         if self.direction != IterDirection::Forward {
             let key = self.key();
-            for (i, child) in self.children.iter_mut().enumerate() {
-                if i != self.current_index {
-                    child.seek(key.as_slice());
-                    if child.valid()
-                        && self.cmp.compare(key.as_slice(), child.key().as_slice())
-                            == Ordering::Equal
-                    {
-                        child.next();
-                    }
+            self.core.for_not_ith(self.current, |child, cmp| {
+                child.seek(key.as_slice());
+                if child.valid()
+                    && cmp.compare(key.as_slice(), child.key().as_slice()) == Ordering::Equal
+                {
+                    child.next();
                 }
-            }
+            });
             self.direction = IterDirection::Forward;
         }
-        self.get_current_mut().next();
-        self.find_smallest();
+        self.core.get_child_mut(self.current).next();
+        self.current = self.core.find_smallest();
     }
 
     fn prev(&mut self) {
-        self.valid_or_panic();
         if self.direction != IterDirection::Reverse {
             let key = self.key();
-            for (i, child) in self.children.iter_mut().enumerate() {
-                if i != self.current_index {
-                    child.seek(key.as_slice());
-                    if child.valid() {
-                        child.prev();
-                    } else {
-                        // Child has no key >= current key so point to the last
-                        child.seek_to_last();
-                    }
+            self.core.for_not_ith(self.current, |child, _| {
+                child.seek(key.as_slice());
+                if child.valid() {
+                    child.prev();
+                } else {
+                    // Child has no key >= current key so point to the last
+                    child.seek_to_last();
                 }
-            }
+            });
             self.direction = IterDirection::Reverse;
         }
-        self.get_current_mut().prev();
-        self.find_largest();
+        self.core.get_child_mut(self.current).prev();
+        self.current = self.core.find_largest();
     }
 
     fn key(&self) -> Slice {
-        self.valid_or_panic();
-        self.get_current().key()
+        self.core.get_child(self.current).key()
     }
 
     fn value(&self) -> Slice {
-        self.valid_or_panic();
-        self.get_current().value()
+        self.core.get_child(self.current).value()
     }
 
     fn status(&mut self) -> Result<()> {
-        for child in self.children.iter_mut() {
-            let status = child.status();
-            if status.is_err() {
-                return status;
-            }
-        }
-        Ok(())
+        self.core.take_err()
     }
 }
 
@@ -448,17 +438,93 @@ mod tests {
     use std::cmp::Ordering;
     use std::str;
 
+    /// An helper to merge several `I` in merge iterating style
+    struct SimpleKMerger<I: Iterator, C: Comparator> {
+        cmp: C,
+        children: Vec<I>,
+    }
+
+    impl<I: Iterator, C: Comparator> KMergeCore for SimpleKMerger<I, C> {
+        fn cmp(&self) -> &dyn Comparator {
+            &self.cmp
+        }
+
+        fn iters_len(&self) -> usize {
+            self.children.len()
+        }
+
+        fn find_smallest(&mut self) -> usize {
+            let mut smallest: Option<Slice> = None;
+            let mut index = self.iters_len();
+            for (i, child) in self.children.iter().enumerate() {
+                if self.smaller(&mut smallest, child) {
+                    index = i
+                }
+            }
+            index
+        }
+
+        fn find_largest(&mut self) -> usize {
+            let mut largest: Option<Slice> = None;
+            let mut index = self.iters_len();
+            for (i, child) in self.children.iter().enumerate() {
+                if self.larger(&mut largest, child) {
+                    index = i
+                }
+            }
+            index
+        }
+
+        fn get_child(&self, i: usize) -> &dyn Iterator {
+            self.children.get(i).unwrap() as &dyn Iterator
+        }
+
+        fn get_child_mut(&mut self, i: usize) -> &mut dyn Iterator {
+            self.children.get_mut(i).unwrap() as &mut dyn Iterator
+        }
+
+        fn for_each_child<F>(&mut self, mut f: F)
+        where
+            F: FnMut(&mut dyn Iterator),
+        {
+            self.children
+                .iter_mut()
+                .for_each(|i| f(i as &mut dyn Iterator));
+        }
+
+        fn for_not_ith<F>(&mut self, n: usize, mut f: F)
+        where
+            F: FnMut(&mut dyn Iterator, &dyn Comparator),
+        {
+            for (i, child) in self.children.iter_mut().enumerate() {
+                if i != n {
+                    f(child as &mut dyn Iterator, &self.cmp)
+                }
+            }
+        }
+
+        fn take_err(&mut self) -> Result<()> {
+            for i in self.children.iter_mut() {
+                let status = i.status();
+                if status.is_err() {
+                    return status;
+                }
+            }
+            Ok(())
+        }
+    }
     // Divide given ordered `src` into `n` lists and then construct a `MergingIterator` with them
     fn new_test_merging_iter(
         mut src: Vec<String>,
         n: usize,
-    ) -> MergingIterator<BytewiseComparator> {
+    ) -> KMergeIter<SimpleKMerger<TestSimpleArrayIter, BytewiseComparator>> {
         let mut children = vec![];
         for _ in 0..n {
             children.push(vec![]);
         }
         src.sort();
         let mut rnd = rand::thread_rng();
+        // Separate value into all children randomly
         for v in src {
             let i = rnd.gen_range(0, n);
             let child = children.get_mut(i).unwrap();
@@ -469,10 +535,13 @@ mod tests {
             .drain(..)
             .map(|mut child| {
                 child.sort();
-                TestSimpleArrayIter::box_new(child)
+                TestSimpleArrayIter::new(child)
             })
             .collect::<Vec<_>>();
-        MergingIterator::new(cmp, iters)
+        KMergeIter::new(SimpleKMerger {
+            cmp,
+            children: iters,
+        })
     }
 
     struct SortedIterTestSuite<O: Iterator, S: Iterator> {
@@ -485,16 +554,32 @@ mod tests {
             Self { origin, shadow }
         }
 
-        #[inline]
         fn assert_valid(&self, expect: bool) {
             assert_eq!(self.origin.valid(), expect);
             assert_eq!(self.origin.valid(), self.shadow.valid());
         }
 
-        #[inline]
         fn assert_key_and_value(&self) {
             assert_eq!(self.origin.key(), self.shadow.key());
             assert_eq!(self.origin.value(), self.shadow.value());
+        }
+
+        fn assert_iter_forward(&mut self) {
+            self.seek_to_first();
+            while self.valid() {
+                self.assert_key_and_value();
+                self.next();
+            }
+            self.assert_valid(false);
+        }
+
+        fn assert_iter_backward(&mut self) {
+            self.seek_to_last();
+            while self.valid() {
+                self.assert_key_and_value();
+                self.prev();
+            }
+            self.assert_valid(false);
         }
     }
 
@@ -547,13 +632,10 @@ mod tests {
     }
 
     impl TestSimpleArrayIter {
-        fn new(inner: Vec<String>) -> Self {
+        fn new(mut inner: Vec<String>) -> Self {
+            inner.sort();
             let current = inner.len();
             Self { inner, current }
-        }
-
-        fn box_new(inner: Vec<String>) -> Box<dyn Iterator> {
-            Box::new(Self::new(inner))
         }
 
         fn valid_or_panic(&self) {
@@ -685,8 +767,8 @@ mod tests {
             input.push(i.to_string());
         }
         input.sort();
-        let mut tests = vec![1, 5, 10, 50];
-        for t in tests.drain(..) {
+        let tests = vec![1, 5, 10, 50];
+        for t in tests {
             let merging_iter = new_test_merging_iter(input.clone(), t);
             let origin = TestSimpleArrayIter::new(input.clone());
             let mut suite = SortedIterTestSuite::new(origin, merging_iter);
@@ -705,6 +787,8 @@ mod tests {
             suite.assert_key_and_value();
             suite.seek("9999".as_bytes());
             suite.assert_valid(false);
+            suite.assert_iter_forward();
+            suite.assert_iter_backward();
         }
     }
 }
