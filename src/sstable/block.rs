@@ -267,15 +267,11 @@ impl<C: Comparator> Iterator for BlockIterator<C> {
         // linear search (with restart block) for first key >= target
         // if all the keys > target, we seek to the start
         // if all the keys < target, we seek to the last
-        dbg!(&self.current);
         self.seek_to_restart_point(left);
-        dbg!(&self.current);
         loop {
             if !self.parse_block_entry() {
                 return;
             }
-            dbg!(target);
-            dbg!(self.key.as_slice());
             match self.cmp.compare(self.key.as_slice(), target) {
                 Ordering::Less => {}
                 _ => return,

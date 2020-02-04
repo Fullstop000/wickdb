@@ -141,7 +141,6 @@ impl<F: File> Table<F> {
                 // If we don't add block into the cache and use `b.iter`
                 // the `Slice` returns by `iter.key()` may cause UB
                 if options.fill_cache {
-                    dbg!("add block in block_cache");
                     cache.insert(cache_key_buffer, b, charge);
                 }
                 iter
@@ -188,23 +187,12 @@ impl<F: File> Table<F> {
             if maybe_contained {
                 let (data_block_handle, _) = BlockHandle::decode_from(handle_val.as_slice())?;
                 let mut block_iter = self.block_reader(cmp, data_block_handle, options)?;
-                dbg!("seek key in data block");
                 block_iter.seek(key);
                 if block_iter.valid() {
-                    dbg!(unsafe{block_iter.key().as_ptr().read()});
-                    dbg!(block_iter.value());
-<<<<<<< HEAD
                     return Ok(Some(block_iter));
-=======
-                    // FIXME: BlockIterator will be dropped after return. The `block_iter.key()` will cause UB!
-                    return Ok(Some((block_iter.key(), block_iter.value())));
->>>>>>> some dbg
                 }
-                dbg!("no key found in data block");
                 block_iter.seek_to_first();
                 while block_iter.valid() {
-                    dbg!(block_iter.key());
-                    dbg!(block_iter.value());
                     block_iter.next();
                 }
                 block_iter.status()?;

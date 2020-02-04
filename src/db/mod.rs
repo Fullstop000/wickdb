@@ -322,7 +322,6 @@ impl<S: Storage + Clone> WickDB<S> {
         let db = self.inner.clone();
         thread::spawn(move || {
             while let Ok(()) = db.do_compaction.1.recv() {
-                dbg!("receive compaction");
                 if db.is_shutting_down.load(Ordering::Acquire) {
                     // No more background work when shutting down
                     break;
@@ -338,7 +337,6 @@ impl<S: Storage + Clone> WickDB<S> {
                 // so reschedule another compaction if needed
                 let current = db.versions.lock().unwrap().current();
                 db.maybe_schedule_compaction(current);
-                dbg!("notify compaction finished");
                 db.background_work_finished_signal.notify_all();
             }
         });
@@ -451,9 +449,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
                 }
             }
         }
-        dbg!("nothing in memtable");
         let current = self.versions.lock().unwrap().current();
-        dbg!(self.background_compaction_scheduled.load(Ordering::Acquire));
         let (value, seek_stats) = current.get(options, lookup_key, &self.table_cache)?;
         if current.update_stats(seek_stats) {
             self.maybe_schedule_compaction(current)
@@ -816,7 +812,6 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
                     *im_mem = Some(memtable);
                     force = false; // do not force another compaction if have room
                 }
-                dbg!("immutable rotate");
                 self.maybe_schedule_compaction(versions.current());
             }
         }
@@ -939,10 +934,8 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
     // This is a sync function call
     fn background_compaction(&self) {
         if self.im_mem.read().unwrap().is_some() {
-            dbg!("compact memtable");
             // minor compaction
             self.compact_mem_table();
-            dbg!("compact memtable complete");
         } else {
             let mut is_manual = false;
             let mut versions = self.versions.lock().unwrap();
@@ -1247,7 +1240,6 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         {
             // No work needs to be done
         } else {
-            dbg!("send compaction signal");
             self.background_compaction_scheduled
                 .store(true, Ordering::Release);
             if let Err(e) = self.do_compaction.0.send(()) {
@@ -1703,21 +1695,17 @@ mod tests {
             opt.write_buffer_size = 100000; // Small write buffer
             opt
         }).into_iter().enumerate() {
-            dbg!(i);
             t.assert_put_get("foo", "v1");
             let r = t.db.subscribe_compaction_complete();
             // block `flush()`
             t.store.delay_data_sync.store(true, Ordering::Release);
-            dbg!("k1");
             t.put("k1", &"x".repeat(100000)).unwrap(); // fill memtable
-            assert_eq!("v1", dbg!(t.get("foo", None)).unwrap()); // "v1" on immutable table
-            dbg!("k2");
+            assert_eq!("v1", t.get("foo", None).unwrap()); // "v1" on immutable table
             t.put("k2", &"y".repeat(100000)).unwrap(); // trigger compaction
             // Waiting for compaction finish
             r.recv().unwrap();
             // Try to retrieve key "foo" from level 0 files
-            assert_eq!("v1", dbg!(t.get("foo", None)).unwrap()); // "v1" on level0 files
-            dbg!("end");
+            assert_eq!("v1", t.get("foo", None).unwrap()); // "v1" on level0 files
         }
     }
 }
