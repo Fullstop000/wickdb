@@ -383,7 +383,7 @@ impl<C: Comparator> BlockBuilder<C> {
         }
         put_fixed_32(&mut self.buffer, self.restarts.len() as u32);
         self.finished = true;
-        self.buffer.as_slice()
+        &self.buffer
     }
 
     /// Appends key and value to the buffer
@@ -408,7 +408,7 @@ impl<C: Comparator> BlockBuilder<C> {
                 || self.cmp.compare(key, self.last_key.as_slice()) == Ordering::Greater,
             "[block builder] inconsistent new key [{:?}] compared to last_key {:?}",
             key,
-            self.last_key.as_slice()
+            &self.last_key
         );
         let mut shared = 0;
         if self.counter < self.block_restart_interval {
@@ -513,7 +513,7 @@ mod tests {
         assert_eq!(restarts_len, 1);
         assert_eq!(restarts.len() as u32 / 4, restarts_len);
         assert_eq!(decode_fixed_32(restarts), 0);
-        let block = Block::new(Vec::from(data)).expect("New block should work");
+        let block = Block::new(Vec::from(data)).unwrap();
         let iter = block.iter(ucmp);
         assert!(!iter.valid());
     }
@@ -522,7 +522,7 @@ mod tests {
     fn test_new_block_from_bytes() {
         let data = new_test_block();
         assert_eq!(Block::restarts_len(&data), 3);
-        let block = Block::new(data).expect("");
+        let block = Block::new(data).unwrap();
         assert_eq!(block.restart_offset, 51);
     }
 
@@ -532,7 +532,7 @@ mod tests {
         let mut builder = BlockBuilder::new(2, ucmp);
         builder.add(b"", b"test");
         let data = builder.finish();
-        let block = Block::new(Vec::from(data)).expect("New block should work");
+        let block = Block::new(Vec::from(data)).unwrap();
         let mut iter = block.iter(ucmp);
         iter.seek("".as_bytes());
         assert!(iter.valid());
@@ -554,60 +554,78 @@ mod tests {
 
     #[test]
     fn test_write_entries() {
-        let mut builder = BlockBuilder::new(2, BytewiseComparator::default());
+        let mut builder = BlockBuilder::new(3, BytewiseComparator::default());
         assert!(builder.last_key.is_empty());
         // Basic key
         builder.add(b"1111", b"val1");
         assert_eq!(1, builder.counter);
-        assert_eq!(builder.last_key.as_slice(), b"1111");
-        let (shared, n1) = VarintU32::common_read(builder.buffer.as_slice());
+        assert_eq!(&builder.last_key, b"1111");
+        let (shared, n1) = VarintU32::common_read(&builder.buffer);
         assert_eq!(0, shared);
         assert_eq!(1, n1);
-        let (non_shared, n2) = VarintU32::common_read(&builder.buffer.as_slice()[n1 as usize..]);
+        let (non_shared, n2) = VarintU32::common_read(&builder.buffer[n1 as usize..]);
         assert_eq!(4, non_shared);
         assert_eq!(1, n2);
-        let (value_len, n3) =
-            VarintU32::common_read(&builder.buffer.as_slice()[(n1 + n2) as usize..]);
+        let (value_len, n3) = VarintU32::common_read(&builder.buffer[(n1 + n2) as usize..]);
         assert_eq!(4, value_len);
         assert_eq!(1, n3);
         let key_len = shared + non_shared;
         let read = (n1 + n2 + n3) as usize;
-        let key = &builder.buffer.as_slice()[read..read + non_shared as usize];
+        let key = &builder.buffer[read..read + non_shared as usize];
         assert_eq!(key, b"1111");
         let val_offset = read + key_len as usize;
-        let val = &builder.buffer.as_slice()[val_offset..val_offset + value_len as usize];
+        let val = &builder.buffer[val_offset..val_offset + value_len as usize];
         assert_eq!(val, b"val1");
+        assert_eq!(&builder.last_key, b"1111");
 
         // Shared key
         let current = val_offset + value_len as usize;
         builder.add(b"11122", b"val2");
-        let (shared, n1) = VarintU32::common_read(&builder.buffer.as_slice()[current..]);
+        let (shared, n1) = VarintU32::common_read(&builder.buffer[current..]);
         assert_eq!(shared, 3);
-        let (non_shared, n2) =
-            VarintU32::common_read(&builder.buffer.as_slice()[current + n1 as usize..]);
+        let (non_shared, n2) = VarintU32::common_read(&builder.buffer[current + n1 as usize..]);
         assert_eq!(non_shared, 2);
         let (value_len, n3) =
-            VarintU32::common_read(&builder.buffer.as_slice()[current + (n1 + n2) as usize..]);
+            VarintU32::common_read(&builder.buffer[current + (n1 + n2) as usize..]);
         assert_eq!(value_len, 4);
         let key_offset = current + (n1 + n2 + n3) as usize;
-        let key = &builder.buffer.as_slice()[key_offset..key_offset + non_shared as usize];
+        let key = &builder.buffer[key_offset..key_offset + non_shared as usize];
         assert_eq!(key, b"22"); // compressed
         let val_offset = key_offset + non_shared as usize;
-        let val = &builder.buffer.as_slice()[val_offset..val_offset + value_len as usize];
+        let val = &builder.buffer[val_offset..val_offset + value_len as usize];
         assert_eq!(val, b"val2");
+        assert_eq!(&builder.last_key, b"11122");
+
+        // Again shared key
+        let current = val_offset + value_len as usize;
+        builder.add(b"111222", b"val33");
+        let (shared, n1) = VarintU32::common_read(&builder.buffer[current..]);
+        assert_eq!(shared, 5);
+        let (non_shared, n2) = VarintU32::common_read(&builder.buffer[current + n1 as usize..]);
+        assert_eq!(non_shared, 1);
+        let (value_len, n3) =
+            VarintU32::common_read(&builder.buffer[current + (n1 + n2) as usize..]);
+        assert_eq!(value_len, 5);
+        let key_offset = current + (n1 + n2 + n3) as usize;
+        let key = &builder.buffer[key_offset..key_offset + non_shared as usize];
+        assert_eq!(key, b"2"); // compressed
+        let val_offset = key_offset + non_shared as usize;
+        let val = &builder.buffer[val_offset..val_offset + value_len as usize];
+        assert_eq!(val, b"val33");
+        assert_eq!(&builder.last_key, b"111222");
     }
 
     #[test]
     fn test_write_restarts() {
         let samples = vec!["1", "12", "123", "abc", "abd", "acd", "bbb"];
-        let mut tests = vec![
+        let tests = vec![
             (1, vec![0, 4, 9, 15, 21, 27, 33], 39),
             (2, vec![0, 8, 20, 31], 37),
             (3, vec![0, 12, 27], 33),
         ];
-        for (restarts_interval, expected, buffer_size) in tests.drain(..) {
+        for (restarts_interval, expected, buffer_size) in tests {
             let mut builder = BlockBuilder::new(restarts_interval, BytewiseComparator::default());
-            for key in samples.clone().drain(..) {
+            for key in samples.clone() {
                 builder.add(key.as_bytes(), b"");
             }
             assert_eq!(builder.buffer.len(), buffer_size);
@@ -621,7 +639,7 @@ mod tests {
         // keys ["1", "12", "123", "abc", "abd", "acd", "bbb"]
         let data = new_test_block();
         let restarts_len = Block::restarts_len(&data);
-        let block = Block::new(data).expect("");
+        let block = Block::new(data).unwrap();
         let mut iter =
             BlockIterator::new(ucmp, block.data.clone(), block.restart_offset, restarts_len);
         assert!(!iter.valid());
@@ -664,7 +682,7 @@ mod tests {
             ("abc", "1"),
             ("acd", "2"),
         ];
-        for (key, val) in tests.clone().drain(..) {
+        for (key, val) in tests.clone() {
             builder.add(key.as_bytes(), val.as_bytes());
         }
         let data = builder.finish();
@@ -672,7 +690,7 @@ mod tests {
         let mut iter = block.iter(ucmp);
         assert!(!iter.valid());
         iter.seek_to_first();
-        for (key, val) in tests.clone().drain(..) {
+        for (key, val) in tests {
             assert!(iter.valid());
             assert_eq!(iter.key().as_str(), key);
             assert_eq!(iter.value().as_str(), val);

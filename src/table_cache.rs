@@ -19,10 +19,10 @@ use crate::cache::lru::LRUCache;
 use crate::cache::Cache;
 use crate::db::filename::{generate_filename, FileType};
 use crate::options::{Options, ReadOptions};
+use crate::sstable::block::BlockIterator;
 use crate::sstable::table::{new_table_iterator, Table, TableIterator};
 use crate::storage::Storage;
 use crate::util::comparator::Comparator;
-use crate::util::slice::Slice;
 use crate::util::varint::VarintU64;
 use crate::Result;
 use std::sync::Arc;
@@ -84,11 +84,9 @@ impl<S: Storage + Clone> TableCache<S> {
         key: &[u8],
         file_number: u64,
         file_size: u64,
-    ) -> Result<Option<(Slice, Slice)>> {
+    ) -> Result<Option<BlockIterator<C>>> {
         let table = self.find_table(cmp.clone(), file_number, file_size)?;
-        // every value should be valid so unwrap is safe here
-        let res = table.internal_get(options, cmp, key)?;
-        Ok(res)
+        table.internal_get(options, cmp, key)
     }
 
     /// Create an iterator for the specified `file_number` (the corresponding

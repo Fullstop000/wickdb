@@ -167,7 +167,9 @@ impl Version {
                     file.file_size,
                 )? {
                     None => continue, // keep searching
-                    Some((encoded_key, value)) => {
+                    Some(block_iter) => {
+                        let encoded_key = block_iter.key();
+                        let value = block_iter.value();
                         match ParsedInternalKey::decode_from(encoded_key.as_slice()) {
                             None => return Err(Error::Corruption("bad internal key".to_owned())),
                             Some(parsed_key) => {
