@@ -63,7 +63,7 @@ impl<S: Storage + Clone> TableCache<S> {
                 let table_file = self.storage.open(filename.as_str())?;
                 let table = Table::open(table_file, file_size, self.options.clone(), cmp)?;
                 let value = Arc::new(table);
-                self.cache.insert(key, value.clone(), 1).unwrap();
+                let _ = self.cache.insert(key, value.clone(), 1);
                 Ok(value)
             }
         }

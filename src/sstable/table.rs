@@ -137,7 +137,11 @@ impl<F: File> Table<F> {
                 let new_block = Block::new(data)?;
                 let b = Arc::new(new_block);
                 let iter = b.iter(cmp);
+                // FIXME: 
+                // If we don't add block into the cache and use `b.iter`
+                // the `Slice` returns by `iter.key()` may cause UB
                 if options.fill_cache {
+                    dbg!("add block in block_cache");
                     cache.insert(cache_key_buffer, b, charge);
                 }
                 iter
@@ -187,9 +191,14 @@ impl<F: File> Table<F> {
                 dbg!("seek key in data block");
                 block_iter.seek(key);
                 if block_iter.valid() {
-                    dbg!(block_iter.key().as_slice());
+                    dbg!(unsafe{block_iter.key().as_ptr().read()});
                     dbg!(block_iter.value());
+<<<<<<< HEAD
                     return Ok(Some(block_iter));
+=======
+                    // FIXME: BlockIterator will be dropped after return. The `block_iter.key()` will cause UB!
+                    return Ok(Some((block_iter.key(), block_iter.value())));
+>>>>>>> some dbg
                 }
                 dbg!("no key found in data block");
                 block_iter.seek_to_first();
@@ -576,9 +585,9 @@ fn write_raw_block<F: File>(
     Ok(())
 }
 
-/// Read the block identified from `file` according to the given `handle`.
-/// If the read data does not match the checksum, return a error marked as `Status::Corruption`
-pub fn read_block<F: File>(
+// Read the block identified from `file` according to the given `handle`.
+// If the read data does not match the checksum, return a error marked as `Status::Corruption`
+fn read_block<F: File>(
     file: &F,
     handle: &BlockHandle,
     verify_checksum: bool,
