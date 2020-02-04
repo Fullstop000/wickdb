@@ -24,7 +24,6 @@ use crate::storage::File;
 use crate::util::coding::{decode_fixed_32, put_fixed_32, put_fixed_64};
 use crate::util::comparator::Comparator;
 use crate::util::crc32::{extend, mask, unmask, value};
-use crate::util::slice::Slice;
 use crate::{Error, Result};
 use snap::max_compress_len;
 use std::cmp::Ordering;
@@ -150,14 +149,17 @@ impl<F: File> Table<F> {
         Ok(iter)
     }
 
-    /// Gets the first entry with the key equal or greater than target.
+    /// Finds the first entry with the key equal or greater than target and
+    /// returns the block iterator direclty
+    ///
     /// The given `key` is a user key
+    ///
     pub fn internal_get<C: Comparator + Clone>(
         &self,
         options: ReadOptions,
         cmp: C,
         key: &[u8],
-    ) -> Result<Option<(Slice, Slice)>> {
+    ) -> Result<Option<BlockIterator<C>>> {
         let mut index_iter = self.index_block.iter(cmp.clone());
         // seek to the first 'last key' bigger than 'key'
         index_iter.seek(key);
@@ -181,7 +183,7 @@ impl<F: File> Table<F> {
                 let mut block_iter = self.block_reader(cmp, data_block_handle, options)?;
                 block_iter.seek(key);
                 if block_iter.valid() {
-                    return Ok(Some((block_iter.key(), block_iter.value())));
+                    return Ok(Some(block_iter));
                 }
                 block_iter.status()?;
             }
@@ -732,7 +734,7 @@ mod tests {
                     .internal_get(read_opt, cmp, key.as_bytes())
                     .unwrap()
                     .unwrap()
-                    .1
+                    .value()
                     .as_str()
             );
         }
