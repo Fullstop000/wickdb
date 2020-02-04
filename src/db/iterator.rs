@@ -14,7 +14,7 @@
 use crate::db::format::ValueType;
 use crate::db::format::{extract_user_key, InternalKey, ParsedInternalKey, VALUE_TYPE_FOR_SEEK};
 use crate::db::DBImpl;
-use crate::iterator::Iterator;
+use crate::iterator::{Iterator, KMergeCore};
 use crate::storage::Storage;
 use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
@@ -321,4 +321,133 @@ impl<I: Iterator, S: Storage + Clone> DBIterator<I, S> {
 // Picks the number of bytes that can be read until a compaction is scheduled
 fn random_compaction_period(read_bytes_period: u64) -> u64 {
     rand::thread_rng().gen_range(0, 2 * read_bytes_period)
+}
+
+// Iterating from memtable iterators to table iterators
+pub struct DBIteratorCore<C: Comparator, M: Iterator, T: Iterator> {
+    cmp: C,
+    mem_iters: Vec<M>,
+    table_iters: Vec<T>,
+}
+
+impl<C: Comparator, M: Iterator, T: Iterator> DBIteratorCore<C, M, T> {
+    pub fn new(cmp: C, mem_iters: Vec<M>, table_iters: Vec<T>) -> Self {
+        Self {
+            cmp,
+            mem_iters,
+            table_iters,
+        }
+    }
+}
+
+impl<C: Comparator, M: Iterator, T: Iterator> KMergeCore for DBIteratorCore<C, M, T> {
+    fn cmp(&self) -> &dyn Comparator {
+        &self.cmp
+    }
+
+    fn iters_len(&self) -> usize {
+        self.mem_iters.len() + self.table_iters.len()
+    }
+
+    // Find the iterator with the smallest 'key' and set it as current
+    fn find_smallest(&mut self) -> usize {
+        let mut smallest: Option<Slice> = None;
+        let mut index = self.iters_len();
+        for (i, child) in self.mem_iters.iter().enumerate() {
+            if self.smaller(&mut smallest, child) {
+                index = i
+            }
+        }
+
+        for (i, child) in self.table_iters.iter().enumerate() {
+            if self.smaller(&mut smallest, child) {
+                index = i + self.mem_iters.len()
+            }
+        }
+        index
+    }
+
+    // Find the iterator with the largest 'key' and set it as current
+    fn find_largest(&mut self) -> usize {
+        let mut largest: Option<Slice> = None;
+        let mut index = self.iters_len();
+        for (i, child) in self.mem_iters.iter().enumerate() {
+            if self.larger(&mut largest, child) {
+                index = i
+            }
+        }
+
+        for (i, child) in self.table_iters.iter().enumerate() {
+            if self.larger(&mut largest, child) {
+                index = i + self.mem_iters.len()
+            }
+        }
+        index
+    }
+
+    fn get_child(&self, i: usize) -> &dyn Iterator {
+        if i < self.mem_iters.len() {
+            self.mem_iters.get(i).unwrap() as &dyn Iterator
+        } else {
+            let current = i - self.mem_iters.len();
+            self.table_iters.get(current).unwrap() as &dyn Iterator
+        }
+    }
+
+    fn get_child_mut(&mut self, i: usize) -> &mut dyn Iterator {
+        if i < self.mem_iters.len() {
+            self.mem_iters.get_mut(i).unwrap() as &mut dyn Iterator
+        } else {
+            let current = i - self.mem_iters.len();
+            self.table_iters.get_mut(current).unwrap() as &mut dyn Iterator
+        }
+    }
+
+    fn for_each_child<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut dyn Iterator),
+    {
+        self.mem_iters
+            .iter_mut()
+            .for_each(|i| f(i as &mut dyn Iterator));
+        self.table_iters
+            .iter_mut()
+            .for_each(|i| f(i as &mut dyn Iterator));
+    }
+
+    fn for_not_ith<F>(&mut self, n: usize, mut f: F)
+    where
+        F: FnMut(&mut dyn Iterator, &dyn Comparator),
+    {
+        if n < self.mem_iters.len() {
+            for (i, child) in self.mem_iters.iter_mut().enumerate() {
+                if i != n {
+                    f(child as &mut dyn Iterator, &self.cmp)
+                }
+            }
+        } else {
+            let current = n - self.mem_iters.len();
+            for (i, child) in self.table_iters.iter_mut().enumerate() {
+                if i != current {
+                    f(child as &mut dyn Iterator, &self.cmp)
+                }
+            }
+        }
+    }
+
+    fn take_err(&mut self) -> Result<()> {
+        for child in self.mem_iters.iter_mut() {
+            let status = child.status();
+            if status.is_err() {
+                return status;
+            }
+        }
+        for child in self.table_iters.iter_mut() {
+            let status = child.status();
+            if status.is_err() {
+                return status;
+            }
+        }
+        Ok(())
+    }
 }

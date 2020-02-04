@@ -374,9 +374,8 @@ mod tests {
     use crate::db::format::{
         InternalKeyComparator, LookupKey, ParsedInternalKey, ValueType, MAX_KEY_SEQUENCE,
     };
-    use crate::db::iterator::DBIterator;
-    use crate::db::{WickDB, DB};
-    use crate::iterator::{Iterator, MergingIterator};
+    use crate::db::{WickDB, WickDBIterator, DB};
+    use crate::iterator::Iterator;
     use crate::mem::{MemTable, MemTableIterator};
     use crate::options::{Options, ReadOptions};
     use crate::sstable::block::*;
@@ -761,7 +760,7 @@ mod tests {
     }
 
     impl Constructor for DBConstructor {
-        type Iter = DBIterator<MergingIterator<InternalKeyComparator>, MemStorage>;
+        type Iter = WickDBIterator<MemStorage>;
 
         fn new(is_reversed: bool) -> Self {
             let mut options = Options::default();

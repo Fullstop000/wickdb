@@ -17,14 +17,14 @@
 
 use crate::db::format::{InternalKey, InternalKeyComparator};
 use crate::error::Result;
-use crate::iterator::{ConcatenateIterator, Iterator, MergingIterator};
+use crate::iterator::{ConcatenateIterator, KMergeIter};
 use crate::options::{Options, ReadOptions};
 use crate::sstable::table::TableBuilder;
 use crate::storage::{File, Storage};
 use crate::table_cache::TableCache;
 use crate::util::comparator::Comparator;
 use crate::version::version_edit::{FileMetaData, VersionEdit};
-use crate::version::version_set::{total_file_size, FileIterFactory};
+use crate::version::version_set::{total_file_size, FileIterFactory, SSTableIters};
 use crate::version::{LevelFileNumIterator, Version};
 use std::cmp::Ordering as CmpOrdering;
 use std::sync::Arc;
@@ -138,7 +138,7 @@ impl<O: File> Compaction<O> {
         &self,
         icmp: InternalKeyComparator,
         table_cache: TableCache<S>,
-    ) -> Result<impl Iterator> {
+    ) -> Result<KMergeIter<SSTableIters<S>>> {
         let read_options = ReadOptions {
             verify_checksums: self.options.paranoid_checks,
             fill_cache: false,
@@ -146,34 +146,32 @@ impl<O: File> Compaction<O> {
         };
         // Level-0 files have to be merged together so we generate a merging iterator includes iterators for each level 0 file.
         // For other levels, we will make a concatenating iterator per level.
-        let space = if self.level == 0 {
-            self.inputs[CompactionInputsRelation::Source as usize].len() + 1
-        } else {
-            2
-        };
-        let mut iter_list: Vec<Box<dyn Iterator>> = Vec::with_capacity(space);
+        let mut level0 =
+            Vec::with_capacity(self.inputs[CompactionInputsRelation::Source as usize].len() + 1);
+        let mut leveln = Vec::with_capacity(2);
         for (i, input) in self.inputs.iter().enumerate() {
             if !input.is_empty() {
                 if self.level + i == 0 {
                     // level0
                     for file in self.inputs[CompactionInputsRelation::Source as usize].iter() {
                         // all the level0 tables are guaranteed being added into the table_cache via minor compaction
-                        iter_list.push(Box::new(table_cache.new_iter(
+                        level0.push(table_cache.new_iter(
                             icmp.clone(),
                             read_options.clone(),
                             file.number,
                             file.file_size,
-                        )?));
+                        )?);
                     }
                 } else {
                     let origin = LevelFileNumIterator::new(icmp.clone(), self.inputs[i].clone());
                     let factory =
                         FileIterFactory::new(icmp.clone(), read_options, table_cache.clone());
-                    iter_list.push(Box::new(ConcatenateIterator::new(origin, factory)));
+                    leveln.push(ConcatenateIterator::new(origin, factory));
                 }
             }
         }
-        Ok(MergingIterator::new(icmp, iter_list))
+        let iter = KMergeIter::new(SSTableIters::new(icmp, level0, leveln));
+        Ok(iter)
     }
 
     /// Returns true iff we should stop building the current output
