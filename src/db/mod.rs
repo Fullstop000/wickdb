@@ -1297,6 +1297,8 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
     // sizes will be one-tenth the size of the corresponding user data size.
     //
     // The results may not include the sizes of recently written data.
+    // TODO: remove this later
+    #[allow(dead_code)]
     fn get_approximate_sizes(&self, start: &[u8], end: &[u8], n: usize) -> Vec<u64> {
         let current = self.versions.lock().unwrap().current();
         let start_ikey = InternalKey::new(start, MAX_KEY_SEQUENCE, VALUE_TYPE_FOR_SEEK);
@@ -1694,7 +1696,10 @@ mod tests {
         for (i, t) in cases(|mut opt| {
             opt.write_buffer_size = 100000; // Small write buffer
             opt
-        }).into_iter().enumerate() {
+        })
+        .into_iter()
+        .enumerate()
+        {
             t.assert_put_get("foo", "v1");
             let r = t.db.subscribe_compaction_complete();
             // block `flush()`
@@ -1702,7 +1707,7 @@ mod tests {
             t.put("k1", &"x".repeat(100000)).unwrap(); // fill memtable
             assert_eq!("v1", t.get("foo", None).unwrap()); // "v1" on immutable table
             t.put("k2", &"y".repeat(100000)).unwrap(); // trigger compaction
-            // Waiting for compaction finish
+                                                       // Waiting for compaction finish
             r.recv().unwrap();
             // Try to retrieve key "foo" from level 0 files
             assert_eq!("v1", t.get("foo", None).unwrap()); // "v1" on level0 files

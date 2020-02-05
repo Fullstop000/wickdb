@@ -160,7 +160,7 @@ impl VersionBuilder {
     fn has_overlapping(icmp: &InternalKeyComparator, files: &[Arc<FileMetaData>]) -> bool {
         for fs in files.windows(2) {
             if icmp.compare(fs[0].largest.data(), fs[1].smallest.data()) != CmpOrdering::Less {
-                return true
+                return true;
             }
         }
         false
@@ -547,7 +547,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         Some(self.setup_other_inputs(compaction))
     }
 
-    /// Persistent given memtable into a single sst file and the 
+    /// Persistent given memtable into a single sst file and the
     /// file could be pushed into level1 or level2 if there's no too much
     /// overlapping.
     pub fn write_level0_files(

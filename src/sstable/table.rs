@@ -137,7 +137,7 @@ impl<F: File> Table<F> {
                 let new_block = Block::new(data)?;
                 let b = Arc::new(new_block);
                 let iter = b.iter(cmp);
-                // FIXME: 
+                // FIXME:
                 // If we don't add block into the cache and use `b.iter`
                 // the `Slice` returns by `iter.key()` may cause UB
                 if options.fill_cache {
@@ -575,11 +575,7 @@ fn write_raw_block<F: File>(
 
 // Read the block identified from `file` according to the given `handle`.
 // If the read data does not match the checksum, return a error marked as `Status::Corruption`
-fn read_block<F: File>(
-    file: &F,
-    handle: &BlockHandle,
-    verify_checksum: bool,
-) -> Result<Vec<u8>> {
+fn read_block<F: File>(file: &F, handle: &BlockHandle, verify_checksum: bool) -> Result<Vec<u8>> {
     let n = handle.size as usize;
     // TODO: use pre-allocated buf
     let mut buffer = vec![0; n + BLOCK_TRAILER_SIZE];

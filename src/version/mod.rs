@@ -503,7 +503,9 @@ impl Version {
                 } else {
                     // "ikey" falls in the range for this table.  Add the
                     // approximate offset of "ikey" within the table.
-                    if let Ok(table) = table_cache.find_table(self.icmp.clone(), f.number, f.file_size) {
+                    if let Ok(table) =
+                        table_cache.find_table(self.icmp.clone(), f.number, f.file_size)
+                    {
                         result += table.approximate_offset_of(self.icmp.clone(), ikey.data());
                     }
                 }
