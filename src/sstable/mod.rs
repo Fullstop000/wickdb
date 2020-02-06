@@ -207,8 +207,8 @@ mod filter_block;
 pub mod table;
 
 use crate::util::coding::{decode_fixed_64, put_fixed_64};
-use crate::util::status::{Status, WickErr};
 use crate::util::varint::{VarintU64, MAX_VARINT_LEN_U64};
+use crate::{Error, Result};
 
 const TABLE_MAGIC_NUMBER: u64 = 0xdb4775248b80fb57;
 
@@ -268,15 +268,15 @@ impl BlockHandle {
     ///
     /// If varint decoding fails, return `Status::Corruption` with relative messages
     #[inline]
-    pub fn decode_from(src: &[u8]) -> Result<(Self, usize), WickErr> {
+    pub fn decode_from(src: &[u8]) -> Result<(Self, usize)> {
         if let Some((offset, n)) = VarintU64::read(src) {
             if let Some((size, m)) = VarintU64::read(&src[n..]) {
                 Ok((Self::new(offset, size), m + n))
             } else {
-                Err(WickErr::new(Status::Corruption, Some("bad block handle")))
+                Err(Error::Corruption("bad block handle".to_owned()))
             }
         } else {
-            Err(WickErr::new(Status::Corruption, Some("bad block handle")))
+            Err(Error::Corruption("bad block handle".to_owned()))
         }
     }
 }
@@ -304,12 +304,11 @@ impl Footer {
     ///
     /// Returns `Status::Corruption` when decoding meta index or index handle fails
     ///
-    pub fn decode_from(src: &[u8]) -> Result<(Self, usize), WickErr> {
+    pub fn decode_from(src: &[u8]) -> Result<(Self, usize)> {
         let magic = decode_fixed_64(&src[FOOTER_ENCODED_LENGTH - 8..]);
         if magic != TABLE_MAGIC_NUMBER {
-            return Err(WickErr::new(
-                Status::Corruption,
-                Some("not an sstable (bad magic number)"),
+            return Err(Error::Corruption(
+                "not an sstable (bad magic number)".to_owned(),
             ));
         };
         let (meta_index_handle, n) = BlockHandle::decode_from(src)?;
@@ -344,8 +343,6 @@ impl Footer {
 #[cfg(test)]
 mod test_footer {
     use crate::sstable::{BlockHandle, Footer};
-    use crate::util::status::Status;
-    use std::error::Error;
 
     #[test]
     fn test_footer_corruption() {
@@ -356,8 +353,10 @@ mod test_footer {
         let r1 = Footer::decode_from(&encoded);
         assert!(r1.is_err());
         let e1 = r1.unwrap_err();
-        assert_eq!(e1.status(), Status::Corruption);
-        assert_eq!(e1.description(), "not an sstable (bad magic number)");
+        assert_eq!(
+            e1.to_string(),
+            "data corruption: not an sstable (bad magic number)"
+        );
     }
 
     #[test]
@@ -375,23 +374,23 @@ mod tests {
     use crate::db::format::{
         InternalKeyComparator, LookupKey, ParsedInternalKey, ValueType, MAX_KEY_SEQUENCE,
     };
-    use crate::db::{WickDB, DB};
-    use crate::iterator::{EmptyIterator, Iterator};
-    use crate::mem::{MemTable, MemoryTable};
+    use crate::db::{WickDB, WickDBIterator, DB};
+    use crate::iterator::Iterator;
+    use crate::mem::{MemTable, MemTableIterator};
     use crate::options::{Options, ReadOptions};
     use crate::sstable::block::*;
     use crate::sstable::table::*;
-    use crate::storage::mem::MemStorage;
+    use crate::storage::mem::{FileNode, MemStorage};
+    use crate::storage::{File, Storage};
     use crate::util::collection::HashSet;
     use crate::util::comparator::{BytewiseComparator, Comparator};
     use crate::util::slice::Slice;
-    use crate::util::status::{Result, Status, WickErr};
+    use crate::{Error, Result};
     use crate::{WriteBatch, WriteOptions};
     use rand::prelude::ThreadRng;
     use rand::Rng;
     use std::cell::Cell;
     use std::cmp::Ordering;
-    use std::rc::Rc;
     use std::sync::Arc;
 
     // Return the reverse of given key
@@ -404,16 +403,9 @@ mod tests {
         v
     }
 
+    #[derive(Default, Clone, Copy)]
     struct ReverseComparator {
         cmp: BytewiseComparator,
-    }
-
-    impl ReverseComparator {
-        fn new() -> Self {
-            Self {
-                cmp: BytewiseComparator::new(),
-            }
-        }
     }
 
     impl Comparator for ReverseComparator {
@@ -436,34 +428,95 @@ mod tests {
         }
     }
 
-    // Helper class for tests to unify the interface between
-    // BlockBuilder/TableBuilder and Block/Table
-    trait Constructor {
-        // Write key/value pairs in `data` into inner data structure ( Block / Table )
-        fn finish(&mut self, options: Arc<Options>, data: &[(Vec<u8>, Vec<u8>)]) -> Result<()>;
-
-        // Returns a iterator for inner data structure ( Block / Table )
-        fn iter(&self) -> Box<dyn Iterator>;
+    #[derive(Clone, Copy)]
+    enum TestComparator {
+        Normal(BytewiseComparator),
+        Reverse(ReverseComparator),
     }
 
-    struct BlockConstructor {
-        block: Block,
-        cmp: Arc<dyn Comparator>,
-    }
-
-    impl BlockConstructor {
-        fn new(cmp: Arc<dyn Comparator>) -> Self {
-            Self {
-                block: Block::default(),
-                cmp,
+    impl TestComparator {
+        fn new(is_reversed: bool) -> Self {
+            match is_reversed {
+                true => TestComparator::Reverse(ReverseComparator::default()),
+                false => TestComparator::Normal(BytewiseComparator::default()),
             }
         }
     }
 
+    impl Comparator for TestComparator {
+        fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
+            match &self {
+                TestComparator::Normal(c) => c.compare(a, b),
+                TestComparator::Reverse(c) => c.compare(a, b),
+            }
+        }
+
+        fn name(&self) -> &str {
+            match &self {
+                TestComparator::Normal(c) => c.name(),
+                TestComparator::Reverse(c) => c.name(),
+            }
+        }
+
+        fn separator(&self, a: &[u8], b: &[u8]) -> Vec<u8> {
+            match &self {
+                TestComparator::Normal(c) => c.separator(a, b),
+                TestComparator::Reverse(c) => c.separator(a, b),
+            }
+        }
+
+        fn successor(&self, key: &[u8]) -> Vec<u8> {
+            match &self {
+                TestComparator::Normal(c) => c.successor(key),
+                TestComparator::Reverse(c) => c.successor(key),
+            }
+        }
+    }
+
+    // Helper class for tests to unify the interface between
+    // BlockBuilder/TableBuilder and Block/Table
+    trait Constructor {
+        type Iter: Iterator;
+
+        fn new(is_reversed: bool) -> Self;
+
+        // Write key/value pairs in `data` into inner data structure
+        fn finish(
+            &mut self,
+            options: Arc<Options>,
+            storage: &MemStorage,
+            data: &[(Vec<u8>, Vec<u8>)],
+        ) -> Result<()>;
+
+        // Returns a iterator for inner data structure
+        fn iter(&self) -> Self::Iter;
+    }
+
+    struct BlockConstructor {
+        block: Block,
+        is_reversed: bool,
+    }
+
     impl Constructor for BlockConstructor {
-        fn finish(&mut self, options: Arc<Options>, data: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
-            let mut builder =
-                BlockBuilder::new(options.block_restart_interval, options.comparator.clone());
+        type Iter = BlockIterator<TestComparator>;
+
+        fn new(is_reversed: bool) -> Self {
+            Self {
+                block: Block::default(),
+                is_reversed,
+            }
+        }
+
+        fn finish(
+            &mut self,
+            options: Arc<Options>,
+            _storage: &MemStorage,
+            data: &[(Vec<u8>, Vec<u8>)],
+        ) -> Result<()> {
+            let mut builder = BlockBuilder::new(
+                options.block_restart_interval,
+                TestComparator::new(self.is_reversed),
+            );
             for (key, value) in data {
                 builder.add(key.as_slice(), value.as_slice())
             }
@@ -473,66 +526,60 @@ mod tests {
             Ok(())
         }
 
-        fn iter(&self) -> Box<dyn Iterator> {
-            self.block.iter(self.cmp.clone())
+        fn iter(&self) -> Self::Iter {
+            self.block.iter(TestComparator::new(self.is_reversed))
         }
     }
 
     struct TableConstructor {
-        table: Option<Arc<Table>>,
-    }
-
-    impl TableConstructor {
-        fn new(_cmp: Arc<dyn Comparator>) -> Self {
-            Self { table: None }
-        }
-
-        #[allow(dead_code)]
-        fn approximate_offset_of(&self, key: &[u8]) -> u64 {
-            if let Some(t) = &self.table {
-                t.approximate_offset_of(key)
-            } else {
-                0
-            }
-        }
+        table: Option<Arc<Table<FileNode>>>,
+        cmp: TestComparator,
     }
 
     impl Constructor for TableConstructor {
-        fn finish(&mut self, options: Arc<Options>, data: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
-            let file_name = "test_table";
-            let file = options.env.create(file_name)?;
-            let mut builder = TableBuilder::new(file, options.clone());
-            for (key, value) in data {
-                builder
-                    .add(key.as_slice(), value.as_slice())
-                    .expect("TableBuilder add should work");
+        type Iter = TableIterator<TestComparator, FileNode>;
+
+        fn new(is_reversed: bool) -> Self {
+            Self {
+                table: None,
+                cmp: TestComparator::new(is_reversed),
             }
-            builder
-                .finish(false)
-                .expect("TableBuilder finish should work");
-            let file = options.env.open(file_name)?;
+        }
+
+        fn finish(
+            &mut self,
+            options: Arc<Options>,
+            storage: &MemStorage,
+            data: &[(Vec<u8>, Vec<u8>)],
+        ) -> Result<()> {
+            let file_name = "test_table";
+            let file = storage.create(file_name)?;
+            let mut builder = TableBuilder::new(file, self.cmp, options.clone());
+            for (key, value) in data {
+                builder.add(key.as_slice(), value.as_slice()).unwrap();
+            }
+            builder.finish(false).unwrap();
+            let file = storage.open(file_name)?;
             let file_len = file.len()?;
-            let table = Table::open(file, file_len, options.clone())?;
+            let table = Table::open(file, file_len, options, self.cmp)?;
             self.table = Some(Arc::new(table));
             Ok(())
         }
 
-        fn iter(&self) -> Box<dyn Iterator> {
-            match &self.table {
-                Some(t) => new_table_iterator(t.clone(), Rc::new(ReadOptions::default())),
-                None => Box::new(EmptyIterator::new()),
-            }
+        fn iter(&self) -> Self::Iter {
+            let t = self.table.as_ref().unwrap();
+            new_table_iterator(self.cmp, t.clone(), ReadOptions::default())
         }
     }
 
     // A helper struct to convert user key into lookup key for inner iterator
-    struct KeyConvertingIterator {
-        inner: Box<dyn Iterator>,
-        err: Cell<Option<WickErr>>,
+    struct KeyConvertingIterator<I: Iterator> {
+        inner: I,
+        err: Cell<Option<Error>>,
     }
 
-    impl KeyConvertingIterator {
-        fn new(iter: Box<dyn Iterator>) -> Self {
+    impl<I: Iterator> KeyConvertingIterator<I> {
+        fn new(iter: I) -> Self {
             Self {
                 inner: iter,
                 err: Cell::new(None),
@@ -540,7 +587,7 @@ mod tests {
         }
     }
 
-    impl Iterator for KeyConvertingIterator {
+    impl<I: Iterator> Iterator for KeyConvertingIterator<I> {
         fn valid(&self) -> bool {
             self.inner.valid()
         }
@@ -553,9 +600,9 @@ mod tests {
             self.inner.seek_to_last()
         }
 
-        fn seek(&mut self, target: &Slice) {
-            let lkey = LookupKey::new(target.as_slice(), MAX_KEY_SEQUENCE);
-            self.inner.seek(&lkey.mem_key());
+        fn seek(&mut self, target: &[u8]) {
+            let lkey = LookupKey::new(target, MAX_KEY_SEQUENCE);
+            self.inner.seek(lkey.mem_key());
         }
 
         fn next(&mut self) {
@@ -567,13 +614,11 @@ mod tests {
         }
 
         fn key(&self) -> Slice {
-            match ParsedInternalKey::decode_from(self.inner.key()) {
-                Some(parsed_ikey) => parsed_ikey.user_key.clone(),
+            match ParsedInternalKey::decode_from(self.inner.key().as_slice()) {
+                Some(parsed_ikey) => Slice::from(parsed_ikey.user_key),
                 None => {
-                    self.err.set(Some(WickErr::new(
-                        Status::Corruption,
-                        Some("malformed internal key"),
-                    )));
+                    self.err
+                        .set(Some(Error::Corruption("malformed internal key".to_owned())));
                     Slice::from("corrupted key")
                 }
             }
@@ -598,11 +643,12 @@ mod tests {
     struct EntryIterator {
         current: usize,
         data: Vec<(Vec<u8>, Vec<u8>)>,
-        cmp: Arc<dyn Comparator>,
+        cmp: TestComparator,
     }
 
     impl EntryIterator {
-        fn new(cmp: Arc<dyn Comparator>, data: Vec<(Vec<u8>, Vec<u8>)>) -> Self {
+        fn new(is_reversed: bool, data: Vec<(Vec<u8>, Vec<u8>)>) -> Self {
+            let cmp = TestComparator::new(is_reversed);
             Self {
                 current: data.len(),
                 data,
@@ -628,9 +674,9 @@ mod tests {
             }
         }
 
-        fn seek(&mut self, target: &Slice) {
+        fn seek(&mut self, target: &[u8]) {
             for (i, (key, _)) in self.data.iter().enumerate() {
-                if self.cmp.compare(key.as_slice(), target.as_slice()) != Ordering::Less {
+                if self.cmp.compare(key.as_slice(), target) != Ordering::Less {
                     self.current = i;
                     return;
                 }
@@ -677,17 +723,22 @@ mod tests {
         inner: MemTable,
     }
 
-    impl MemTableConstructor {
-        fn new(cmp: Arc<dyn Comparator>) -> Self {
-            let icmp = Arc::new(InternalKeyComparator::new(cmp));
+    impl Constructor for MemTableConstructor {
+        type Iter = KeyConvertingIterator<MemTableIterator>;
+
+        fn new(is_reversed: bool) -> Self {
+            let icmp = InternalKeyComparator::new(Arc::new(TestComparator::new(is_reversed)));
             Self {
                 inner: MemTable::new(icmp),
             }
         }
-    }
 
-    impl Constructor for MemTableConstructor {
-        fn finish(&mut self, _options: Arc<Options>, data: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
+        fn finish(
+            &mut self,
+            _options: Arc<Options>,
+            _storage: &MemStorage,
+            data: &[(Vec<u8>, Vec<u8>)],
+        ) -> Result<()> {
             for (seq, (key, value)) in data.iter().enumerate() {
                 self.inner.add(
                     seq as u64 + 1,
@@ -699,30 +750,34 @@ mod tests {
             Ok(())
         }
 
-        fn iter(&self) -> Box<dyn Iterator> {
-            Box::new(KeyConvertingIterator::new(self.inner.iter()))
+        fn iter(&self) -> Self::Iter {
+            KeyConvertingIterator::new(self.inner.iter())
         }
     }
 
     struct DBConstructor {
-        inner: WickDB,
-    }
-
-    impl DBConstructor {
-        fn new(cmp: Arc<dyn Comparator>) -> Self {
-            let mut options = Options::default();
-            options.env = Arc::new(MemStorage::default());
-            options.comparator = cmp;
-            options.write_buffer_size = 10000; // Something small to force merging
-            options.error_if_exists = true;
-            let db =
-                WickDB::open_db(options, "table_testdb".to_owned()).expect("could not open db");
-            Self { inner: db }
-        }
+        inner: WickDB<MemStorage>,
     }
 
     impl Constructor for DBConstructor {
-        fn finish(&mut self, _options: Arc<Options>, data: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
+        type Iter = WickDBIterator<MemStorage>;
+
+        fn new(is_reversed: bool) -> Self {
+            let mut options = Options::default();
+            let env = MemStorage::default();
+            options.comparator = Arc::new(TestComparator::new(is_reversed));
+            options.write_buffer_size = 10000; // Something small to force merging
+            options.error_if_exists = true;
+            let db = WickDB::open_db(options, "table_testdb", env).expect("could not open db");
+            Self { inner: db }
+        }
+
+        fn finish(
+            &mut self,
+            _options: Arc<Options>,
+            _storage: &MemStorage,
+            data: &[(Vec<u8>, Vec<u8>)],
+        ) -> Result<()> {
             for (key, value) in data.iter() {
                 let mut batch = WriteBatch::new();
                 batch.put(key.as_slice(), value.as_slice());
@@ -733,31 +788,32 @@ mod tests {
             Ok(())
         }
 
-        fn iter(&self) -> Box<dyn Iterator> {
-            self.inner.iter(ReadOptions::default())
+        fn iter(&self) -> Self::Iter {
+            self.inner.iter(ReadOptions::default()).unwrap()
         }
     }
 
-    struct CommonConstructor {
-        constructor: Box<dyn Constructor>,
+    struct CommonConstructor<C: Constructor> {
+        storage: MemStorage,
+        constructor: C,
         // key&value pairs in order
         data: Vec<(Vec<u8>, Vec<u8>)>,
         keys: HashSet<Vec<u8>>,
     }
 
-    impl CommonConstructor {
-        fn new(constructor: Box<dyn Constructor>) -> Self {
+    impl<C: Constructor> CommonConstructor<C> {
+        fn new(storage: MemStorage, constructor: C) -> Self {
             Self {
+                storage,
                 constructor,
                 data: vec![],
                 keys: HashSet::default(),
             }
         }
-        fn add(&mut self, key: Slice, value: Slice) {
-            if !self.keys.contains(key.as_slice()) {
-                self.data
-                    .push((Vec::from(key.as_slice()), Vec::from(value.as_slice())));
-                self.keys.insert(Vec::from(key.as_slice()));
+        fn add(&mut self, key: &[u8], value: &[u8]) {
+            if !self.keys.contains(key) {
+                self.data.push((Vec::from(key), Vec::from(value)));
+                self.keys.insert(Vec::from(key));
             }
         }
 
@@ -767,48 +823,38 @@ mod tests {
         fn finish(&mut self, options: Arc<Options>) -> Vec<Vec<u8>> {
             let cmp = options.comparator.clone();
             // Sort the data
-            self.data
-                .sort_by(|(a, _), (b, _)| cmp.compare(a.as_slice(), b.as_slice()));
+            self.data.sort_by(|(a, _), (b, _)| cmp.compare(&a, &b));
             let mut res = vec![];
             for (key, _) in self.data.iter() {
                 res.push(key.clone())
             }
             self.constructor
-                .finish(options, &self.data)
+                .finish(options, &self.storage, &self.data)
                 .expect("constructor finish should be ok");
             res
         }
     }
 
-    struct TestHarness {
+    struct TestHarness<C: Constructor> {
         options: Arc<Options>,
         reverse_cmp: bool,
-        inner: CommonConstructor,
+        inner: CommonConstructor<C>,
         rand: ThreadRng,
     }
 
-    impl TestHarness {
-        fn new(t: TestType, reverse_cmp: bool, restart_interval: usize) -> Self {
+    impl<C: Constructor> TestHarness<C> {
+        fn new(reverse_cmp: bool, restart_interval: usize) -> Self {
             let mut options = Options::default();
-            options.env = Arc::new(MemStorage::default());
             options.block_restart_interval = restart_interval;
             // Use shorter block size for tests to exercise block boundary
             // conditions more
             options.block_size = 256;
             options.paranoid_checks = true;
-            if reverse_cmp {
-                options.comparator = Arc::new(ReverseComparator::new());
-            }
-            let constructor: Box<dyn Constructor> = match t {
-                TestType::Table => Box::new(TableConstructor::new(options.comparator.clone())),
-                TestType::Block => Box::new(BlockConstructor::new(options.comparator.clone())),
-                TestType::Memtable => {
-                    Box::new(MemTableConstructor::new(options.comparator.clone()))
-                }
-                TestType::DB => Box::new(DBConstructor::new(options.comparator.clone())),
-            };
+            options.comparator = Arc::new(TestComparator::new(reverse_cmp));
+            let constructor = C::new(reverse_cmp);
+            let storage = MemStorage::default();
             TestHarness {
-                inner: CommonConstructor::new(constructor),
+                inner: CommonConstructor::new(storage, constructor),
                 reverse_cmp,
                 rand: rand::thread_rng(),
                 options: Arc::new(options),
@@ -816,7 +862,7 @@ mod tests {
         }
 
         fn add(&mut self, key: &[u8], value: &[u8]) {
-            self.inner.add(Slice::from(key), Slice::from(value))
+            self.inner.add(key, value)
         }
 
         fn test_forward_scan(&self, expected: &[(Vec<u8>, Vec<u8>)]) {
@@ -827,10 +873,7 @@ mod tests {
             );
             iter.seek_to_first();
             for (key, value) in expected.iter() {
-                assert_eq!(
-                    format_kv(key.clone(), value.clone()),
-                    format_entry(iter.as_ref())
-                );
+                assert_eq!(format_kv(key.clone(), value.clone()), format_entry(&iter));
                 iter.next();
             }
             assert!(
@@ -847,10 +890,7 @@ mod tests {
             );
             iter.seek_to_last();
             for (key, value) in expected.iter().rev() {
-                assert_eq!(
-                    format_kv(key.clone(), value.clone()),
-                    format_entry(iter.as_ref())
-                );
+                assert_eq!(format_kv(key.clone(), value.clone()), format_entry(&iter));
                 iter.prev();
             }
             assert!(
@@ -865,7 +905,7 @@ mod tests {
                 !iter.valid(),
                 "iterator should be invalid after being initialized"
             );
-            let mut expected_iter = EntryIterator::new(self.options.comparator.clone(), expected);
+            let mut expected_iter = EntryIterator::new(self.reverse_cmp, expected);
             for _ in 0..1000 {
                 match self.rand.gen_range(0, 5) {
                     // case for `next`
@@ -874,10 +914,7 @@ mod tests {
                             iter.next();
                             expected_iter.next();
                             if iter.valid() {
-                                assert_eq!(
-                                    format_entry(iter.as_ref()),
-                                    format_entry(&expected_iter)
-                                );
+                                assert_eq!(format_entry(&iter), format_entry(&expected_iter));
                             } else {
                                 assert_eq!(iter.valid(), expected_iter.valid());
                             }
@@ -888,7 +925,7 @@ mod tests {
                         iter.seek_to_first();
                         expected_iter.seek_to_first();
                         if iter.valid() {
-                            assert_eq!(format_entry(iter.as_ref()), format_entry(&expected_iter));
+                            assert_eq!(format_entry(&iter), format_entry(&expected_iter));
                         } else {
                             assert_eq!(iter.valid(), expected_iter.valid());
                         }
@@ -896,11 +933,11 @@ mod tests {
                     // case for `seek`
                     2 => {
                         let rkey = random_seek_key(keys, self.reverse_cmp);
-                        let key = Slice::from(rkey.as_slice());
-                        iter.seek(&key);
-                        expected_iter.seek(&key);
+                        let key = rkey.as_slice();
+                        iter.seek(key);
+                        expected_iter.seek(key);
                         if iter.valid() {
-                            assert_eq!(format_entry(iter.as_ref()), format_entry(&expected_iter));
+                            assert_eq!(format_entry(&iter), format_entry(&expected_iter));
                         } else {
                             assert_eq!(iter.valid(), expected_iter.valid());
                         }
@@ -911,10 +948,7 @@ mod tests {
                             iter.prev();
                             expected_iter.prev();
                             if iter.valid() {
-                                assert_eq!(
-                                    format_entry(iter.as_ref()),
-                                    format_entry(&expected_iter)
-                                );
+                                assert_eq!(format_entry(&iter), format_entry(&expected_iter));
                             } else {
                                 assert_eq!(iter.valid(), expected_iter.valid());
                             }
@@ -925,7 +959,7 @@ mod tests {
                         iter.seek_to_last();
                         expected_iter.seek_to_last();
                         if iter.valid() {
-                            assert_eq!(format_entry(iter.as_ref()), format_entry(&expected_iter));
+                            assert_eq!(format_entry(&iter), format_entry(&expected_iter));
                         } else {
                             assert_eq!(iter.valid(), expected_iter.valid());
                         }
@@ -1000,8 +1034,8 @@ mod tests {
         DB, // TODO: Enable DB test util fundamental components are stable
     }
 
-    fn new_test_suits() -> Vec<TestHarness> {
-        let mut tests = vec![
+    fn tests() -> Vec<(TestType, bool, usize)> {
+        vec![
             (TestType::Table, false, 16),
             (TestType::Table, false, 1),
             (TestType::Table, false, 1024),
@@ -1020,12 +1054,7 @@ mod tests {
             // Do not bother with restart interval variations for DB
             // (TestType::DB, false, 16),
             // (TestType::DB, true, 16),
-        ];
-        let mut results = vec![];
-        for (t, reverse_cmp, restart_interval) in tests.drain(..) {
-            results.push(TestHarness::new(t, reverse_cmp, restart_interval));
-        }
-        results
+        ]
     }
 
     fn random_key(length: usize) -> Vec<u8> {
@@ -1054,57 +1083,82 @@ mod tests {
         result
     }
 
+    macro_rules! test_harness {
+        ($kv:expr) => {
+            tests()
+                .into_iter()
+                .for_each(|(tp, is_reversed, restart_interval)| match tp {
+                    TestType::Memtable => {
+                        let mut t =
+                            TestHarness::<MemTableConstructor>::new(is_reversed, restart_interval);
+                        for (k, v) in $kv.clone() {
+                            t.add(k, v);
+                        }
+                        t.do_test();
+                    }
+                    TestType::Block => {
+                        let mut t =
+                            TestHarness::<BlockConstructor>::new(is_reversed, restart_interval);
+                        for (k, v) in $kv.clone() {
+                            t.add(k, v);
+                        }
+                        t.do_test();
+                    }
+                    TestType::Table => {
+                        let mut t =
+                            TestHarness::<TableConstructor>::new(is_reversed, restart_interval);
+                        for (k, v) in $kv.clone() {
+                            t.add(k, v);
+                        }
+                        t.do_test();
+                    }
+                    TestType::DB => {
+                        let mut t =
+                            TestHarness::<DBConstructor>::new(is_reversed, restart_interval);
+                        for (k, v) in $kv.clone() {
+                            t.add(k, v);
+                        }
+                        t.do_test();
+                    }
+                })
+        };
+    }
+
     #[test]
     fn test_empty_harness() {
-        for mut test in new_test_suits().drain(..) {
-            test.do_test()
-        }
+        test_harness!(vec![]);
     }
 
     #[test]
     fn test_simple_empty_key() {
-        for mut test in new_test_suits().drain(..) {
-            test.add(b"", b"v");
-            test.do_test();
-        }
+        test_harness!(vec![(b"", b"v")]);
     }
 
     #[test]
     fn test_single_key() {
-        for mut test in new_test_suits().drain(..) {
-            test.add(b"abc", b"v");
-            test.do_test();
-        }
+        test_harness!(vec![(b"abc", b"v")]);
     }
 
     #[test]
     fn test_mutiple_key() {
-        for mut test in new_test_suits().drain(..) {
-            test.add(b"abc", b"v");
-            test.add(b"abcd", b"v");
-            test.add(b"ac", b"v2");
-            test.do_test();
-        }
+        let kv: Vec<(&[u8], &[u8])> = vec![(b"abc", b"v"), (b"abcd", b"v"), (b"ac", b"v2")];
+        test_harness!(kv);
     }
 
     #[test]
     fn test_special_key() {
-        for mut test in new_test_suits().drain(..) {
-            test.add(b"\xff\xff", b"v");
-            test.do_test();
-        }
+        test_harness!(vec![(b"\xff\xff", b"v")]);
     }
 
     #[test]
     fn test_randomized_key() {
         let mut rnd = rand::thread_rng();
-        for mut test in new_test_suits().drain(..) {
-            for _ in 0..1000 {
-                let key = random_key(rnd.gen_range(1, 10));
-                let value = random_value(rnd.gen_range(1, 5));
-                test.add(&key, &value);
-            }
-            test.do_test();
+        let mut kv = vec![];
+        for _ in 0..1000 {
+            let key = random_key(rnd.gen_range(1, 10));
+            let value = random_value(rnd.gen_range(1, 5));
+            kv.push((key, value));
         }
+        test_harness!(kv.iter());
     }
 }

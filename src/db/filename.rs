@@ -16,10 +16,9 @@
 // found in the LICENSE file.
 
 use crate::storage::{do_write_string_to_file, Storage};
-use crate::util::status::Result;
+use crate::Result;
 use std::ffi::OsStr;
 use std::path::{Path, MAIN_SEPARATOR};
-use std::sync::Arc;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum FileType {
@@ -108,13 +107,13 @@ pub fn parse_filename<P: AsRef<Path>>(filename: P) -> Option<(FileType, u64)> {
 }
 
 /// Update the CURRENT file to point to new MANIFEST file
-pub fn update_current(env: Arc<dyn Storage>, dbname: &str, manifest_file_num: u64) -> Result<()> {
+pub fn update_current<S: Storage>(env: &S, dbname: &str, manifest_file_num: u64) -> Result<()> {
     // Remove leading "dbname/" and add newline to manifest file nam
     let mut manifest = generate_filename(dbname, FileType::Manifest, manifest_file_num);
     manifest.drain(0..=dbname.len());
     // write into tmp first then rename it as CURRENT
     let tmp = generate_filename(dbname, FileType::Temp, manifest_file_num);
-    let result = do_write_string_to_file(env.clone(), manifest, tmp.as_str(), true);
+    let result = do_write_string_to_file(env, manifest, tmp.as_str(), true);
     match &result {
         Ok(()) => env.rename(
             tmp.as_str(),

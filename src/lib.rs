@@ -16,19 +16,22 @@
 // See https://github.com/rust-lang/rust-clippy/issues/1608
 #![allow(clippy::redundant_closure)]
 
-extern crate libc;
 #[macro_use]
 extern crate log;
 extern crate crc32c;
 extern crate crossbeam_channel;
 extern crate crossbeam_utils;
+#[macro_use]
+extern crate num_derive;
+extern crate quick_error;
 extern crate rand;
 extern crate snap;
 
-#[macro_use]
-mod util;
 pub mod batch;
 pub mod cache;
+mod util;
+#[macro_use]
+mod error;
 mod compaction;
 pub mod db;
 pub mod filter;
@@ -44,16 +47,16 @@ mod table_cache;
 mod version;
 
 pub use batch::WriteBatch;
-pub use cache::{Cache, HandleRef};
+pub use cache::Cache;
 pub use compaction::ManualCompaction;
 pub use db::{WickDB, DB};
+pub use error::{Error, Result};
 pub use filter::bloom::BloomFilter;
 pub use iterator::Iterator;
 pub use log::{LevelFilter, Log};
 pub use options::{CompressionType, Options, ReadOptions, WriteOptions};
 pub use sstable::block::Block;
-pub use storage::{File, Storage};
+pub use storage::*;
 pub use util::comparator::{BytewiseComparator, Comparator};
 pub use util::slice::Slice;
-pub use util::status::{Result, Status, WickErr};
 pub use util::varint::*;

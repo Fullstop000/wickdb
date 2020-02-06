@@ -17,7 +17,6 @@
 
 use crate::filter::FilterPolicy;
 use crate::util::coding::{decode_fixed_32, put_fixed_32};
-use crate::util::slice::Slice;
 use std::rc::Rc;
 
 const FILTER_BASE_LG: usize = 11;
@@ -50,8 +49,8 @@ impl FilterBlockBuilder {
     }
 
     /// Adds the given key into the builder
-    pub fn add_key(&mut self, key: &Slice) {
-        let key = Vec::from(key.as_slice());
+    pub fn add_key(&mut self, key: &[u8]) {
+        let key = Vec::from(key);
         self.keys.push(key);
     }
 
@@ -141,7 +140,7 @@ impl FilterBlockReader {
     }
 
     /// Returns iff the given key is probably contained in the given `block_offset` block
-    pub fn key_may_match(&self, block_offset: u64, key: &Slice) -> bool {
+    pub fn key_may_match(&self, block_offset: u64, key: &[u8]) -> bool {
         let i = block_offset as usize >> self.base_lg; // a >> b == a / (1 << b)
         if i < self.num {
             let (filter, offsets) = self
@@ -179,8 +178,8 @@ mod tests {
             "TestHashFilter"
         }
 
-        fn may_contain(&self, filter: &[u8], key: &Slice) -> bool {
-            let h = hash(key.as_slice(), 1);
+        fn may_contain(&self, filter: &[u8], key: &[u8]) -> bool {
+            let h = hash(key, 1);
             let mut i = 0;
             while i + 4 <= filter.len() {
                 if h == decode_fixed_32(&filter[i..i + 4]) {
@@ -214,30 +213,30 @@ mod tests {
         let block = b.finish();
         assert_eq!(&[0, 0, 0, 0, FILTER_BASE_LG as u8], block);
         let r = new_test_reader(Vec::from(block));
-        assert_eq!(r.key_may_match(0, &Slice::from("foo")), true);
-        assert_eq!(r.key_may_match(10000, &Slice::from("foo")), true);
+        assert_eq!(r.key_may_match(0, "foo".as_bytes()), true);
+        assert_eq!(r.key_may_match(10000, "foo".as_bytes()), true);
     }
 
     #[test]
     fn test_single_chunk() {
         let mut b = new_test_builder();
         b.start_block(100);
-        b.add_key(&Slice::from("foo"));
-        b.add_key(&Slice::from("bar"));
-        b.add_key(&Slice::from("box"));
+        b.add_key("foo".as_bytes());
+        b.add_key("bar".as_bytes());
+        b.add_key("box".as_bytes());
         b.start_block(200);
-        b.add_key(&Slice::from("box"));
+        b.add_key("box".as_bytes());
         b.start_block(300);
-        b.add_key(&Slice::from("hello"));
+        b.add_key("hello".as_bytes());
         let block = b.finish();
         let r = new_test_reader(Vec::from(block));
-        assert_eq!(r.key_may_match(100, &Slice::from("foo")), true);
-        assert_eq!(r.key_may_match(100, &Slice::from("bar")), true);
-        assert_eq!(r.key_may_match(100, &Slice::from("box")), true);
-        assert_eq!(r.key_may_match(100, &Slice::from("hello")), true);
-        assert_eq!(r.key_may_match(100, &Slice::from("foo")), true);
-        assert_eq!(r.key_may_match(100, &Slice::from("missing")), false);
-        assert_eq!(r.key_may_match(100, &Slice::from("other")), false);
+        assert_eq!(r.key_may_match(100, "foo".as_bytes()), true);
+        assert_eq!(r.key_may_match(100, "bar".as_bytes()), true);
+        assert_eq!(r.key_may_match(100, "box".as_bytes()), true);
+        assert_eq!(r.key_may_match(100, "hello".as_bytes()), true);
+        assert_eq!(r.key_may_match(100, "foo".as_bytes()), true);
+        assert_eq!(r.key_may_match(100, "missing".as_bytes()), false);
+        assert_eq!(r.key_may_match(100, "other".as_bytes()), false);
     }
 
     #[test]
@@ -245,42 +244,42 @@ mod tests {
         let mut b = new_test_builder();
         // first filter
         b.start_block(0);
-        b.add_key(&Slice::from("foo"));
+        b.add_key("foo".as_bytes());
         b.start_block(2000);
-        b.add_key(&Slice::from("bar"));
+        b.add_key("bar".as_bytes());
 
         // second filter
         b.start_block(3100);
-        b.add_key(&Slice::from("box"));
+        b.add_key("box".as_bytes());
 
         // third filter is empty
 
         // last filter
         b.start_block(9000);
-        b.add_key(&Slice::from("box"));
-        b.add_key(&Slice::from("hello"));
+        b.add_key("box".as_bytes());
+        b.add_key("hello".as_bytes());
         let block = b.finish();
         let r = new_test_reader(Vec::from(block));
 
         // check first filter
-        assert_eq!(r.key_may_match(0, &Slice::from("foo")), true);
-        assert_eq!(r.key_may_match(2000, &Slice::from("bar")), true);
-        assert_eq!(r.key_may_match(0, &Slice::from("box")), false);
-        assert_eq!(r.key_may_match(0, &Slice::from("hello")), false);
+        assert_eq!(r.key_may_match(0, "foo".as_bytes()), true);
+        assert_eq!(r.key_may_match(2000, "bar".as_bytes()), true);
+        assert_eq!(r.key_may_match(0, "box".as_bytes()), false);
+        assert_eq!(r.key_may_match(0, "hello".as_bytes()), false);
         // check second filter
-        assert_eq!(r.key_may_match(3100, &Slice::from("box")), true);
-        assert_eq!(r.key_may_match(3100, &Slice::from("foo")), false);
-        assert_eq!(r.key_may_match(3100, &Slice::from("bar")), false);
-        assert_eq!(r.key_may_match(3100, &Slice::from("hello")), false);
+        assert_eq!(r.key_may_match(3100, "box".as_bytes()), true);
+        assert_eq!(r.key_may_match(3100, "foo".as_bytes()), false);
+        assert_eq!(r.key_may_match(3100, "bar".as_bytes()), false);
+        assert_eq!(r.key_may_match(3100, "hello".as_bytes()), false);
         // check third filter (empty)
-        assert_eq!(r.key_may_match(4100, &Slice::from("box")), false);
-        assert_eq!(r.key_may_match(4100, &Slice::from("foo")), false);
-        assert_eq!(r.key_may_match(4100, &Slice::from("bar")), false);
-        assert_eq!(r.key_may_match(4100, &Slice::from("hello")), false);
+        assert_eq!(r.key_may_match(4100, "box".as_bytes()), false);
+        assert_eq!(r.key_may_match(4100, "foo".as_bytes()), false);
+        assert_eq!(r.key_may_match(4100, "bar".as_bytes()), false);
+        assert_eq!(r.key_may_match(4100, "hello".as_bytes()), false);
         // check last filter
-        assert_eq!(r.key_may_match(9000, &Slice::from("box")), true);
-        assert_eq!(r.key_may_match(9000, &Slice::from("foo")), false);
-        assert_eq!(r.key_may_match(9000, &Slice::from("bar")), false);
-        assert_eq!(r.key_may_match(9000, &Slice::from("hello")), true);
+        assert_eq!(r.key_may_match(9000, "box".as_bytes()), true);
+        assert_eq!(r.key_may_match(9000, "foo".as_bytes()), false);
+        assert_eq!(r.key_may_match(9000, "bar".as_bytes()), false);
+        assert_eq!(r.key_may_match(9000, "hello".as_bytes()), true);
     }
 }

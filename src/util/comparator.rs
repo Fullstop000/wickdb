@@ -15,7 +15,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use crate::util::byte::compare;
 use std::cmp::{min, Ordering};
 
 /// A Comparator object provides a total order across `Slice` that are
@@ -51,31 +50,21 @@ pub trait Comparator: Send + Sync {
     /// is `return a`, but appending fewer bytes leads to smaller SSTables.
     ///
     /// If one key is the prefix of the other or b is smaller than a, returns a
-    // TODO: returns a &[u8] to avoid copy ?
     fn separator(&self, a: &[u8], b: &[u8]) -> Vec<u8>;
 
     /// Given a feasible key s, Successor returns feasible key k such that Compare(k,
     /// a) >= 0.
     /// If the key is a run of \xff, returns itself
-    // TODO: returns a &[u8] to avoid copy ?
     fn successor(&self, key: &[u8]) -> Vec<u8>;
 }
 
+#[derive(Default, Clone, Copy)]
 pub struct BytewiseComparator {}
-
-unsafe impl Send for BytewiseComparator {}
-unsafe impl Sync for BytewiseComparator {}
-
-impl BytewiseComparator {
-    pub fn new() -> BytewiseComparator {
-        BytewiseComparator {}
-    }
-}
 
 impl Comparator for BytewiseComparator {
     #[inline]
     fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
-        compare(a, b)
+        a.cmp(b)
     }
 
     #[inline]
@@ -101,7 +90,7 @@ impl Comparator for BytewiseComparator {
                 return res;
             }
         }
-        Vec::from(a)
+        a.to_owned()
     }
 
     #[inline]
@@ -116,7 +105,7 @@ impl Comparator for BytewiseComparator {
                 return res;
             }
         }
-        Vec::from(key)
+        key.to_owned()
     }
 }
 
@@ -137,10 +126,10 @@ mod tests {
             ("1111", "12345", "1111"),
             ("1111", "13345", "12"),
         ];
-        let c = BytewiseComparator::new();
+        let c = BytewiseComparator::default();
         for (a, b, expect) in tests.drain(..) {
             let res = c.separator(a.as_bytes(), b.as_bytes());
-            assert_eq!(String::from_utf8(res).unwrap().as_str(), expect);
+            assert_eq!(std::str::from_utf8(&res).unwrap(), expect);
         }
         // special 0xff case
         let a: Vec<u8> = vec![48, 255];
@@ -152,10 +141,10 @@ mod tests {
     #[test]
     fn test_bytewise_comparator_successor() {
         let mut tests = vec![("", ""), ("111", "2"), ("222", "3")];
-        let c = BytewiseComparator::new();
+        let c = BytewiseComparator::default();
         for (input, expect) in tests.drain(..) {
             let res = c.successor(input.as_bytes());
-            assert_eq!(String::from_utf8(res).unwrap().as_str(), expect);
+            assert_eq!(std::str::from_utf8(&res).unwrap(), expect);
         }
         // special 0xff case
         let mut corner_tests = vec![

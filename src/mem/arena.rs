@@ -12,8 +12,8 @@
 // limitations under the License.
 
 use std::cell::RefCell;
+use std::mem;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
-use std::{mem, ptr};
 
 const BLOCK_SIZE: usize = 4096;
 
@@ -37,6 +37,7 @@ pub trait Arena {
 /// `BlockArena` must only be used with single thread writing since we use `RefCell` when
 /// allocating new blocks.
 ///
+#[derive(Default)]
 pub struct BlockArena {
     pub(super) ptr: AtomicPtr<u8>,
     pub(super) bytes_remaining: AtomicUsize,
@@ -46,17 +47,6 @@ pub struct BlockArena {
 }
 
 impl BlockArena {
-    /// Create an AggressiveArena with given cap.
-    /// This function will allocate a cap size memory block directly for further usage
-    pub fn new() -> BlockArena {
-        BlockArena {
-            ptr: AtomicPtr::new(ptr::null_mut()),
-            bytes_remaining: AtomicUsize::new(0),
-            blocks: RefCell::new(vec![]),
-            memory_usage: AtomicUsize::new(0),
-        }
-    }
-
     pub(super) fn allocate_fallback(&self, size: usize) -> *mut u8 {
         if size > BLOCK_SIZE / 4 {
             // Object is more than a quarter of our block size.  Allocate it separately
@@ -152,7 +142,7 @@ mod tests {
 
     #[test]
     fn test_new_arena() {
-        let a = BlockArena::new();
+        let a = BlockArena::default();
         assert_eq!(a.memory_used(), 0);
         assert_eq!(a.bytes_remaining.load(Ordering::Acquire), 0);
         assert_eq!(a.ptr.load(Ordering::Acquire), ptr::null_mut());
@@ -162,20 +152,20 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_allocate_empty_should_panic() {
-        let a = BlockArena::new();
+        let a = BlockArena::default();
         a.allocate(0);
     }
 
     #[test]
     #[should_panic]
     fn test_allocate_empty_aligned_should_panic() {
-        let a = BlockArena::new();
+        let a = BlockArena::default();
         a.allocate_aligned(0);
     }
 
     #[test]
     fn test_allocate_new_block() {
-        let a = BlockArena::new();
+        let a = BlockArena::default();
         let mut expect_size = 0;
         for (i, size) in [1, 128, 256, 1000, 4096, 10000].iter().enumerate() {
             a.allocate_new_block(*size);
@@ -191,7 +181,7 @@ mod tests {
 
     #[test]
     fn test_allocate_fallback() {
-        let a = BlockArena::new();
+        let a = BlockArena::default();
         a.allocate_fallback(1);
         assert_eq!(a.memory_used(), BLOCK_SIZE);
         assert_eq!(a.bytes_remaining.load(Ordering::Acquire), BLOCK_SIZE - 1);
@@ -201,7 +191,7 @@ mod tests {
 
     #[test]
     fn test_allocate_mixed() {
-        let a = BlockArena::new();
+        let a = BlockArena::default();
         let mut allocated = vec![];
         let mut allocated_size = 0;
         let n = 10000;

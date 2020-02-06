@@ -15,7 +15,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-use super::byte::compare;
 use crate::util::hash::hash;
 use std::cmp::Ordering;
 use std::fmt;
@@ -83,7 +82,7 @@ impl Slice {
 
     #[inline]
     pub fn compare(&self, other: &Slice) -> Ordering {
-        compare(self.as_slice(), other.as_slice())
+        self.as_slice().cmp(other.as_slice())
     }
 
     #[inline]
@@ -140,6 +139,16 @@ impl Hash for Slice {
         let hash = hash(self.as_slice(), 0xbc9f1d34);
         state.write_u32(hash);
         state.finish();
+    }
+}
+
+impl AsRef<[u8]> for Slice {
+    fn as_ref(&self) -> &[u8] {
+        if !self.data.is_null() {
+            unsafe { slice::from_raw_parts(self.data, self.size) }
+        } else {
+            panic!("try to convert a empty(invalid) Slice as a &[u8] ")
+        }
     }
 }
 

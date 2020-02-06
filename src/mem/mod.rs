@@ -25,20 +25,71 @@ use crate::mem::skiplist::{Skiplist, SkiplistIterator};
 use crate::util::coding::{decode_fixed_64, put_fixed_64};
 use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
-use crate::util::status::Status;
-use crate::util::status::{Result, WickErr};
 use crate::util::varint::VarintU32;
+use crate::{Error, Result};
 use std::cmp::Ordering;
 use std::rc::Rc;
-use std::sync::Arc;
 
-pub trait MemoryTable {
+// KeyComparator is a wrapper for InternalKeyComparator. It will convert the input mem key
+// to the internal key before comparing.
+#[derive(Clone)]
+pub struct KeyComparator {
+    icmp: InternalKeyComparator,
+}
+
+impl Comparator for KeyComparator {
+    fn compare(&self, mut a: &[u8], mut b: &[u8]) -> Ordering {
+        let ia = extract_varint32_encoded_slice(&mut a);
+        let ib = extract_varint32_encoded_slice(&mut b);
+        if ia.is_empty() || ib.is_empty() {
+            // Use memcmp directly
+            ia.cmp(&ib)
+        } else {
+            self.icmp.compare(ia, ib)
+        }
+    }
+
+    fn name(&self) -> &str {
+        self.icmp.name()
+    }
+
+    fn separator(&self, mut a: &[u8], mut b: &[u8]) -> Vec<u8> {
+        let ia = extract_varint32_encoded_slice(&mut a);
+        let ib = extract_varint32_encoded_slice(&mut b);
+        self.icmp.separator(ia, ib)
+    }
+
+    fn successor(&self, mut key: &[u8]) -> Vec<u8> {
+        let ia = extract_varint32_encoded_slice(&mut key);
+        self.icmp.successor(ia)
+    }
+}
+
+/// In-memory write buffer
+pub struct MemTable {
+    cmp: KeyComparator,
+    table: Rc<Skiplist<KeyComparator, BlockArena>>,
+}
+
+impl MemTable {
+    /// Creates a new memory table
+    pub fn new(icmp: InternalKeyComparator) -> Self {
+        let arena = BlockArena::default();
+        let kcmp = KeyComparator { icmp };
+        let table = Rc::new(Skiplist::new(kcmp.clone(), arena));
+        Self { cmp: kcmp, table }
+    }
+
     /// Returns an estimate of the number of bytes of data in use by this
     /// data structure. It is safe to call when MemTable is being modified.
-    fn approximate_memory_usage(&self) -> usize;
+    pub fn approximate_memory_usage(&self) -> usize {
+        self.table.arena.memory_used()
+    }
 
-    /// Return an iterator that yields the contents of the memtable.
-    fn iter(&self) -> Box<dyn Iterator>;
+    /// Creates a new `MemTableIterator`
+    pub fn iter(&self) -> MemTableIterator {
+        MemTableIterator::new(self.table.clone())
+    }
 
     /// Add an entry into memtable that maps key to value at the
     /// specified sequence number and with the specified type.
@@ -62,74 +113,7 @@ pub trait MemoryTable {
     ///   +---------------------------------+
     /// ```
     ///
-    fn add(&self, seq_number: u64, val_type: ValueType, key: &[u8], value: &[u8]);
-
-    /// If memtable contains a value for key, returns it in `Some(Ok())`.
-    /// If memtable contains a deletion for key, returns `Some(Err(Status::NotFound))` .
-    /// If memtable does not contain the key, return `None`
-    fn get(&self, key: &LookupKey) -> Option<Result<Slice>>;
-}
-
-// KeyComparator is a wrapper for InternalKeyComparator. It will convert the input mem key
-// to the internal key before comparing.
-#[derive(Clone)]
-pub struct KeyComparator {
-    icmp: Arc<InternalKeyComparator>,
-}
-
-impl Comparator for KeyComparator {
-    fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
-        let ia = extract_varint32_encoded_slice(&mut Slice::from(a));
-        let ib = extract_varint32_encoded_slice(&mut Slice::from(b));
-        if ia.is_empty() || ib.is_empty() {
-            // Use memcmp directly
-            ia.compare(&ib)
-        } else {
-            self.icmp.compare(ia.as_slice(), ib.as_slice())
-        }
-    }
-
-    fn name(&self) -> &str {
-        self.icmp.name()
-    }
-
-    fn separator(&self, a: &[u8], b: &[u8]) -> Vec<u8> {
-        let ia = extract_varint32_encoded_slice(&mut Slice::from(a));
-        let ib = extract_varint32_encoded_slice(&mut Slice::from(b));
-        self.icmp.separator(ia.as_slice(), ib.as_slice())
-    }
-
-    fn successor(&self, key: &[u8]) -> Vec<u8> {
-        let ia = extract_varint32_encoded_slice(&mut Slice::from(key));
-        self.icmp.successor(ia.as_slice())
-    }
-}
-
-/// In-memory write buffer
-pub struct MemTable {
-    cmp: KeyComparator,
-    table: Rc<Skiplist<KeyComparator, BlockArena>>,
-}
-
-impl MemTable {
-    pub fn new(icmp: Arc<InternalKeyComparator>) -> Self {
-        let arena = BlockArena::new();
-        let kcmp = KeyComparator { icmp };
-        let table = Rc::new(Skiplist::new(kcmp.clone(), arena));
-        Self { cmp: kcmp, table }
-    }
-}
-
-impl MemoryTable for MemTable {
-    fn approximate_memory_usage(&self) -> usize {
-        self.table.arena.memory_used()
-    }
-
-    fn iter(&self) -> Box<dyn Iterator> {
-        Box::new(MemTableIterator::new(self.table.clone()))
-    }
-
-    fn add(&self, seq_number: u64, val_type: ValueType, key: &[u8], value: &[u8]) {
+    pub fn add(&self, seq_number: u64, val_type: ValueType, key: &[u8], value: &[u8]) {
         let key_size = key.len();
         let internal_key_size = key_size + 8;
         let mut buf = vec![];
@@ -137,28 +121,29 @@ impl MemoryTable for MemTable {
         buf.extend_from_slice(key);
         put_fixed_64(&mut buf, (seq_number << 8) | val_type as u64);
         VarintU32::put_varint_prefixed_slice(&mut buf, value);
-        self.table.insert(buf);
+        self.table.insert(&buf);
     }
 
-    fn get(&self, key: &LookupKey) -> Option<Result<Slice>> {
+    /// If memtable contains a value for key, returns it in `Some(Ok())`.
+    /// If memtable contains a deletion for key, returns `Some(Err(Status::NotFound))` .
+    /// If memtable does not contain the key, return `None`
+    pub fn get(&self, key: &LookupKey) -> Option<Result<Slice>> {
         let mk = key.mem_key();
         // internal key
         let mut iter = self.iter();
-        iter.seek(&mk);
+        iter.seek(mk);
         if iter.valid() {
             let internal_key = iter.key();
             // only check the user key here
             match self.cmp.icmp.user_comparator.compare(
                 Slice::new(internal_key.as_ptr(), internal_key.size() - 8).as_slice(),
-                key.user_key().as_slice(),
+                key.user_key(),
             ) {
                 Ordering::Equal => {
                     let tag = decode_fixed_64(&internal_key.as_slice()[internal_key.size() - 8..]);
                     match ValueType::from(tag & 0xff as u64) {
                         ValueType::Value => return Some(Ok(iter.value())),
-                        ValueType::Deletion => {
-                            return Some(Err(WickErr::new(Status::NotFound, None)))
-                        }
+                        ValueType::Deletion => return Some(Err(Error::NotFound(None))),
                         ValueType::Unknown => { /* fallback to None*/ }
                     }
                 }
@@ -193,7 +178,7 @@ impl Iterator for MemTableIterator {
         self.iter.seek_to_last()
     }
 
-    fn seek(&mut self, target: &Slice) {
+    fn seek(&mut self, target: &[u8]) {
         self.iter.seek(target)
     }
 
@@ -205,16 +190,19 @@ impl Iterator for MemTableIterator {
         self.iter.prev()
     }
 
-    // returns the internal key
+    // Returns the internal key
     fn key(&self) -> Slice {
-        extract_varint32_encoded_slice(&mut self.iter.key())
+        let key = self.iter.key();
+        let mut s = key.as_slice();
+        extract_varint32_encoded_slice(&mut s).into()
     }
 
-    // returns the Slice represents the value
+    // Returns the Slice represents the value
     fn value(&self) -> Slice {
-        let mut origin = self.iter.key();
-        extract_varint32_encoded_slice(&mut origin);
-        extract_varint32_encoded_slice(&mut origin)
+        let key = self.iter.key();
+        let mut src = key.as_slice();
+        extract_varint32_encoded_slice(&mut src);
+        extract_varint32_encoded_slice(&mut src).into()
     }
 
     fn status(&mut self) -> Result<()> {
@@ -222,27 +210,24 @@ impl Iterator for MemTableIterator {
     }
 }
 
-// Decodes the length (varint u32) from the first of the give slice and advance the origin slice.
-// Returns a new slice points to the data according to the extracted length
-fn extract_varint32_encoded_slice(origin: &mut Slice) -> Slice {
-    if origin.is_empty() {
-        return Slice::from("");
+// Decodes the length (varint u32) from `src` and advances it.
+fn extract_varint32_encoded_slice<'a>(src: &mut &'a [u8]) -> &'a [u8] {
+    if src.is_empty() {
+        return src;
     }
-    VarintU32::get_varint_prefixed_slice(origin).unwrap_or_else(|| Slice::from(""))
+    VarintU32::get_varint_prefixed_slice(src).unwrap_or(src)
 }
 
 #[cfg(test)]
 mod tests {
     use crate::db::format::{InternalKeyComparator, LookupKey, ParsedInternalKey, ValueType};
-    use crate::mem::{MemTable, MemoryTable};
+    use crate::iterator::Iterator;
+    use crate::mem::MemTable;
     use crate::util::comparator::BytewiseComparator;
-    use crate::util::status::Status;
     use std::sync::Arc;
 
     fn new_mem_table() -> MemTable {
-        let icmp = Arc::new(InternalKeyComparator::new(Arc::new(
-            BytewiseComparator::new(),
-        )));
+        let icmp = InternalKeyComparator::new(Arc::new(BytewiseComparator::default()));
         MemTable::new(icmp)
     }
 
@@ -280,7 +265,7 @@ mod tests {
         let v = memtable.get(&LookupKey::new(b"foo", 1));
         assert_eq!(b"val1", v.unwrap().unwrap().as_slice());
         let v = memtable.get(&LookupKey::new(b"foo", 3));
-        assert_eq!(Status::NotFound, v.unwrap().unwrap_err().status());
+        assert!(v.unwrap().is_err());
         let v = memtable.get(&LookupKey::new(b"boo", 3));
         assert_eq!(b"boo", v.unwrap().unwrap().as_slice());
     }
@@ -295,13 +280,14 @@ mod tests {
         iter.seek_to_first();
         assert!(iter.valid());
         for (key, value) in entries.iter() {
-            let pkey = ParsedInternalKey::decode_from(iter.key()).unwrap();
+            let k = iter.key();
+            let pkey = ParsedInternalKey::decode_from(k.as_slice()).unwrap();
             assert_eq!(
-                pkey.user_key.as_str(),
+                pkey.as_str(),
                 *key,
                 "expected key: {:?}, but got {:?}",
                 *key,
-                pkey.user_key.as_str()
+                pkey.as_str()
             );
             assert_eq!(
                 iter.value().as_str(),
@@ -318,13 +304,14 @@ mod tests {
         iter.seek_to_last();
         assert!(iter.valid());
         for (key, value) in entries.iter().rev() {
-            let pkey = ParsedInternalKey::decode_from(iter.key()).unwrap();
+            let k = iter.key();
+            let pkey = ParsedInternalKey::decode_from(k.as_slice()).unwrap();
             assert_eq!(
-                pkey.user_key.as_str(),
+                pkey.as_str(),
                 *key,
                 "expected key: {:?}, but got {:?}",
                 *key,
-                pkey.user_key.as_str()
+                pkey.as_str()
             );
             assert_eq!(
                 iter.value().as_str(),

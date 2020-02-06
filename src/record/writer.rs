@@ -19,12 +19,11 @@ use crate::record::{RecordType, BLOCK_SIZE, HEADER_SIZE};
 use crate::storage::File;
 use crate::util::coding::encode_fixed_32;
 use crate::util::crc32;
-use crate::util::slice::Slice;
-use crate::util::status::Result;
+use crate::Result;
 
 /// Writer writes records to an underlying log `File`.
-pub struct Writer {
-    dest: Box<dyn File>,
+pub struct Writer<F: File> {
+    dest: F,
     //Current offset in block
     block_offset: usize,
     // crc32c values for all supported record types.  These are
@@ -33,8 +32,8 @@ pub struct Writer {
     crc_cache: [u32; (RecordType::Last as usize + 1) as usize],
 }
 
-impl Writer {
-    pub fn new(dest: Box<dyn File>) -> Self {
+impl<F: File> Writer<F> {
+    pub fn new(dest: F) -> Self {
         let n = RecordType::Last as usize;
         let mut cache = [0; RecordType::Last as usize + 1];
         for h in 1..=n {
@@ -49,9 +48,8 @@ impl Writer {
     }
 
     /// Appends a slice into the underlying log file
-    pub fn add_record(&mut self, s: &Slice) -> Result<()> {
-        let data = s.as_slice();
-        let mut left = s.size();
+    pub fn add_record(&mut self, s: &[u8]) -> Result<()> {
+        let mut left = s.len();
         let mut begin = true; // indicate the record is a First or Middle record
         while {
             assert!(
@@ -92,8 +90,8 @@ impl Writer {
                 }
             };
 
-            let start = s.size() - left;
-            self.write(t, &data[start..start + to_write])?;
+            let start = s.len() - left;
+            self.write(t, &s[start..start + to_write])?;
             left -= to_write;
             begin = false;
             left > 0
@@ -141,5 +139,3 @@ impl Writer {
         Ok(())
     }
 }
-
-unsafe impl Send for Writer {}

@@ -15,30 +15,32 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use crate::compaction::{Compaction, CompactionStats, ManualCompaction};
+use crate::compaction::{base_range, total_range, Compaction, CompactionStats, ManualCompaction};
 use crate::db::build_table;
 use crate::db::filename::{generate_filename, parse_filename, update_current, FileType};
 use crate::db::format::{InternalKey, InternalKeyComparator};
-use crate::iterator::{ConcatenateIterator, DerivedIterFactory, EmptyIterator, Iterator};
+use crate::iterator::Iterator;
+use crate::iterator::{ConcatenateIterator, DerivedIterFactory, KMergeCore, KMergeIter};
 use crate::options::Options;
 use crate::record::reader::Reader;
 use crate::record::writer::Writer;
 use crate::snapshot::{Snapshot, SnapshotList};
-use crate::sstable::table::TableBuilder;
+use crate::sstable::table::{TableBuilder, TableIterator};
+use crate::storage::{File, Storage};
 use crate::table_cache::TableCache;
 use crate::util::coding::decode_fixed_64;
 use crate::util::collection::HashSet;
 use crate::util::comparator::{BytewiseComparator, Comparator};
 use crate::util::reporter::LogReporter;
 use crate::util::slice::Slice;
-use crate::util::status::{Result, Status, WickErr};
-use crate::version::version_edit::{FileMetaData, VersionEdit};
+use crate::version::version_edit::{FileDelta, FileMetaData, VersionEdit};
 use crate::version::{LevelFileNumIterator, Version, FILE_META_LENGTH};
 use crate::ReadOptions;
+use crate::{Error, Result};
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::vec_deque::VecDeque;
+use std::ops::Add;
 use std::path::MAIN_SEPARATOR;
-use std::rc::Rc;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -47,7 +49,7 @@ struct LevelState {
     // set of new deleted files
     deleted_files: HashSet<u64>,
     // all new added files
-    added_files: Vec<Rc<FileMetaData>>,
+    added_files: Vec<FileMetaData>,
 }
 
 /// Summarizes the files added and deleted from a set of version edits.
@@ -73,16 +75,16 @@ impl VersionBuilder {
     /// Add the given VersionEdit for later applying
     /// 'vset.compaction_pointers' will be updated
     /// same as `apply` in C++ implementation
-    pub fn accumulate(&mut self, edit: &VersionEdit, vset: &mut VersionSet) {
+    pub fn accumulate<S: Storage + Clone>(&mut self, delta: FileDelta, vset: &mut VersionSet<S>) {
         // update compcation pointers
-        for (level, key) in edit.compaction_pointers.iter() {
-            vset.compaction_pointer[*level] = key.clone();
+        for (level, key) in delta.compaction_pointers {
+            vset.compaction_pointer[level] = key;
         }
         // delete files
-        for (level, deleted_file) in edit.deleted_files.iter() {
-            self.levels[*level].deleted_files.insert(*deleted_file);
+        for (level, deleted_file) in delta.deleted_files {
+            self.levels[level].deleted_files.insert(deleted_file);
         }
-        for (level, new_file) in edit.new_files.iter() {
+        for (level, new_file) in delta.new_files {
             // We arrange to automatically compact this file after
             // a certain number of seeks.  Let's assume:
             //   (1) One seek costs 10ms
@@ -104,8 +106,8 @@ impl VersionBuilder {
             new_file
                 .allowed_seeks
                 .store(allowed_seeks, Ordering::Release);
-            self.levels[*level].deleted_files.remove(&new_file.number);
-            self.levels[*level].added_files.push(new_file.clone());
+            self.levels[level].deleted_files.remove(&new_file.number);
+            self.levels[level].added_files.push(new_file);
         }
     }
 
@@ -113,9 +115,7 @@ impl VersionBuilder {
     /// same as `save_to` in C++ implementation
     pub fn apply_to_new(&mut self) -> Version {
         // TODO: config this to the option
-        let icmp = Arc::new(InternalKeyComparator::new(Arc::new(
-            BytewiseComparator::new(),
-        )));
+        let icmp = InternalKeyComparator::new(Arc::new(BytewiseComparator::default()));
         let mut v = Version::new(self.base.options.clone(), icmp.clone());
         for (level, (mut base_files, delta)) in self
             .base
@@ -151,7 +151,7 @@ impl VersionBuilder {
 }
 
 /// The collection of all the Versions produced
-pub struct VersionSet {
+pub struct VersionSet<S: Storage + Clone> {
     // Snapshots that clients might be acquiring
     pub snapshots: SnapshotList,
     // The compaction stats for every level
@@ -161,12 +161,13 @@ pub struct VersionSet {
     // Represent a manual compaction, temporarily just for test
     pub manual_compaction: Option<ManualCompaction>,
     // WAL writer
-    pub record_writer: Option<Writer>,
+    pub record_writer: Option<Writer<S::F>>,
 
     // db path
-    db_name: String,
+    db_name: &'static str,
+    storage: S,
     options: Arc<Options>,
-    icmp: Arc<InternalKeyComparator>,
+    icmp: InternalKeyComparator,
 
     // the next available file number
     next_file_number: u64,
@@ -178,18 +179,18 @@ pub struct VersionSet {
 
     // the current manifest file number
     manifest_file_number: u64,
-    manifest_writer: Option<Writer>,
+    manifest_writer: Option<Writer<S::F>>,
 
     versions: VecDeque<Arc<Version>>,
 
     // Indicates that every level's compaction progress of last compaction.
-    compaction_pointer: Vec<Rc<InternalKey>>,
+    compaction_pointer: Vec<InternalKey>,
 }
 
-unsafe impl Send for VersionSet {}
+unsafe impl<S: Storage + Clone> Send for VersionSet<S> {}
 
-impl VersionSet {
-    pub fn new(db_name: String, options: Arc<Options>) -> Self {
+impl<S: Storage + Clone + 'static> VersionSet<S> {
+    pub fn new(db_name: &'static str, options: Arc<Options>, storage: S) -> Self {
         let mut compaction_stats = vec![];
         for _ in 0..options.max_levels {
             compaction_stats.push(CompactionStats::new());
@@ -200,9 +201,10 @@ impl VersionSet {
             pending_outputs: HashSet::default(),
             manual_compaction: None,
             db_name,
+            storage,
             record_writer: None,
             options: options.clone(),
-            icmp: Arc::new(InternalKeyComparator::new(options.comparator.clone())),
+            icmp: InternalKeyComparator::new(options.comparator.clone()),
             next_file_number: 0,
             last_sequence: 0,
             log_number: 0,
@@ -300,33 +302,41 @@ impl VersionSet {
     }
 
     /// Returns the collection of all the file iterators in current version
-    pub fn current_iters(
+    pub fn current_sst_iter(
         &self,
-        read_opt: Rc<ReadOptions>,
-        table_cache: Arc<TableCache>,
-    ) -> Vec<Box<dyn Iterator>> {
+        read_opt: ReadOptions,
+        table_cache: TableCache<S>,
+    ) -> Result<KMergeIter<SSTableIters<S>>> {
         let version = self.current();
-        let mut res = vec![];
+        let mut level0 = vec![];
         // Merge all level zero files together since they may overlap
         for file in version.files[0].iter() {
-            res.push(table_cache.new_iter(read_opt.clone(), file.number, file.file_size));
+            level0.push(table_cache.new_iter(
+                self.icmp.clone(),
+                read_opt,
+                file.number,
+                file.file_size,
+            )?);
         }
 
+        let mut leveln = vec![];
         // For levels > 0, we can use a concatenating iterator that sequentially
         // walks through the non-overlapping files in the level, opening them
         // lazily
         for files in version.files.iter().skip(1) {
             if !files.is_empty() {
-                let level_file_iter = LevelFileNumIterator::new(
-                    Arc::new(InternalKeyComparator::new(self.options.comparator.clone())),
-                    files.clone(),
-                );
-                let factory = FileIterFactory::new(read_opt.clone(), table_cache.clone());
-                let iter = ConcatenateIterator::new(Box::new(level_file_iter), Box::new(factory));
-                res.push(Box::new(iter));
+                let level_file_iter = LevelFileNumIterator::new(self.icmp.clone(), files.clone());
+                let factory =
+                    FileIterFactory::new(self.icmp.clone(), read_opt, table_cache.clone());
+                leveln.push(ConcatenateIterator::new(level_file_iter, factory));
             }
         }
-        res
+        let iter = KMergeIter::new(SSTableIters {
+            cmp: self.icmp.clone(),
+            level0,
+            leveln,
+        });
+        Ok(iter)
     }
 
     /// Apply `edit` to the current version to form a new descriptor that
@@ -357,7 +367,8 @@ impl VersionSet {
 
         let mut v = Version::new(self.options.clone(), self.icmp.clone());
         let mut builder = VersionBuilder::new(v);
-        builder.accumulate(&edit, self);
+        let file_delta = edit.take_file_delta();
+        builder.accumulate(file_delta, self);
         v = builder.apply_to_new();
         v.finalize();
 
@@ -367,18 +378,15 @@ impl VersionSet {
         // Initialize new manifest file if necessary by creating a temporary file that contains a snapshot of the current version.
         let mut new_manifest_file = String::new();
         if self.manifest_writer.is_none() {
-            new_manifest_file = generate_filename(
-                self.db_name.as_str(),
-                FileType::Manifest,
-                self.manifest_file_number,
-            );
+            new_manifest_file =
+                generate_filename(self.db_name, FileType::Manifest, self.manifest_file_number);
             //            edit.set_next_file(self.next_file_number);
-            let f = self.options.env.create(new_manifest_file.as_str())?;
+            let f = self.storage.create(new_manifest_file.as_str())?;
             let mut writer = Writer::new(f);
             match self.write_snapshot(&mut writer) {
                 Ok(()) => self.manifest_writer = Some(writer),
                 Err(_) => {
-                    return self.options.env.remove(new_manifest_file.as_str());
+                    return self.storage.remove(new_manifest_file.as_str());
                 }
             }
         }
@@ -387,7 +395,7 @@ impl VersionSet {
         // In origin C++ implementation, the relative part unlocks the global mutex. But we dont need
         // to do this in wickdb since we split the mutex into several ones for more subtle controlling.
         if let Some(writer) = self.manifest_writer.as_mut() {
-            match writer.add_record(&Slice::from(record.as_slice())) {
+            match writer.add_record(&record) {
                 Ok(()) => {
                     match writer.sync() {
                         Ok(()) => {
@@ -395,14 +403,14 @@ impl VersionSet {
                             // new CURRENT file that points to it.
                             if !new_manifest_file.is_empty() {
                                 match update_current(
-                                    self.options.env.clone(),
-                                    self.db_name.as_str(),
+                                    &self.storage,
+                                    self.db_name,
                                     self.manifest_file_number,
                                 ) {
                                     Ok(()) => {}
                                     Err(_) => {
                                         self.manifest_writer = None;
-                                        return self.options.env.remove(new_manifest_file.as_str());
+                                        return self.storage.remove(new_manifest_file.as_str());
                                     }
                                 }
                             }
@@ -415,13 +423,13 @@ impl VersionSet {
                         Err(e) => {
                             info!("MANIFEST write: {:?}", e);
                             self.manifest_writer = None;
-                            return self.options.env.remove(new_manifest_file.as_str());
+                            return self.storage.remove(new_manifest_file.as_str());
                         }
                     }
                 }
                 Err(_) => {
                     self.manifest_writer = None;
-                    return self.options.env.remove(new_manifest_file.as_str());
+                    return self.storage.remove(new_manifest_file.as_str());
                 }
             }
         }
@@ -434,9 +442,9 @@ impl VersionSet {
     pub fn compact_range(
         &mut self,
         level: usize,
-        begin: Option<Rc<InternalKey>>,
-        end: Option<Rc<InternalKey>>,
-    ) -> Option<Compaction> {
+        begin: Option<&InternalKey>,
+        end: Option<&InternalKey>,
+    ) -> Option<Compaction<S::F>> {
         let version = self.current();
         let mut overlapping_inputs = version.get_overlapping_inputs(level, begin, end);
         if overlapping_inputs.is_empty() {
@@ -446,6 +454,7 @@ impl VersionSet {
         // But we cannot do this for level-0 since level-0 files can overlap
         // and we must not pick one file and drop another older file if the
         // two files overlap.
+        // TODO: The Level 0 files to be compacted could really large. This might hurt the performance.
         if level > 0 {
             let mut total = 0;
             for (i, file) in overlapping_inputs.iter().enumerate() {
@@ -457,7 +466,7 @@ impl VersionSet {
             }
         }
         let mut c = Compaction::new(self.options.clone(), level);
-        c.input_version = Some(version.clone());
+        c.input_version = Some(version);
         c.inputs[0] = overlapping_inputs;
         Some(self.setup_other_inputs(c))
     }
@@ -466,7 +475,7 @@ impl VersionSet {
     /// Returns `None` if there is no compaction to be done.
     /// Otherwise returns compaction object that
     /// describes the compaction.
-    pub fn pick_compaction(&mut self) -> Option<Compaction> {
+    pub fn pick_compaction(&mut self) -> Option<Compaction<S::F>> {
         let current = self.current();
         let size_compaction = current.compaction_score >= 1.0;
         let mut file_to_compact = Arc::new(FileMetaData::default());
@@ -504,7 +513,7 @@ impl VersionSet {
                 }
                 if compaction.inputs[0].is_empty() {
                     if let Some(file) = current.files[0].first() {
-                        // Wrap-around to the beginning of the key spac
+                        // Wrap-around to the beginning of the key space
                         compaction.inputs[0].push(file.clone())
                     }
                 }
@@ -521,7 +530,8 @@ impl VersionSet {
         compaction.input_version = Some(current.clone());
         // Files in level 0 may overlap each other, so pick up all overlapping ones
         if compaction.level == 0 {
-            let (smallest, largest) = compaction.base_range(&self.icmp);
+            let (smallest, largest) =
+                base_range(&compaction.inputs[0], compaction.level, &self.icmp);
             // Note that the next call will discard the file we placed in
             // inputs[0] earlier and replace it with an overlapping set
             // which will include the picked file.
@@ -534,11 +544,11 @@ impl VersionSet {
     }
 
     /// Persistent given memtable into a single level0 file.
-    pub fn write_level0_files<'a>(
+    pub fn write_level0_files(
         &mut self,
         db_name: &str,
-        table_cache: Arc<TableCache>,
-        mem_iter: Box<dyn Iterator + 'a>,
+        table_cache: TableCache<S>,
+        mem_iter: &mut dyn Iterator,
         edit: &mut VersionEdit,
     ) -> Result<()> {
         let base = self.current();
@@ -548,8 +558,9 @@ impl VersionSet {
         info!("Level-0 table #{} : started", meta.number);
         let build_result = build_table(
             self.options.clone(),
+            &self.storage,
             db_name,
-            table_cache,
+            &table_cache,
             mem_iter,
             &mut meta,
         );
@@ -562,9 +573,9 @@ impl VersionSet {
         // If `file_size` is zero, the file has been deleted and
         // should not be added to the manifest
         if build_result.is_ok() && meta.file_size > 0 {
-            let smallest_ukey = Slice::from(meta.smallest.user_key());
-            let largest_ukey = Slice::from(meta.largest.user_key());
-            level = base.pick_level_for_memtable_output(&smallest_ukey, &largest_ukey);
+            let smallest_ukey = meta.smallest.user_key();
+            let largest_ukey = meta.largest.user_key();
+            level = base.pick_level_for_memtable_output(smallest_ukey, largest_ukey);
             edit.add_file(
                 level,
                 meta.number,
@@ -594,56 +605,46 @@ impl VersionSet {
         }
     }
 
-    /// Calculate the total size of given files
-    #[inline]
-    pub fn total_file_size(files: &[Arc<FileMetaData>]) -> u64 {
-        files.iter().fold(0, |accum, file| accum + file.file_size)
-    }
-
     /// Create new table builder and physical file for current output in Compaction
-    pub fn open_compaction_output_file(&mut self, compact: &mut Compaction) -> Result<()> {
+    pub fn open_compaction_output_file(&mut self, compact: &mut Compaction<S::F>) -> Result<()> {
         assert!(compact.builder.is_none());
         let file_number = self.inc_next_file_number();
         self.pending_outputs.insert(file_number);
         let mut output = FileMetaData::default();
         output.number = file_number;
-        let file_name = generate_filename(self.db_name.as_str(), FileType::Table, file_number);
-        let file = self.options.env.create(file_name.as_str())?;
-        compact.builder = Some(TableBuilder::new(file, self.options.clone()));
+        let file_name = generate_filename(self.db_name, FileType::Table, file_number);
+        let file = self.storage.create(file_name.as_str())?;
+        compact.builder = Some(TableBuilder::new(
+            file,
+            self.icmp.clone(),
+            self.options.clone(),
+        ));
         Ok(())
     }
 
     /// Recover the last saved Version from MANIFEST file.
     /// Returns whether we need a new MANIFEST file for later usage.
     pub fn recover(&mut self) -> Result<bool> {
-        let env = self.options.env.clone();
+        let env = self.storage.clone();
         // Read "CURRENT" file, which contains a pointer to the current manifest file
-        let mut current = env.open(&generate_filename(
-            self.db_name.as_str(),
-            FileType::Current,
-            0,
-        ))?;
+        let mut current = env.open(&generate_filename(self.db_name, FileType::Current, 0))?;
         let mut buf = vec![];
         current.read_all(&mut buf)?;
         let (current_manifest, file_name) = match String::from_utf8(buf) {
             Ok(s) => {
                 if s.is_empty() {
-                    return Err(WickErr::new(
-                        Status::Corruption,
-                        Some("CURRENT file is empty"),
-                    ));
+                    return Err(Error::Corruption("CURRENT file is empty".to_owned()));
                 }
-                let mut prefix = self.db_name.clone();
-                prefix.push(MAIN_SEPARATOR);
-                let file_name = prefix + s.as_str();
+                let mut file_name = self.db_name.to_owned();
+                file_name.push(MAIN_SEPARATOR);
+                let file_name = file_name.add(&s);
                 (env.open(&file_name)?, file_name)
             }
             Err(e) => {
-                return Err(WickErr::new_from_raw(
-                    Status::Corruption,
-                    Some("Invalid CURRENT file content"),
-                    Box::new(e),
-                ));
+                return Err(Error::Corruption(format!(
+                    "Invalid CURRENT file content: {}",
+                    e
+                )));
             }
         };
         let file_length = current_manifest.len();
@@ -669,16 +670,13 @@ impl VersionSet {
             edit.decoded_from(&buf)?;
             if let Some(ref cmp_name) = edit.comparator_name {
                 if cmp_name.as_str() != self.icmp.user_comparator.name() {
-                    return Err(WickErr::new(
-                        Status::InvalidArgument,
-                        Some(Box::leak(
-                            (cmp_name.clone() + " does not match existing compactor")
-                                .into_boxed_str(),
-                        )),
+                    return Err(Error::InvalidArgument(
+                        cmp_name.clone() + " does not match existing compactor",
                     ));
                 }
             }
-            builder.accumulate(&edit, self);
+            let file_delta = edit.take_file_delta();
+            builder.accumulate(file_delta, self);
             if let Some(n) = edit.next_file_number {
                 next_file_number = n;
                 has_next_file_number = true;
@@ -698,21 +696,18 @@ impl VersionSet {
         }
 
         if !has_next_file_number {
-            return Err(WickErr::new(
-                Status::Corruption,
-                Some("no meta-nextfile entry in manifest"),
+            return Err(Error::Corruption(
+                "no meta-nextfile entry in manifest".to_owned(),
             ));
         }
         if !has_log_number {
-            return Err(WickErr::new(
-                Status::Corruption,
-                Some("no meta-lognumber entry in manifest"),
+            return Err(Error::Corruption(
+                "no meta-lognumber entry in manifest".to_owned(),
             ));
         }
         if !has_last_sequence {
-            return Err(WickErr::new(
-                Status::Corruption,
-                Some("no last-sequence-number entry in manifest"),
+            return Err(Error::Corruption(
+                "no last-sequence-number entry in manifest".to_owned(),
             ));
         }
 
@@ -748,14 +743,15 @@ impl VersionSet {
 
     // Create snapshot of current version and persistent to manifest file.
     // Only be called when initializing a new db
-    fn write_snapshot(&self, writer: &mut Writer) -> Result<()> {
+    fn write_snapshot(&self, writer: &mut Writer<S::F>) -> Result<()> {
         let mut edit = VersionEdit::new(self.options.max_levels);
         // Save metadata
         edit.set_comparator_name(String::from(self.icmp.user_comparator.name()));
         // Save compaction pointers
         for level in 0..self.options.max_levels as usize {
             if !self.compaction_pointer[level].is_empty() {
-                edit.compaction_pointers
+                edit.file_delta
+                    .compaction_pointers
                     .push((level, self.compaction_pointer[level].clone()));
             }
         }
@@ -775,100 +771,113 @@ impl VersionSet {
 
         let mut record = vec![];
         edit.encode_to(&mut record);
-        writer.add_record(&Slice::from(record.as_slice()))?;
+        writer.add_record(&record)?;
         Ok(())
     }
 
     // Pick up files to compact in `c.level+1` based on given compaction
-    // The input files in `c.level` might expand because of newly picked files
-    // in `c.level + 1` but the final range of the files in `c.level` should be a
-    // subset of `c.level + 1`
-    fn setup_other_inputs(&mut self, c: Compaction) -> Compaction {
+    // The input files in `c.level` might expand because of getting a large key range from newly picked files
+    // in `c.level + 1`. And the final key range in `c.level + 1` should be a subset of `c.level`
+    fn setup_other_inputs(&mut self, c: Compaction<S::F>) -> Compaction<S::F> {
         let mut c = self.add_boundary_inputs(c);
         let current = &self.current();
-        // re-calculate the range
-        let (smallest, mut largest) = c.base_range(&self.icmp);
-        c.inputs[0] = current.get_overlapping_inputs(
-            c.level + 1,
-            Some(smallest.clone()),
-            Some(largest.clone()),
-        );
-        let (mut all_smallest, mut all_largest) = c.total_range(&self.icmp);
+        // TODO: remove this clone
+        let not_expand = std::mem::replace(&mut c.inputs, [vec![], vec![]])[0].clone();
+        // Calculate the key range in current level after `add_boundary_inputs`
+        let (smallest, largest) = base_range(&not_expand, c.level, &self.icmp);
+        // figure out the overlapping files in next level
+        let overlapping_next_level =
+            current.get_overlapping_inputs(c.level + 1, Some(smallest), Some(largest));
+        // Re-calculate total key range of inputting files for compaction
+        let (all_smallest, all_largest) =
+            total_range(&not_expand, &overlapping_next_level, c.level, &self.icmp);
 
-        // See if we can grow the number of inputs in "level" without
+        // See whether we can grow the number of inputs in "level" without
         // changing the number of "level+1" files we pick up.
-        if !c.inputs[0].is_empty() {
-            // re-count the L(n) inputs
+        let (current_files, next_files) = if !overlapping_next_level.is_empty() {
+            // Re-group the current selected files.
             // We fill the compaction 'holes' left by `add_boundary_inputs` here
-            let mut expanded0 = current.get_overlapping_inputs(
-                c.level,
-                Some(all_smallest.clone()),
-                Some(all_largest.clone()),
-            );
-            // add boundary for expanded L(n) inputs
+            let mut expanded0 =
+                current.get_overlapping_inputs(c.level, Some(all_smallest), Some(all_largest));
+            // Add boundary for expanded L(n) inputs
+            // The `expanded0` could have a larger key range than the origin `inputs[0]` in given `c`
             self.add_boundary_inputs_for_compact_files(c.level, &mut expanded0);
-            let expanded0_size = Self::total_file_size(expanded0.as_slice());
-            let inputs0_size = Self::total_file_size(c.inputs[0].as_slice());
-            let inputs1_size = Self::total_file_size(c.inputs[1].as_slice());
-            if expanded0.len() > c.inputs[0].len()
-                && inputs1_size + expanded0_size
-                    <= self.options.expanded_compaction_byte_size_limit()
+            let expanded0_size = total_file_size(&expanded0);
+            let not_expanded_size = total_file_size(&not_expand);
+            let next_size = total_file_size(&overlapping_next_level);
+            // We do expand the current(`c.level`) inputs and not reach the compaction size limit
+            if expanded0.len() > not_expand.len()
+                && next_size + expanded0_size <= self.options.expanded_compaction_byte_size_limit()
             {
-                let (new_smallest, new_largest) = c.base_range(&self.icmp);
+                let (new_smallest, new_largest) = base_range(&expanded0, c.level, &self.icmp);
                 // TODO: use a more sufficient way to checking expanding in L(n+1) ?
-                let expanded1 = current.get_overlapping_inputs(
+                let expanded_next = current.get_overlapping_inputs(
                     c.level + 1,
-                    Some(new_smallest.clone()),
-                    Some(new_largest.clone()),
+                    Some(new_smallest),
+                    Some(new_largest),
                 );
                 // the L(n+1) compacting files shouldn't be expanded
-                if expanded1.len() == c.inputs[1].len() {
-                    let expanded1_size = Self::total_file_size(expanded1.as_slice());
+                if expanded_next.len() == overlapping_next_level.len() {
+                    let expanded_next_size = total_file_size(&expanded_next);
                     info!(
                         "Expanding@{} {}+{} ({}+{} bytes) to {}+{} ({}+{} bytes)",
                         c.level,
-                        c.inputs[0].len(),
-                        c.inputs[1].len(),
-                        inputs0_size,
-                        inputs1_size,
+                        not_expand.len(),
+                        overlapping_next_level.len(),
+                        not_expanded_size,
+                        next_size,
                         expanded0.len(),
-                        expanded1.len(),
+                        expanded_next.len(),
                         expanded0_size,
-                        expanded1_size,
+                        expanded_next_size,
                     );
-                    largest = new_largest;
-                    c.inputs[0] = expanded0;
-                    c.inputs[1] = expanded1;
-                    let all_range = c.total_range(&self.icmp);
-                    all_smallest = all_range.0;
-                    all_largest = all_range.1;
+                    (expanded0, expanded_next)
+                } else {
+                    // The next level files have been expanded again.
+                    // Use previous un-expanded next level files.
+                    (expanded0, overlapping_next_level)
                 }
+            } else {
+                (expanded0, overlapping_next_level)
             }
-        }
+        } else {
+            // 'overlapping_next_level' is empty
+            (not_expand, overlapping_next_level)
+        };
 
+        let (final_smallest, final_largest) =
+            total_range(&current_files, &next_files, c.level, &self.icmp);
         // Compute the set of grandparent files that overlap this compaction
         // (parent == level+1; grandparent == level+2)
         if c.level + 2 < self.options.max_levels as usize {
-            c.grand_parents =
-                current.get_overlapping_inputs(c.level + 2, Some(all_smallest), Some(all_largest));
+            c.grand_parents = current.get_overlapping_inputs(
+                c.level + 2,
+                Some(final_smallest),
+                Some(final_largest),
+            );
         }
         // Update the place where we will do the next compaction for this level.
         // We update this immediately instead of waiting for the VersionEdit
         // to be applied so that if the compaction fails, we will try a different
         // key range next time
-        c.edit.compaction_pointers.push((c.level, largest.clone()));
-        self.compaction_pointer[c.level] = largest.clone();
+        c.edit
+            .file_delta
+            .compaction_pointers
+            .push((c.level, final_largest.clone()));
+        self.compaction_pointer[c.level] = final_largest.clone();
+        let final_inputs = [current_files, next_files];
+        c.inputs = final_inputs;
         c
     }
 
-    // A helper of 'add_boundary_input_for_compact_files' for Compaction
-    fn add_boundary_inputs(&self, mut c: Compaction) -> Compaction {
+    // A helper of 'add_boundary_input_for_compact_files' for files in `c.level`
+    fn add_boundary_inputs(&self, mut c: Compaction<S::F>) -> Compaction<S::F> {
         self.add_boundary_inputs_for_compact_files(c.level, &mut c.inputs[0]);
         c
     }
 
-    // Add extra files which should have been included in `inputs` but excluded by some reasons (e.g output size limit truncating).
-    // This guarantees that all InternalKey with same user key should be compacted. Otherwise, we might encounter a
+    // Add SST files which should have been included in `level` compaction but excluded by some reasons (e.g output size limit truncating).
+    // This guarantees that all the `InternalKey`s with a same user key in level `level` should be compacted. Otherwise, we might encounter a
     // snapshot reading issue because the older key remains in a lower level when the newest key is at higher level
     // after compaction.
     fn add_boundary_inputs_for_compact_files(
@@ -888,9 +897,9 @@ impl VersionSet {
             let mut largest_key = &tmp.largest;
             let mut smallest_boundary_file = self.find_smallest_boundary_file(level, &largest_key);
             while let Some(file) = &smallest_boundary_file {
-                // If a boundary file was found advance largest_key, otherwise we're done.
-                // This might leave 'holes' in files to be compacted because we only append the last boundary file
-                // the 'holes' will be filled later (by calling `get_overlapping_inputs`).
+                // If a boundary file was found, advance the `largest_key`. Otherwise we're done.
+                // This might leave 'holes' in files to be compacted because we only append the last boundary file.
+                // The 'holes' will be filled later (by calling `get_overlapping_inputs`).
                 files_to_compact.push(file.clone());
                 largest_key = &file.largest;
                 smallest_boundary_file = self.find_smallest_boundary_file(level, &largest_key);
@@ -899,14 +908,14 @@ impl VersionSet {
     }
 
     // Iterate all the files in level until find the file whose smallest key has same user key
-    // and greater sequence number ( actually smaller )
+    // and greater sequence number by `InternalComparator` ( actually smaller in digits )
     fn find_smallest_boundary_file(
         &self,
         level: usize,
         largest_key: &InternalKey,
     ) -> Option<Arc<FileMetaData>> {
         let ucmp = &self.icmp.user_comparator;
-        let current = self.current().clone();
+        let current = self.current();
         let level_files = &current.files[level];
         let mut smallest_boundary_file: Option<Arc<FileMetaData>> = None;
         for f in level_files.iter() {
@@ -943,7 +952,7 @@ impl VersionSet {
                     if len > self.options.max_file_size {
                         return false;
                     }
-                    match self.options.env.open(manifest_file) {
+                    match self.storage.open(manifest_file) {
                         Ok(f) => {
                             info!("Reusing MANIFEST {}", manifest_file);
                             let writer = Writer::new(f);
@@ -965,33 +974,185 @@ impl VersionSet {
     }
 }
 
-pub struct FileIterFactory {
-    options: Rc<ReadOptions>,
-    table_cache: Arc<TableCache>,
+pub struct FileIterFactory<S: Storage + Clone> {
+    options: ReadOptions,
+    table_cache: TableCache<S>,
+    icmp: InternalKeyComparator,
 }
 
-impl FileIterFactory {
-    pub fn new(options: Rc<ReadOptions>, table_cache: Arc<TableCache>) -> Self {
+impl<S: Storage + Clone> FileIterFactory<S> {
+    pub fn new(
+        icmp: InternalKeyComparator,
+        options: ReadOptions,
+        table_cache: TableCache<S>,
+    ) -> Self {
         Self {
             options,
             table_cache,
+            icmp,
         }
     }
 }
 
-impl DerivedIterFactory for FileIterFactory {
-    fn derive(&self, value: &Slice) -> Result<Box<dyn Iterator>> {
-        if value.size() != 2 * FILE_META_LENGTH {
-            Ok(Box::new(EmptyIterator::new_with_err(WickErr::new(
-                Status::Corruption,
-                Some("file reader invoked with unexpected value"),
-            ))))
+impl<S: Storage + Clone> DerivedIterFactory for FileIterFactory<S> {
+    type Iter = TableIterator<InternalKeyComparator, S::F>;
+
+    fn derive(&self, value: &[u8]) -> Result<Self::Iter> {
+        if value.len() != FILE_META_LENGTH {
+            Err(Error::Corruption(
+                "file reader invoked with unexpected value".to_owned(),
+            ))
         } else {
-            let file_number = decode_fixed_64(value.as_slice());
-            let file_size = decode_fixed_64(&value.as_slice()[8..]);
-            Ok(self
-                .table_cache
-                .new_iter(self.options.clone(), file_number, file_size))
+            let file_number = decode_fixed_64(value);
+            let file_size = decode_fixed_64(&value[std::mem::size_of::<u64>()..]);
+            self.table_cache.new_iter(
+                self.icmp.clone(),
+                self.options.clone(),
+                file_number,
+                file_size,
+            )
         }
+    }
+}
+
+/// Calculate the total size of given files
+#[inline]
+pub fn total_file_size(files: &[Arc<FileMetaData>]) -> u64 {
+    files.iter().fold(0, |accum, file| accum + file.file_size)
+}
+
+/// An iterator that yields all the entries stored in SST files.
+/// The inner implementation is mostly like a merging iterator.
+pub struct SSTableIters<S: Storage + Clone> {
+    cmp: InternalKeyComparator,
+    // Level0 table iterators. An iterator represents a table
+    level0: Vec<TableIterator<InternalKeyComparator, S::F>>,
+    // ConcatenateIterators for opening SST in level n>1 lazily. An iterator represents a level
+    leveln: Vec<ConcatenateIterator<LevelFileNumIterator, FileIterFactory<S>>>,
+}
+
+impl<S: Storage + Clone> SSTableIters<S> {
+    pub fn new(
+        cmp: InternalKeyComparator,
+        level0: Vec<TableIterator<InternalKeyComparator, S::F>>,
+        leveln: Vec<ConcatenateIterator<LevelFileNumIterator, FileIterFactory<S>>>,
+    ) -> Self {
+        Self {
+            cmp,
+            level0,
+            leveln,
+        }
+    }
+}
+
+impl<S: Storage + Clone> KMergeCore for SSTableIters<S> {
+    fn cmp(&self) -> &dyn Comparator {
+        &self.cmp
+    }
+
+    fn iters_len(&self) -> usize {
+        self.level0.len() + self.leveln.len()
+    }
+
+    // Find the iterator with the smallest 'key' and set it as current
+    fn find_smallest(&mut self) -> usize {
+        let mut smallest: Option<Slice> = None;
+        let mut index = self.iters_len();
+        for (i, child) in self.level0.iter().enumerate() {
+            if self.smaller(&mut smallest, child) {
+                index = i
+            }
+        }
+
+        for (i, child) in self.leveln.iter().enumerate() {
+            if self.smaller(&mut smallest, child) {
+                index = i + self.level0.len()
+            }
+        }
+        index
+    }
+
+    // Find the iterator with the largest 'key' and set it as current
+    fn find_largest(&mut self) -> usize {
+        let mut largest: Option<Slice> = None;
+        let mut index = self.iters_len();
+        for (i, child) in self.level0.iter().enumerate() {
+            if self.larger(&mut largest, child) {
+                index = i
+            }
+        }
+
+        for (i, child) in self.leveln.iter().enumerate() {
+            if self.larger(&mut largest, child) {
+                index = i + self.level0.len()
+            }
+        }
+        index
+    }
+
+    fn get_child(&self, i: usize) -> &dyn Iterator {
+        if i < self.level0.len() {
+            self.leveln.get(i).unwrap() as &dyn Iterator
+        } else {
+            let current = i - self.level0.len();
+            self.leveln.get(current).unwrap() as &dyn Iterator
+        }
+    }
+
+    fn get_child_mut(&mut self, i: usize) -> &mut dyn Iterator {
+        if i < self.level0.len() {
+            self.leveln.get_mut(i).unwrap() as &mut dyn Iterator
+        } else {
+            let current = i - self.level0.len();
+            self.leveln.get_mut(current).unwrap() as &mut dyn Iterator
+        }
+    }
+
+    fn for_each_child<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut dyn Iterator),
+    {
+        self.level0
+            .iter_mut()
+            .for_each(|i| f(i as &mut dyn Iterator));
+        self.leveln
+            .iter_mut()
+            .for_each(|i| f(i as &mut dyn Iterator));
+    }
+
+    fn for_not_ith<F>(&mut self, n: usize, mut f: F)
+    where
+        F: FnMut(&mut dyn Iterator, &dyn Comparator),
+    {
+        if n < self.level0.len() {
+            for (i, child) in self.level0.iter_mut().enumerate() {
+                if i != n {
+                    f(child as &mut dyn Iterator, &self.cmp)
+                }
+            }
+        } else {
+            let current = n - self.level0.len();
+            for (i, child) in self.leveln.iter_mut().enumerate() {
+                if i != current {
+                    f(child as &mut dyn Iterator, &self.cmp)
+                }
+            }
+        }
+    }
+
+    fn take_err(&mut self) -> Result<()> {
+        for child in self.level0.iter_mut() {
+            let status = child.status();
+            if status.is_err() {
+                return status;
+            }
+        }
+        for child in self.leveln.iter_mut() {
+            let status = child.status();
+            if status.is_err() {
+                return status;
+            }
+        }
+        Ok(())
     }
 }

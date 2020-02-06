@@ -18,16 +18,17 @@
 use crate::filter::FilterPolicy;
 use crate::util::coding::{decode_fixed_64, put_fixed_64};
 use crate::util::comparator::Comparator;
-use crate::util::slice::Slice;
 use crate::util::varint::VarintU32;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Error, Formatter};
 use std::rc::Rc;
+use std::str;
 use std::sync::Arc;
 
 /// The max key sequence number. The value is 2^56 - 1 because the seq number
 /// only takes 56 bits when is serialized to `InternalKey`
 pub const MAX_KEY_SEQUENCE: u64 = (1u64 << 56) - 1;
+const INTERNAL_KEY_TAIL: usize = 8; // 7bytes sequence number + 1byte type number
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ValueType {
@@ -60,43 +61,48 @@ impl From<u64> for ValueType {
 
 /// `ParsedInternalKey` represents a internal key used in wickdb.
 /// A `ParsedInternalKey` can be encoded into a `InternalKey` by `encode()`.
-pub struct ParsedInternalKey {
+pub struct ParsedInternalKey<'a> {
     /// The user's normal used key
-    pub user_key: Slice,
+    pub user_key: &'a [u8],
     /// The sequence number of the Key
     pub seq: u64,
     /// The value type
     pub value_type: ValueType,
 }
 
-impl ParsedInternalKey {
+impl<'a> ParsedInternalKey<'a> {
     /// Try to extract a `ParsedInternalKey` from given bytes. This might be dangerous since
     /// a `Slice` never guarantees the underlying data lives as long as enough.
     /// Returns `None` if data length is less than 8 or getting an unknown value type.
-    pub fn decode_from(internal_key: Slice) -> Option<Self> {
-        let size = internal_key.size();
-        if size < 8 {
+    pub fn decode_from(internal_key: &'a [u8]) -> Option<ParsedInternalKey<'_>> {
+        let size = internal_key.len();
+        if size < INTERNAL_KEY_TAIL {
             return None;
         }
-        let num = decode_fixed_64(&internal_key.as_slice()[size - 8..]);
+        let num = decode_fixed_64(&internal_key[size - INTERNAL_KEY_TAIL..]);
         let t = ValueType::from(num & 0xff);
         if t == ValueType::Unknown {
             return None;
         }
-        let seq = num >> 8;
+        let seq = num >> INTERNAL_KEY_TAIL;
         Some(Self {
-            user_key: Slice::from(&internal_key.as_slice()[..size - 8]),
+            user_key: &internal_key[..size - INTERNAL_KEY_TAIL],
             seq,
             value_type: t,
         })
     }
 
-    pub fn new(key: Slice, seq: u64, v_type: ValueType) -> Self {
+    pub fn new(key: &'a [u8], seq: u64, v_type: ValueType) -> ParsedInternalKey<'_> {
         ParsedInternalKey {
             user_key: key,
             seq,
             value_type: v_type,
         }
+    }
+
+    /// Return the inner user key as a &str
+    pub fn as_str(&self) -> &'a str {
+        str::from_utf8(&self.user_key).unwrap()
     }
 
     /// Returns a `InternalKey` encoded from the `ParsedInternalKey` using
@@ -107,7 +113,7 @@ impl ParsedInternalKey {
     }
 }
 
-impl Debug for ParsedInternalKey {
+impl<'a> Debug for ParsedInternalKey<'a> {
     fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
         write!(
             f,
@@ -126,14 +132,15 @@ impl Debug for ParsedInternalKey {
 ///              user key                  seq number        type
 /// ```
 ///
+// TODO: use &'a [u8] instead of Vec<u8>
 #[derive(Clone, PartialEq, Eq)]
 pub struct InternalKey {
     data: Vec<u8>,
 }
 
 impl InternalKey {
-    pub fn new(key: &Slice, seq: u64, t: ValueType) -> Self {
-        let mut v = Vec::from(key.as_slice());
+    pub fn new(key: &[u8], seq: u64, t: ValueType) -> Self {
+        let mut v = Vec::from(key);
         put_fixed_64(&mut v, pack_seq_and_type(seq, t));
         InternalKey { data: v }
     }
@@ -164,14 +171,14 @@ impl InternalKey {
     #[inline]
     pub fn user_key(&self) -> &[u8] {
         let length = self.data.len();
-        &self.data.as_slice()[..length - 8]
+        &self.data.as_slice()[..length - INTERNAL_KEY_TAIL]
     }
 
     /// Returns a `ParsedInternalKey`
-    pub fn parsed(&self) -> Option<ParsedInternalKey> {
+    pub fn parsed(&self) -> Option<ParsedInternalKey<'_>> {
         let size = self.data.len();
-        let user_key = Slice::from(&(self.data.as_slice())[0..size - 8]);
-        let num = decode_fixed_64(&(self.data.as_slice())[size - 8..]);
+        let user_key = &(self.data.as_slice())[..size - INTERNAL_KEY_TAIL];
+        let num = decode_fixed_64(&(self.data.as_slice())[size - INTERNAL_KEY_TAIL..]);
         let t = ValueType::from(num & 0xff as u64);
         match t {
             ValueType::Unknown => None,
@@ -201,6 +208,9 @@ impl Default for InternalKey {
     }
 }
 
+/// A `LookupKey` represents a 'Get' request from the user by the give key with a
+/// specific sequence number to perform a MVCC style query.
+///
 /// The format of a `LookupKey`:
 ///
 /// ```text
@@ -222,7 +232,8 @@ pub struct LookupKey {
 impl LookupKey {
     pub fn new(user_key: &[u8], seq_number: u64) -> Self {
         let mut data = vec![];
-        let ukey_start = VarintU32::put_varint(&mut data, (user_key.len() + 8) as u32);
+        let ukey_start =
+            VarintU32::put_varint(&mut data, (user_key.len() + INTERNAL_KEY_TAIL) as u32);
         data.extend_from_slice(user_key);
         put_fixed_64(
             &mut data,
@@ -233,21 +244,21 @@ impl LookupKey {
 
     /// Returns a key suitable for lookup in a MemTable.
     /// NOTICE: the LookupKey self should live at least as long as the returning Slice
-    pub fn mem_key(&self) -> Slice {
-        Slice::from(self.data.as_slice())
+    pub fn mem_key(&self) -> &[u8] {
+        self.data.as_slice()
     }
 
     /// Returns an internal key (suitable for passing to an internal iterator)
     /// NOTICE: the LookupKey self should live at least as long as the returning Slice
-    pub fn internal_key(&self) -> Slice {
-        Slice::from(&self.data.as_slice()[self.ukey_start..])
+    pub fn internal_key(&self) -> &[u8] {
+        &self.data.as_slice()[self.ukey_start..]
     }
 
     /// Returns the user key
     /// NOTICE: the LookupKey self should live at least as long as the returning Slice
-    pub fn user_key(&self) -> Slice {
+    pub fn user_key(&self) -> &[u8] {
         let len = self.data.len();
-        Slice::from(&self.data.as_slice()[self.ukey_start..len - 8])
+        &self.data.as_slice()[self.ukey_start..len - INTERNAL_KEY_TAIL]
     }
 }
 
@@ -256,8 +267,11 @@ impl LookupKey {
 ///    increasing user key (according to user-supplied comparator)
 ///    decreasing sequence number
 ///    decreasing type (though sequence# should be enough to disambiguate)
+#[derive(Clone)]
+// TODO: Make this impl Copy
 pub struct InternalKeyComparator {
     /// The comparator defined in `Options`
+    // TODO: Remove this Arc
     pub user_comparator: Arc<dyn Comparator>,
 }
 
@@ -274,7 +288,8 @@ impl Comparator for InternalKeyComparator {
         let ua = extract_user_key(a);
         let ub = extract_user_key(b);
         // compare user key first
-        match self.user_comparator.compare(ua.as_slice(), ub.as_slice()) {
+        #[allow(clippy::comparison_chain)]
+        match self.user_comparator.compare(ua, ub) {
             Ordering::Greater => Ordering::Greater,
             Ordering::Less => Ordering::Less,
             Ordering::Equal => {
@@ -298,12 +313,36 @@ impl Comparator for InternalKeyComparator {
         "leveldb.InternalKeyComparator"
     }
 
-    fn separator(&self, _a: &[u8], _b: &[u8]) -> Vec<u8> {
-        unimplemented!()
+    fn separator(&self, a: &[u8], b: &[u8]) -> Vec<u8> {
+        let start = extract_user_key(a);
+        let end = extract_user_key(b);
+        let mut s = self.user_comparator.separator(start, end);
+        if s.len() < start.len() && self.user_comparator.compare(start, &s) == Ordering::Less {
+            // Only a shorter separator is valid. Otherwise we just use `a`
+            // User key has become shorter physically, but larger logically.
+            // Tack on the earliest possible number to the shortened user key
+            put_fixed_64(
+                &mut s,
+                pack_seq_and_type(MAX_KEY_SEQUENCE, VALUE_TYPE_FOR_SEEK),
+            );
+            s
+        } else {
+            a.to_owned()
+        }
     }
 
-    fn successor(&self, _s: &[u8]) -> Vec<u8> {
-        unimplemented!()
+    fn successor(&self, s: &[u8]) -> Vec<u8> {
+        let ukey = extract_user_key(s);
+        let mut suc = self.user_comparator.successor(ukey);
+        if suc.len() < ukey.len() && self.user_comparator.compare(ukey, &suc) == Ordering::Less {
+            put_fixed_64(
+                &mut suc,
+                pack_seq_and_type(MAX_KEY_SEQUENCE, VALUE_TYPE_FOR_SEEK),
+            );
+            suc
+        } else {
+            s.to_owned()
+        }
     }
 }
 
@@ -317,8 +356,8 @@ impl FilterPolicy for InternalFilterPolicy {
         self.user_policy.name()
     }
 
-    fn may_contain(&self, filter: &[u8], key: &Slice) -> bool {
-        let user_key = extract_user_key(key.as_slice());
+    fn may_contain(&self, filter: &[u8], key: &[u8]) -> bool {
+        let user_key = extract_user_key(key);
         self.user_policy.may_contain(filter, &user_key)
     }
 
@@ -327,7 +366,7 @@ impl FilterPolicy for InternalFilterPolicy {
         for key in keys.iter() {
             let user_key = extract_user_key(key.as_slice());
             // TODO: avoid copying here
-            user_keys.push(Vec::from(user_key.as_slice()))
+            user_keys.push(Vec::from(user_key))
         }
         self.user_policy.create_filter(user_keys.as_slice())
     }
@@ -335,14 +374,15 @@ impl FilterPolicy for InternalFilterPolicy {
 
 // use a `Slice` to represent only the user key in a internal key slice
 #[inline]
-pub fn extract_user_key(key: &[u8]) -> Slice {
+pub fn extract_user_key(key: &[u8]) -> &[u8] {
     let size = key.len();
     assert!(
-        size >= 8,
-        "[internal key] invalid size of internal key : expect >= 8 but got {}",
+        size >= INTERNAL_KEY_TAIL,
+        "[internal key] invalid size of internal key : expect >= {} but got {}",
+        INTERNAL_KEY_TAIL,
         size
     );
-    Slice::new(key.as_ptr(), size - 8)
+    &key[..size - INTERNAL_KEY_TAIL]
 }
 
 // get the sequence number from a internal key slice
@@ -350,11 +390,11 @@ pub fn extract_user_key(key: &[u8]) -> Slice {
 fn extract_seq_number(key: &[u8]) -> u64 {
     let size = key.len();
     assert!(
-        size >= 8,
+        size >= INTERNAL_KEY_TAIL,
         "[internal key] invalid size of internal key : expect >= 8 but got {}",
         size
     );
-    decode_fixed_64(&key[size - 8..]) >> 8
+    decode_fixed_64(&key[size - INTERNAL_KEY_TAIL..]) >> INTERNAL_KEY_TAIL
 }
 
 #[inline]
@@ -372,6 +412,7 @@ fn pack_seq_and_type(seq: u64, v_type: ValueType) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::comparator::BytewiseComparator;
 
     #[test]
     fn test_pack_seq_and_type() {
@@ -397,10 +438,10 @@ mod tests {
     }
 
     fn assert_encoded_decoded(key: &str, seq: u64, vt: ValueType) {
-        let encoded = InternalKey::new(&Slice::from(key), seq, vt);
+        let encoded = InternalKey::new(key.as_bytes(), seq, vt);
         assert_eq!(key.as_bytes(), encoded.user_key());
         let decoded = encoded.parsed().expect("");
-        assert_eq!(key, decoded.user_key.as_str());
+        assert_eq!(key, decoded.as_str());
         assert_eq!(seq, decoded.seq);
         assert_eq!(vt, decoded.value_type);
     }
@@ -427,6 +468,118 @@ mod tests {
                 assert_encoded_decoded(test_keys[i], test_seqs[j], ValueType::Value);
                 assert_encoded_decoded(test_keys[i], test_seqs[j], ValueType::Deletion);
             }
+        }
+    }
+
+    #[test]
+    fn test_icmp_cmp() {
+        let icmp = InternalKeyComparator::new(Arc::new(BytewiseComparator::default()));
+        let tests = vec![
+            (
+                ("", 100, ValueType::Value),
+                ("", 100, ValueType::Value),
+                Ordering::Equal,
+            ),
+            (
+                ("", 90, ValueType::Value),
+                ("", 100, ValueType::Value),
+                Ordering::Greater,
+            ), // physically less but logically larger
+            (
+                ("", 90, ValueType::Value),
+                ("", 90, ValueType::Deletion),
+                Ordering::Equal,
+            ), // Only cmp value seq if the user keys are same
+            (
+                ("a", 90, ValueType::Value),
+                ("b", 100, ValueType::Value),
+                Ordering::Less,
+            ),
+        ];
+        for (a, b, expected) in tests {
+            let ka = InternalKey::new(a.0.as_bytes(), a.1, a.2);
+            let kb = InternalKey::new(b.0.as_bytes(), b.1, b.2);
+            assert_eq!(expected, icmp.compare(ka.data(), kb.data()));
+        }
+    }
+
+    #[test]
+    fn test_icmp_separator() {
+        let tests = vec![
+            // ukey are the same
+            (
+                ("foo", 100, ValueType::Value),
+                ("foo", 99, ValueType::Value),
+                ("foo", 100, ValueType::Value),
+            ),
+            (
+                ("foo", 100, ValueType::Value),
+                ("foo", 101, ValueType::Value),
+                ("foo", 100, ValueType::Value),
+            ),
+            (
+                ("foo", 100, ValueType::Value),
+                ("foo", 100, ValueType::Value),
+                ("foo", 100, ValueType::Value),
+            ),
+            // ukey are disordered
+            (
+                ("foo", 100, ValueType::Value),
+                ("bar", 99, ValueType::Value),
+                ("foo", 100, ValueType::Value),
+            ),
+            // ukey are different but correctly ordered
+            (
+                ("foo", 100, ValueType::Value),
+                ("hello", 200, ValueType::Value),
+                ("g", MAX_KEY_SEQUENCE, VALUE_TYPE_FOR_SEEK),
+            ),
+            // When a's ukey is the prefix of b's
+            (
+                ("foo", 100, ValueType::Value),
+                ("foobar", 200, ValueType::Value),
+                ("foo", 100, ValueType::Value),
+            ),
+            // When b's ukey is the prefix of a's
+            (
+                ("foobar", 100, ValueType::Value),
+                ("foo", 200, ValueType::Value),
+                ("foobar", 100, ValueType::Value),
+            ),
+        ];
+        let icmp = InternalKeyComparator::new(Arc::new(BytewiseComparator::default()));
+        for (a, b, expected) in tests {
+            let ka = InternalKey::new(a.0.as_bytes(), a.1, a.2);
+            let kb = InternalKey::new(b.0.as_bytes(), b.1, b.2);
+            assert_eq!(
+                InternalKey::new(expected.0.as_bytes(), expected.1, expected.2).data(),
+                icmp.separator(ka.data(), kb.data()).as_slice()
+            );
+        }
+    }
+
+    #[test]
+    fn test_icmp_successor() {
+        let tests = vec![
+            (
+                (Vec::from("foo".as_bytes()), 100, ValueType::Value),
+                (
+                    Vec::from("g".as_bytes()),
+                    MAX_KEY_SEQUENCE,
+                    VALUE_TYPE_FOR_SEEK,
+                ),
+            ),
+            (
+                (vec![255u8, 255u8], 100, ValueType::Value),
+                (vec![255u8, 255u8], 100, ValueType::Value),
+            ),
+        ];
+        let icmp = InternalKeyComparator::new(Arc::new(BytewiseComparator::default()));
+        for (k, expected) in tests {
+            assert_eq!(
+                icmp.successor(InternalKey::new(k.0.as_slice(), k.1, k.2).data()),
+                InternalKey::new(expected.0.as_slice(), expected.1, expected.2).data()
+            );
         }
     }
 }

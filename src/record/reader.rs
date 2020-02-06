@@ -20,7 +20,6 @@ use crate::record::{RecordType, BLOCK_SIZE, HEADER_SIZE};
 use crate::storage::File;
 use crate::util::coding::decode_fixed_32;
 use crate::util::crc32::{unmask, value};
-use std::error::Error;
 use std::io::SeekFrom;
 
 enum ReaderError {
@@ -52,9 +51,9 @@ pub trait Reporter {
 
 /// A `Reader` is used for reading records from log file.
 /// The `Reader` always starts reading the records at `initial_offset` of the `file`.
-pub struct Reader {
+pub struct Reader<F: File> {
     // NOTICE: we probably mutate the underlying file in the FilePtr by calling `seek()` and this is not thread safe
-    file: Box<dyn File>,
+    file: F,
     reporter: Option<Box<dyn Reporter>>,
     // We should check sum for the record or not
     checksum: bool,
@@ -75,9 +74,9 @@ pub struct Reader {
     resyncing: bool,
 }
 
-impl Reader {
+impl<F: File> Reader<F> {
     pub fn new(
-        file: Box<dyn File>,
+        file: F,
         reporter: Option<Box<dyn Reporter>>,
         checksum: bool,
         initial_offset: u64,
@@ -98,7 +97,7 @@ impl Reader {
 
     /// Deliver the file's ownership
     #[inline]
-    pub fn into_file(self) -> Box<dyn File> {
+    pub fn into_file(self) -> F {
         self.file
     }
 
@@ -249,7 +248,7 @@ impl Reader {
                             }
                         }
                         Err(e) => {
-                            self.report_drop(BLOCK_SIZE as u64, e.description());
+                            self.report_drop(BLOCK_SIZE as u64, &e.to_string());
                             self.eof = true;
                             return Err(ReaderError::EOF);
                         }
@@ -355,7 +354,7 @@ impl Reader {
         self.end_of_buffer_offset = block_start_location;
         if block_start_location > 0 {
             if let Err(e) = self.file.seek(SeekFrom::Start(block_start_location)) {
-                self.report_drop(block_start_location, e.description());
+                self.report_drop(block_start_location, &e.to_string());
                 return false;
             }
         }

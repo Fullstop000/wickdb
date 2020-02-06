@@ -14,11 +14,11 @@ fn bench_insert(c: &mut Criterion) {
                 b.iter_batched(
                     || {
                         (
-                            Skiplist::new(BytewiseComparator::new(), BlockArena::new()),
+                            Skiplist::new(BytewiseComparator::default(), BlockArena::default()),
                             vec![0u8; *length],
                         )
                     },
-                    |(s, key)| s.insert(key),
+                    |(s, key)| s.insert(&key),
                     BatchSize::PerIteration,
                 )
             },

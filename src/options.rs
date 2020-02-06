@@ -15,23 +15,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use crate::cache::lru::SharedLRUCache;
+// use crate::cache::lru::SharedLRUCache;
+use crate::cache::lru::LRUCache;
 use crate::cache::Cache;
 use crate::db::filename::{generate_filename, FileType};
 use crate::filter::FilterPolicy;
 use crate::logger::Logger;
-use crate::options::CompressionType::{NoCompression, SnappyCompression, Unknown};
 use crate::snapshot::Snapshot;
 use crate::sstable::block::Block;
-use crate::storage::file::FileStorage;
-use crate::storage::Storage;
+use crate::storage::{File, Storage};
 use crate::util::comparator::{BytewiseComparator, Comparator};
 use crate::LevelFilter;
 use crate::Log;
 use std::rc::Rc;
 use std::sync::Arc;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, FromPrimitive)]
 pub enum CompressionType {
     NoCompression = 0,
     SnappyCompression = 1,
@@ -40,11 +39,7 @@ pub enum CompressionType {
 
 impl From<u8> for CompressionType {
     fn from(i: u8) -> Self {
-        match i {
-            0 => NoCompression,
-            1 => SnappyCompression,
-            _ => Unknown,
-        }
+        num_traits::FromPrimitive::from_u8(i).unwrap()
     }
 }
 
@@ -73,8 +68,6 @@ pub struct Options {
     /// become unreadable or for the entire DB to become unopenable.
     pub paranoid_checks: bool,
 
-    /// Use the specified object to interact with the environment,
-    pub env: Arc<dyn Storage>,
     // -------------------
     // Parameters that affect compaction:
     /// The max number of levels except L)
@@ -129,7 +122,7 @@ pub struct Options {
     // a block is the unit of reading from disk).
     /// If non-null, use the specified cache for blocks.
     /// If null, we will automatically create and use an 8MB internal cache.
-    pub block_cache: Option<Arc<dyn Cache<Arc<Block>>>>,
+    pub block_cache: Option<Arc<dyn Cache<Vec<u8>, Arc<Block>>>>,
 
     /// Number of sstables that remains out of table cache
     pub non_table_cache_files: usize,
@@ -209,7 +202,11 @@ impl Options {
     }
 
     /// Initialize Options by limiting ranges of some flags, applying customized Logger and etc.
-    pub(crate) fn initialize(&mut self, db_name: String) {
+    pub(crate) fn initialize<O: File + 'static, S: Storage<F = O>>(
+        &mut self,
+        db_name: String,
+        storage: &S,
+    ) {
         self.max_open_files =
             Self::clip_range(self.max_open_files, 64 + self.non_table_cache_files, 50000);
         self.write_buffer_size = Self::clip_range(self.write_buffer_size, 64 << 10, 1 << 30);
@@ -217,17 +214,16 @@ impl Options {
         self.block_size = Self::clip_range(self.block_size, 1 << 10, 4 << 20);
 
         if self.logger.is_none() {
-            let _ = self.env.mkdir_all(&db_name);
-            if let Ok(f) = self
-                .env
-                .create(generate_filename(&db_name, FileType::InfoLog, 0).as_str())
+            let _ = storage.mkdir_all(&db_name);
+            if let Ok(f) =
+                storage.create(generate_filename(&db_name, FileType::InfoLog, 0).as_str())
             {
                 self.logger = Some(Box::new(Logger::new(f, self.logger_level)))
             }
         }
         self.apply_logger();
         if self.block_cache.is_none() {
-            self.block_cache = Some(Arc::new(SharedLRUCache::new(8 << 20)))
+            self.block_cache = Some(Arc::new(LRUCache::new(8 << 20, None)))
         }
     }
     #[allow(unused_must_use)]
@@ -255,11 +251,10 @@ impl Options {
 impl Default for Options {
     fn default() -> Self {
         Options {
-            comparator: Arc::new(BytewiseComparator::new()),
+            comparator: Arc::new(BytewiseComparator::default()),
             create_if_missing: true,
             error_if_exists: false,
             paranoid_checks: false,
-            env: Arc::new(FileStorage {}),
             max_levels: 7,
             l0_compaction_threshold: 4,
             l0_slowdown_writes_threshold: 8,
@@ -269,12 +264,12 @@ impl Default for Options {
             read_bytes_period: 1048576,
             write_buffer_size: 4 * 1024 * 1024, // 4MB
             max_open_files: 500,
-            block_cache: Some(Arc::new(SharedLRUCache::new(8 << 20))),
+            block_cache: Some(Arc::new(LRUCache::new(8 << 20, None))),
             non_table_cache_files: 10,
             block_size: 4 * 1024, // 4KB
             block_restart_interval: 16,
             max_file_size: 2 * 1024 * 1024, // 2MB
-            compression: SnappyCompression,
+            compression: CompressionType::SnappyCompression,
             reuse_logs: true,
             filter_policy: None,
             logger: None,
@@ -284,6 +279,7 @@ impl Default for Options {
 }
 
 /// Options that control read operations
+#[derive(Clone, Copy)]
 pub struct ReadOptions {
     /// If true, all data read from underlying storage will be
     /// verified against corresponding checksums.

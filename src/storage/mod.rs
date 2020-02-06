@@ -18,11 +18,10 @@
 pub mod file;
 pub mod mem;
 
-use crate::util::status::{Result, Status, WickErr};
+use crate::{Error, Result};
 use std::io;
 use std::io::SeekFrom;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
 
 /// `Storage` is a namespace for files.
 ///
@@ -31,35 +30,36 @@ use std::sync::Arc;
 ///
 /// `Storage` should be thread safe
 pub trait Storage: Send + Sync {
-    /// Create a file if it does not exist and will truncate it if it does.
-    fn create(&self, name: &str) -> Result<Box<dyn File>>;
+    type F: File + 'static;
+    /// Create a file if it does not exist and truncates exist one.
+    fn create<P: AsRef<Path>>(&self, name: P) -> Result<Self::F>;
 
     /// Open a file for writing and reading
-    fn open(&self, name: &str) -> Result<Box<dyn File>>;
+    fn open<P: AsRef<Path>>(&self, name: P) -> Result<Self::F>;
 
     /// Delete the named file
-    fn remove(&self, name: &str) -> Result<()>;
+    fn remove<P: AsRef<Path>>(&self, name: P) -> Result<()>;
 
     /// Removes a directory at this path. If `recursively`, removes all its contents.
-    fn remove_dir(&self, dir: &str, recursively: bool) -> Result<()>;
+    fn remove_dir<P: AsRef<Path>>(&self, dir: P, recursively: bool) -> Result<()>;
 
     /// Returns true iff the named file exists.
-    fn exists(&self, name: &str) -> bool;
+    fn exists<P: AsRef<Path>>(&self, name: P) -> bool;
 
     /// Rename a file or directory to a new name, replacing the original file if
     /// `new` already exists.
-    fn rename(&self, old: &str, new: &str) -> Result<()>;
+    fn rename<P: AsRef<Path>>(&self, old: P, new: P) -> Result<()>;
 
     /// Recursively create a directory and all of its parent components if they
     /// are missing.
-    fn mkdir_all(&self, dir: &str) -> Result<()>;
+    fn mkdir_all<P: AsRef<Path>>(&self, dir: P) -> Result<()>;
 
-    /// Returns a list of file names in given
-    fn list(&self, dir: &str) -> Result<Vec<PathBuf>>;
+    /// Returns a list of the full-path to each file in given directory
+    fn list<P: AsRef<Path>>(&self, dir: P) -> Result<Vec<PathBuf>>;
 }
 
 /// A file abstraction for IO operations
-pub trait File {
+pub trait File: Send + Sync {
     fn write(&mut self, buf: &[u8]) -> Result<usize>;
     fn flush(&mut self) -> Result<()>;
     fn close(&mut self) -> Result<()>;
@@ -104,15 +104,10 @@ pub trait File {
                     buf = &mut tmp[n..];
                     offset += n as u64;
                 }
-                Err(mut e) => match e.status() {
-                    Status::IOError => {
-                        if let Some(r) = e.take_raw() {
-                            match r.downcast_ref::<io::Error>() {
-                                Some(r) if r.kind() == io::ErrorKind::Interrupted => {}
-                                _ => return Err(e),
-                            }
-                        } else {
-                            return Err(e);
+                Err(e) => match e {
+                    Error::IO(err) => {
+                        if err.kind() != io::ErrorKind::Interrupted {
+                            return Err(Error::IO(err));
                         }
                     }
                     _ => return Err(e),
@@ -121,7 +116,7 @@ pub trait File {
         }
         if !buf.is_empty() {
             let e = io::Error::new(io::ErrorKind::UnexpectedEof, "failed to fill whole buffer");
-            Err(WickErr::new_from_raw(Status::IOError, None, Box::new(e)))
+            Err(Error::IO(e))
         } else {
             Ok(())
         }
@@ -129,8 +124,8 @@ pub trait File {
 }
 
 /// Write given `data` into underlying `env` file and flush file iff `should_sync` is true
-pub fn do_write_string_to_file(
-    env: Arc<dyn Storage>,
+pub fn do_write_string_to_file<S: Storage>(
+    env: &S,
     data: String,
     file_name: &str,
     should_sync: bool,

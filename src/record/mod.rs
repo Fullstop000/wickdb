@@ -64,8 +64,7 @@ mod tests {
     use crate::storage::File;
     use crate::util::coding::encode_fixed_32;
     use crate::util::crc32::{mask, value};
-    use crate::util::slice::Slice;
-    use crate::util::status::{Result, Status, WickErr};
+    use crate::{Error, Result};
     use rand::Rng;
     use std::cell::RefCell;
     use std::cmp::min;
@@ -101,6 +100,10 @@ mod tests {
         returned_partial: bool,
     }
 
+    // Just for satisfy rustc
+    unsafe impl Send for StringFile {}
+    unsafe impl Sync for StringFile {}
+
     impl StringFile {
         pub fn new(data: Rc<RefCell<Vec<u8>>>) -> Self {
             Self {
@@ -129,10 +132,9 @@ mod tests {
             match pos {
                 SeekFrom::Start(p) => {
                     if p > (self.contents.borrow().len() - 1) as u64 {
-                        return Err(WickErr::new(
-                            Status::NotFound,
-                            Some("in-memory file seeking pasts the end"),
-                        ));
+                        return Err(Error::NotFound(Some(
+                            "in-memory file seeking pasts the end".to_owned(),
+                        )));
                     }
                     self.contents.borrow_mut().drain(0..p as usize);
                     Ok(p)
@@ -146,7 +148,7 @@ mod tests {
             if *self.force_err.borrow() {
                 *self.force_err.borrow_mut() = false;
                 self.returned_partial = true;
-                return Err(WickErr::new(Status::Corruption, Some("read error")));
+                return Err(Error::Corruption("read error".to_owned()));
             }
             if self.contents.borrow().len() < buf.len() {
                 self.returned_partial = true;
@@ -208,8 +210,8 @@ mod tests {
         read_source: StringFile,
         reporter: ReportCollector,
         reading: bool,
-        reader: Reader,
-        writer: Writer,
+        reader: Reader<StringFile>,
+        writer: Writer<StringFile>,
     }
     const INITIAL_OFFSET_RECORD_SIZES: [usize; 6] = [
         10000,
@@ -235,32 +237,27 @@ mod tests {
         pub fn new(reporter: ReportCollector) -> Self {
             let data = Rc::new(RefCell::new(vec![]));
             let f = StringFile::new(data.clone());
-            let writer = Writer::new(Box::new(f.clone()));
+            let writer = Writer::new(f.clone());
             Self {
                 source: data.clone(),
                 read_source: f.clone(),
                 reporter: reporter.clone(),
                 reading: false,
-                reader: Reader::new(
-                    Box::new(f.clone()),
-                    Some(Box::new(reporter.clone())),
-                    true,
-                    0,
-                ),
+                reader: Reader::new(f.clone(), Some(Box::new(reporter.clone())), true, 0),
                 writer,
             }
         }
 
         // Replace the current writer with a new one created from the current StringFile
         pub fn reopen_for_append(&mut self) {
-            let writer = Writer::new(Box::new(StringFile::new(self.source.clone())));
+            let writer = Writer::new(StringFile::new(self.source.clone()));
             self.writer = writer;
         }
 
         pub fn write(&mut self, msg: &str) {
             assert!(!self.reading, "cannot write() when some others are reading");
             self.writer
-                .add_record(&Slice::from(msg))
+                .add_record(msg.as_bytes())
                 .expect("fail to write: ");
         }
 
@@ -314,6 +311,7 @@ mod tests {
         }
 
         pub fn match_error(&self, msg: &str) -> bool {
+            dbg!(self.reporter.message.borrow());
             match self.reporter.message.borrow().find(msg) {
                 Some(_) => true,
                 None => false,
@@ -331,7 +329,7 @@ mod tests {
 
         pub fn start_reading_at(&mut self, initial_offset: u64) {
             self.reader = Reader::new(
-                Box::new(self.read_source.clone()),
+                self.read_source.clone(),
                 Some(Box::new(self.reporter.clone())),
                 true,
                 initial_offset,
@@ -344,7 +342,7 @@ mod tests {
             self.reading = true;
             let size = self.written_bytes() as u64;
             let mut reader = Reader::new(
-                Box::new(self.read_source.clone()),
+                self.read_source.clone(),
                 Some(Box::new(self.reporter.clone())),
                 true,
                 size + offset_past_end,
@@ -362,7 +360,7 @@ mod tests {
             self.write_initial_offset_log();
             self.reading = true;
             let mut reader = Reader::new(
-                Box::new(self.read_source.clone()),
+                self.read_source.clone(),
                 Some(Box::new(self.reporter.clone())),
                 true,
                 initial_offset,
