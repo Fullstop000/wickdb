@@ -25,6 +25,8 @@ use std::mem;
 ///
 /// An `Iterator` should be invalid once created
 pub trait Iterator {
+    type Key ;
+    type Value;
     /// An iterator is either positioned at a key/value pair, or
     /// not valid.  This method returns true iff the iterator is valid.
     fn valid(&self) -> bool;
@@ -56,13 +58,13 @@ pub trait Iterator {
     /// the returned slice is valid only until the next modification of
     /// the iterator.
     /// REQUIRES: `valid()`
-    fn key(&self) -> Slice;
+    fn key(&self) -> Self::Key;
 
     /// Return the value for the current entry.  The underlying storage for
     /// the returned slice is valid only until the next modification of
     /// the iterator.
     /// REQUIRES: `valid()`
-    fn value(&self) -> Slice;
+    fn value(&self) -> Self::Value;
 
     /// If an error has occurred, return it.  Else return an ok status.
     fn status(&mut self) -> Result<()>;
@@ -88,6 +90,7 @@ pub trait DerivedIterFactory {
 }
 
 impl<I: Iterator, F: DerivedIterFactory> ConcatenateIterator<I, F> {
+    
     pub fn new(origin: I, factory: F) -> Self {
         Self {
             origin,
@@ -186,6 +189,8 @@ impl<I: Iterator, F: DerivedIterFactory> ConcatenateIterator<I, F> {
 }
 
 impl<I: Iterator, F: DerivedIterFactory> Iterator for ConcatenateIterator<I, F> {
+     type Key = Slice;
+     type Value = Slice;
     fn valid(&self) -> bool {
         if let Some(di) = &self.derived {
             di.valid()
@@ -235,14 +240,14 @@ impl<I: Iterator, F: DerivedIterFactory> Iterator for ConcatenateIterator<I, F> 
         self.skip_backward();
     }
 
-    fn key(&self) -> Slice {
+    fn key(&self) -> Self::Key {
         self.valid_or_panic();
         self.derived
             .as_ref()
             .map_or(Slice::default(), |di| di.key())
     }
 
-    fn value(&self) -> Slice {
+    fn value(&self) -> Self::Value {
         self.valid_or_panic();
         self.derived
             .as_ref()
