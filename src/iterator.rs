@@ -25,7 +25,11 @@ use std::mem;
 ///
 /// An `Iterator` should be invalid once created
 pub trait Iterator {
+<<<<<<< HEAD
     type Key;
+=======
+    type Key ;
+>>>>>>> assoicated type in iterator.rs
     type Value;
     /// An iterator is either positioned at a key/value pair, or
     /// not valid.  This method returns true iff the iterator is valid.
@@ -90,7 +94,12 @@ pub trait DerivedIterFactory {
     fn derive(&self, value: &[u8]) -> Result<Self::Iter>;
 }
 
+<<<<<<< HEAD
 impl<I: Iterator<Key = Slice, Value = Slice>, F: DerivedIterFactory> ConcatenateIterator<I, F> {
+=======
+impl<I: Iterator, F: DerivedIterFactory> ConcatenateIterator<I, F> {
+    
+>>>>>>> assoicated type in iterator.rs
     pub fn new(origin: I, factory: F) -> Self {
         Self {
             origin,
@@ -188,12 +197,18 @@ impl<I: Iterator<Key = Slice, Value = Slice>, F: DerivedIterFactory> Concatenate
     }
 }
 
+<<<<<<< HEAD
 impl<I: Iterator<Key = Slice, Value = Slice>, F: DerivedIterFactory> Iterator
     for ConcatenateIterator<I, F>
 {
     type Key = <<F as DerivedIterFactory>::Iter as Iterator>::Key;
     type Value = <<F as DerivedIterFactory>::Iter as Iterator>::Value;
 
+=======
+impl<I: Iterator, F: DerivedIterFactory> Iterator for ConcatenateIterator<I, F> {
+     type Key = Slice;
+     type Value = Slice;
+>>>>>>> assoicated type in iterator.rs
     fn valid(&self) -> bool {
         if let Some(di) = &self.derived {
             di.valid()
