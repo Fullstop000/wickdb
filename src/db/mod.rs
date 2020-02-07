@@ -337,7 +337,6 @@ impl<S: Storage + Clone> WickDB<S> {
                 // so reschedule another compaction if needed
                 let current = db.versions.lock().unwrap().current();
                 db.maybe_schedule_compaction(current);
-                db.background_work_finished_signal.notify_all();
             }
         });
     }
@@ -1047,6 +1046,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
                 }
             }
         }
+        self.background_work_finished_signal.notify_all();
     }
 
     // Merging files in level n into file in level n + 1 and
@@ -1433,6 +1433,7 @@ mod tests {
                 let l = db.versions.lock().unwrap();
                 {
                     let _ = db.background_work_finished_signal.wait(l);
+                    dbg!("backgroud_work_finished");
                 }
                 sender.send(()).unwrap();
             });
