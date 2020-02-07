@@ -27,14 +27,25 @@ use crate::version::version_edit::{FileMetaData, VersionEdit};
 use crate::version::version_set::{total_file_size, FileIterFactory, SSTableIters};
 use crate::version::{LevelFileNumIterator, Version};
 use std::cmp::Ordering as CmpOrdering;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 /// Information for a manual compaction
+#[derive(Clone)]
 pub struct ManualCompaction {
     pub level: usize,
-    pub done: bool,
+    pub done: Arc<AtomicBool>,
     pub begin: Option<InternalKey>, // None means beginning of key range
     pub end: Option<InternalKey>,   // None means end of key range
+}
+
+impl PartialEq for ManualCompaction {
+    fn eq(&self, other: &ManualCompaction) -> bool {
+        Arc::ptr_eq(&self.done, &other.done)
+            && self.level == other.level
+            && self.begin == other.begin
+            && self.end == other.end
+    }
 }
 
 /// A helper enum describing relations between the indexes of `inputs` in `Compaction`

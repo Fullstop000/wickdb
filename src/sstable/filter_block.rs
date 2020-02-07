@@ -22,7 +22,7 @@ use std::rc::Rc;
 const FILTER_BASE_LG: usize = 11;
 const FILTER_BASE: usize = 1 << FILTER_BASE_LG; // 2KiB
 const FILTER_META_LENGTH: usize = 5; // 4bytes filter offsets length + 1bytes base log
-
+const FILTER_OFFSET_LEN: usize = 4; // u32 length
 /// A `FilterBlockBuilder` is used to construct all of the filters for a
 /// particular Table.  It generates a single string which is stored as
 /// a special block in the Table.
@@ -33,6 +33,9 @@ pub struct FilterBlockBuilder {
     keys: Vec<Vec<u8>>,
     // all the filter block data computed so far
     // `data` includes filter trailer only after calling `finish`
+    //
+    // |----- filter data -----|----- filter offsets ----|--- filter offsets len ---|--- BASE_LG ---|
+    //                                   num * 4 bytes              4 bytes               1 byte
     data: Vec<u8>,
     // the offset of every filter in the data
     filter_offsets: Vec<u32>,
@@ -50,15 +53,16 @@ impl FilterBlockBuilder {
 
     /// Adds the given key into the builder
     pub fn add_key(&mut self, key: &[u8]) {
+        // TODO: remove this clone
         let key = Vec::from(key);
         self.keys.push(key);
     }
 
-    /// generates filter data for the data block on given `block_offset`
+    /// Generates filter data for the data block on given `block_offset`
     pub fn start_block(&mut self, block_offset: u64) {
         // calc the filter index for the given block offset
-        // the filter with the index i filters the block data
-        // from i* FILTER_BASE ~ (i + 1) * FILTER_BASE
+        // the filter with the index i handles the block data
+        // in offset range [i* FILTER_BASE, (i + 1) * FILTER_BASE)
         let filter_index = block_offset / FILTER_BASE as u64;
         let filters_len = self.filter_offsets.len() as u64;
         assert!(
@@ -80,25 +84,25 @@ impl FilterBlockBuilder {
             self.generate_filter();
         };
         // append per-filter offsets
-        for i in 0..self.filter_offsets.len() {
-            put_fixed_32(&mut self.data, self.filter_offsets[i]);
+        for offset in self.filter_offsets.iter() {
+            put_fixed_32(&mut self.data, *offset);
         }
         // append the 4bytes offset length
         put_fixed_32(&mut self.data, self.filter_offsets.len() as u32);
         // append the 1byte base lg
         self.data.push(FILTER_BASE_LG as u8);
-        self.data.as_slice()
+        &self.data
     }
 
-    // convert 'keys' to the filter by 'policy'
+    // Converts 'keys' to an encoded filter vec by 'policy'
     fn generate_filter(&mut self) {
-        let num_keys = self.keys.len();
-        if num_keys == 0 {
+        if self.keys.is_empty() {
             // fast path if there are no keys
-            self.filter_offsets.push(self.data.len() as u32)
+            self.filter_offsets.push(self.data.len() as u32);
+            return;
         };
-        let filter = self.policy.create_filter(self.keys.as_slice());
         self.filter_offsets.push(self.data.len() as u32);
+        let filter = self.policy.create_filter(&self.keys);
         self.data.extend(filter);
         // clear the keys
         self.keys.clear();
@@ -130,7 +134,7 @@ impl FilterBlockReader {
         }
         r.num = decode_fixed_32(&filter_block[n - FILTER_META_LENGTH..n - 1]) as usize;
         // invalid filter offsets length
-        if r.num * 4 + FILTER_META_LENGTH > n {
+        if r.num * FILTER_OFFSET_LEN + FILTER_META_LENGTH > n {
             return r;
         }
         r.base_lg = filter_block[n - 1] as usize;
@@ -139,21 +143,24 @@ impl FilterBlockReader {
         r
     }
 
-    /// Returns iff the given key is probably contained in the given `block_offset` block
+    /// Returns true if the given key is probably contained in the given `block_offset` block
     pub fn key_may_match(&self, block_offset: u64, key: &[u8]) -> bool {
         let i = block_offset as usize >> self.base_lg; // a >> b == a / (1 << b)
         if i < self.num {
-            let (filter, offsets) = self
+            let (filter, offsets) = &self
                 .data
-                .as_slice()
-                .split_at(self.data.len() - self.num * 4);
-            let start = decode_fixed_32(&offsets[i * 4..i * 4 + 4]) as usize;
+                .split_at(self.data.len() - self.num * FILTER_OFFSET_LEN);
+            let start =
+                decode_fixed_32(&offsets[i * FILTER_OFFSET_LEN..(i + 1) * FILTER_OFFSET_LEN])
+                    as usize;
             let end = {
                 if i + 1 >= self.num {
                     // this is the last filter
                     filter.len()
                 } else {
-                    decode_fixed_32(&offsets[i * 4 + 4..i * 4 + 8]) as usize
+                    decode_fixed_32(
+                        &offsets[(i + 1) * FILTER_OFFSET_LEN..(i + 2) * FILTER_OFFSET_LEN],
+                    ) as usize
                 }
             };
             let filter = &self.data[start..end];

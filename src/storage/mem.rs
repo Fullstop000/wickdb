@@ -41,25 +41,25 @@ pub struct MemStorage {
     inner: Arc<RwLock<HashMap<String, Node>>>,
 
     // ---- Parameters for fault injection
-    // sstable/log `flush()` calls are blocked.
-    delay_data_sync: Arc<AtomicBool>,
+    /// sstable/log `flush()` calls are blocked.
+    pub delay_data_sync: Arc<AtomicBool>,
 
-    // sstable/log `flush()` calls return an error
-    data_sync_error: Arc<AtomicBool>,
+    /// sstable/log `flush()` calls return an error
+    pub data_sync_error: Arc<AtomicBool>,
 
-    // Simulate no-space errors
-    no_space: Arc<AtomicBool>,
+    /// Simulate no-space errors
+    pub no_space: Arc<AtomicBool>,
 
-    // Simulate non-writable file system
-    non_writable: Arc<AtomicBool>,
+    /// Simulate non-writable file system
+    pub non_writable: Arc<AtomicBool>,
 
-    // Force sync of manifest files to fail
-    manifest_sync_error: Arc<AtomicBool>,
+    /// Force sync of manifest files to fail
+    pub manifest_sync_error: Arc<AtomicBool>,
 
-    // Force write to manifest files to fail
-    manifest_write_error: Arc<AtomicBool>,
+    /// Force write to manifest files to fail
+    pub manifest_write_error: Arc<AtomicBool>,
 
-    count_random_reads: bool,
+    pub count_random_reads: bool,
 }
 
 impl Default for MemStorage {
@@ -154,7 +154,12 @@ impl Storage for MemStorage {
         let path = clean(name);
         self.is_ok_to_create(path.as_path())?;
         let name = path.to_str().unwrap().to_owned();
-        let file_node = FileNode::new(&name);
+        let mut file_node = FileNode::new(&name);
+        file_node.delay_data_sync = self.delay_data_sync.clone();
+        file_node.data_sync_error = self.data_sync_error.clone();
+        file_node.no_space = self.no_space.clone();
+        file_node.manifest_sync_error = self.manifest_sync_error.clone();
+        file_node.manifest_write_error = self.manifest_write_error.clone();
         self.inner
             .write()
             .unwrap()

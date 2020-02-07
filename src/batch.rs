@@ -53,17 +53,19 @@ pub const HEADER_SIZE: usize = 12;
 /// non-const method, all threads accessing the same WriteBatch must use
 /// external synchronization.
 ///
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct WriteBatch {
     contents: Vec<u8>,
 }
 
-impl WriteBatch {
-    pub fn new() -> Self {
+impl Default for WriteBatch {
+    fn default() -> Self {
         let contents = vec![0; HEADER_SIZE];
         Self { contents }
     }
+}
 
+impl WriteBatch {
     #[inline]
     pub fn data(&self) -> &[u8] {
         self.contents.as_slice()
@@ -167,30 +169,33 @@ impl WriteBatch {
         self.contents.clear();
         self.contents.append(src);
     }
+
+    /// Returns the number of entires included in this entry
     #[inline]
     pub fn get_count(&self) -> u32 {
-        decode_fixed_32(&self.contents.as_slice()[8..])
+        decode_fixed_32(&self.contents[8..])
     }
 
     #[inline]
     pub(crate) fn set_count(&mut self, count: u32) {
-        let s = self.contents.as_mut_slice();
-        encode_fixed_32(&mut s[8..], count)
+        encode_fixed_32(&mut self.contents[8..], count)
     }
 
     #[inline]
     pub(crate) fn set_sequence(&mut self, seq: u64) {
-        encode_fixed_64(self.contents.as_mut_slice(), seq)
+        encode_fixed_64(&mut self.contents, seq)
     }
 
+    /// Returns the seq number of this batch
     #[inline]
     pub fn get_sequence(&self) -> u64 {
-        decode_fixed_64(self.contents.as_slice())
+        decode_fixed_64(&self.contents)
     }
 
+    /// Returns false when this batch contains no entries to be written
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.contents.is_empty()
+        self.get_count() == 0
     }
 }
 
@@ -243,14 +248,14 @@ mod tests {
 
     #[test]
     fn test_empty_batch() {
-        let b = WriteBatch::new();
+        let b = WriteBatch::default();
         assert_eq!("", print_contents(&b).as_str());
-        assert_eq!(0, b.get_count());
+        assert!(b.is_empty());
     }
 
     #[test]
     fn test_multiple_records() {
-        let mut b = WriteBatch::new();
+        let mut b = WriteBatch::default();
         b.put("foo".as_bytes(), "bar".as_bytes());
         b.delete("box".as_bytes());
         b.put("baz".as_bytes(), "boo".as_bytes());
@@ -265,7 +270,7 @@ mod tests {
 
     #[test]
     fn test_corrupted_batch() {
-        let mut b = WriteBatch::new();
+        let mut b = WriteBatch::default();
         b.put("foo".as_bytes(), "bar".as_bytes());
         b.delete("box".as_bytes());
         b.set_sequence(200);
@@ -278,8 +283,8 @@ mod tests {
 
     #[test]
     fn test_append_batch() {
-        let mut b1 = WriteBatch::new();
-        let mut b2 = WriteBatch::new();
+        let mut b1 = WriteBatch::default();
+        let mut b2 = WriteBatch::default();
         b1.set_sequence(200);
         b2.set_sequence(300);
         b1.append(b2.clone());
@@ -301,7 +306,7 @@ mod tests {
 
     #[test]
     fn test_approximate_size() {
-        let mut b = WriteBatch::new();
+        let mut b = WriteBatch::default();
         let empty_size = b.approximate_size();
         b.put("foo".as_bytes(), "bar".as_bytes());
         let one_key_size = b.approximate_size();
