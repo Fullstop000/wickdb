@@ -852,15 +852,13 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         }
     }
 
-    // Force current memtable contents to be compacted into level 0 sst files
+    // Force current memtable contents(even if the memtable is not full) to be compacted into sst files
     fn force_compact_mem_table(&self) -> Result<()> {
         let empty_batch = WriteBatch::default();
         // Schedule a force memory compaction
         self.schedule_batch_and_wait(WriteOptions::default(), empty_batch, true)?;
-        // Waiting for compaction finishing
-        let l = Mutex::new(());
-        let _ = self.background_work_finished_signal.wait(l.lock().unwrap());
-
+        // Waiting for memory compaction complete 
+        thread::sleep(Duration::from_secs(1));
         if self.im_mem.read().unwrap().is_some() {
             return self.take_bg_error().map_or(Ok(()), |e| Err(e));
         }
@@ -1675,6 +1673,7 @@ mod tests {
     }
 
     #[test]
+    // Test getting kv from immutable memtable and SSTable
     fn test_get_from_immutable_layer() {
         for t in cases(|mut opt| {
             opt.write_buffer_size = 100000; // Small write buffer
@@ -1690,6 +1689,63 @@ mod tests {
             thread::sleep(Duration::from_secs(2));
             // Try to retrieve key "foo" from level 0 files
             assert_eq!("v1", t.get("foo", None).unwrap()); // "v1" on SST files
+        }
+    }
+
+    #[test]
+    // Test `force_compact_mem_table` and kv look up after compaction
+    fn test_get_from_versions() {
+        for t in default_cases() {
+            t.assert_put_get("foo", "v1");
+            t.db.inner.force_compact_mem_table().unwrap();
+            assert_eq!("v1", t.get("foo", None).unwrap());
+        }
+    }
+
+    #[test]
+    // Test look up key with snapshot
+    fn test_get_with_snapshot() {
+        for t in default_cases() {
+            let keys = vec![
+                String::from("foo"),
+                "x".repeat(200),
+            ];
+            for key in keys {
+                t.assert_put_get(&key, "v1");
+                let s = t.db.snapshot();
+                t.put(&key, "v2").unwrap();
+                assert_eq!(t.get(&key, None).unwrap(), "v2");
+                assert_eq!(t.get(&key, Some(s.sequence().into())).unwrap(), "v1");
+                t.db.inner.force_compact_mem_table().unwrap();
+                assert_eq!(t.get(&key, None).unwrap(), "v2");
+                assert_eq!(t.get(&key, Some(s.sequence().into())).unwrap(), "v1");
+            }
+        }
+    }
+
+    #[test]
+    fn test_get_with_identical_snapshots() {
+        for t in default_cases() {
+            let keys = vec![
+                String::from("foo"),
+                "x".repeat(200),
+            ];
+            for key in keys {
+                t.assert_put_get(&key, "v1");
+                let s1 = t.db.snapshot();
+                let s2 = t.db.snapshot();
+                let s3 = t.db.snapshot();
+                t.assert_put_get(&key, "v2");
+                assert_eq!(t.get(&key, Some(s1.sequence().into())).unwrap(), "v1");
+                assert_eq!(t.get(&key, Some(s2.sequence().into())).unwrap(), "v1");
+                assert_eq!(t.get(&key, Some(s3.sequence().into())).unwrap(), "v1");
+                mem::drop(s1);
+                t.db.inner.force_compact_mem_table().unwrap();
+                assert_eq!(t.get(&key, None).unwrap(), "v2");
+                assert_eq!(t.get(&key, Some(s2.sequence().into())).unwrap(), "v1");
+                mem::drop(s2);
+                assert_eq!(t.get(&key, Some(s3.sequence().into())).unwrap(), "v1");
+            }
         }
     }
 }

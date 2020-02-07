@@ -34,6 +34,14 @@ impl Snapshot {
     }
 }
 
+impl From<u64> for Snapshot {
+    fn from(src: u64) -> Snapshot {
+        Snapshot {
+            sequence_number: src,
+        }
+    }
+}
+
 /// Different from the C++ implementation,  a VecDequeue is handled for the SnapshotList because
 /// a safe double-linked circular list implementation in Rust is tough and not worth it.
 /// Although Rust provides a standard double linked list, use a array based containers are faster.
