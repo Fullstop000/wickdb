@@ -1431,7 +1431,9 @@ mod tests {
             let (sender, recv) = crossbeam_channel::bounded(0);
             thread::spawn(move || {
                 let l = db.versions.lock().unwrap();
-                let _ = db.background_work_finished_signal.wait(l);
+                {
+                    let _ = db.background_work_finished_signal.wait(l);
+                }
                 sender.send(()).unwrap();
             });
             recv
@@ -1706,7 +1708,7 @@ mod tests {
             t.put("k1", &"x".repeat(100000)).unwrap(); // fill memtable
             assert_eq!("v1", t.get("foo", None).unwrap()); // "v1" on immutable table
             t.put("k2", &"y".repeat(100000)).unwrap(); // trigger compaction
-                                                       // Waiting for compaction finish
+            // Waiting for compaction finish
             r.recv_timeout(Duration::from_secs(30)).unwrap();
             // Try to retrieve key "foo" from level 0 files
             assert_eq!("v1", t.get("foo", None).unwrap()); // "v1" on SST files
