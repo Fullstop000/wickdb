@@ -44,7 +44,7 @@ script:
   - if [[ $TRAVIS_RUST_VERSION == "stable" ]]; then cargo fmt -- --check; fi
   - if [[ $TRAVIS_RUST_VERSION == "stable" ]]; then cargo clippy --all; fi
   - cargo build --verbose --all
-  - cargo test --verbose --all -- --nocapture
+  - cargo test --verbose --all
 
 after_success:
   - |
