@@ -84,12 +84,13 @@ pub struct ConcatenateIterator<I: Iterator, F: DerivedIterFactory> {
 
 /// A factory that takes value from the origin and
 pub trait DerivedIterFactory {
-    type Iter: Iterator;
+    type Iter: Iterator<Key=Slice,Value=Slice>;
+
     /// Create a new `Iterator` based on value yield by original `Iterator`
     fn derive(&self, value: &[u8]) -> Result<Self::Iter>;
 }
 
-impl<I: Iterator, F: DerivedIterFactory> ConcatenateIterator<I, F> {
+impl<I: Iterator<Key=Slice,Value=Slice>, F: DerivedIterFactory> ConcatenateIterator<I, F> {
     
     pub fn new(origin: I, factory: F) -> Self {
         Self {
@@ -188,7 +189,7 @@ impl<I: Iterator, F: DerivedIterFactory> ConcatenateIterator<I, F> {
     }
 }
 
-impl<I: Iterator, F: DerivedIterFactory> Iterator for ConcatenateIterator<I, F> {
+impl<I: Iterator<Key=Slice,Value=Slice>, F: DerivedIterFactory> Iterator for ConcatenateIterator<I, F> {
      type Key = Slice;
      type Value = Slice;
     fn valid(&self) -> bool {
@@ -299,7 +300,7 @@ pub trait KMergeCore {
 
     /// Updates the smallest if given `iter` has a smaller value and returns true.
     /// Otherwise returns false.
-    fn smaller(&self, smallest: &mut Option<Slice>, iter: &dyn Iterator) -> bool {
+    fn smaller(&self, smallest: &mut Option<Slice>, iter: &dyn Iterator<Key=Slice,Value=Slice>) -> bool {
         if iter.valid()
             && (smallest.is_none()
                 || self
@@ -316,7 +317,7 @@ pub trait KMergeCore {
 
     /// Updates the smallest if given `iter` has a smaller value and returns true.
     /// Otherwise returns false.
-    fn larger(&self, largest: &mut Option<Slice>, iter: &dyn Iterator) -> bool {
+    fn larger(&self, largest: &mut Option<Slice>, iter: &dyn Iterator<Key=Slice,Value=Slice>) -> bool {
         if iter.valid()
             && (largest.is_none()
                 || self
@@ -338,20 +339,20 @@ pub trait KMergeCore {
     fn find_largest(&mut self) -> usize;
 
     /// Returns an immutable borrow of ith child iterator
-    fn get_child(&self, i: usize) -> &dyn Iterator;
+    fn get_child(&self, i: usize) -> &dyn Iterator<Key=Slice,Value=Slice>;
 
     /// Returns a mutable borrow of ith child iterator
-    fn get_child_mut(&mut self, i: usize) -> &mut dyn Iterator;
+    fn get_child_mut(&mut self, i: usize) -> &mut dyn Iterator<Key=Slice,Value=Slice>;
 
     /// Iterate each child iterator and call `f`
     fn for_each_child<F>(&mut self, f: F)
     where
-        F: FnMut(&mut dyn Iterator);
+        F: FnMut(&mut dyn Iterator<Key=Slice,Value=Slice>);
 
     /// Iterate each child iterator except the ith iterator and call `f`
     fn for_not_ith<F>(&mut self, i: usize, f: F)
     where
-        F: FnMut(&mut dyn Iterator, &dyn Comparator);
+        F: FnMut(&mut dyn Iterator<Key=Slice,Value=Slice>, &dyn Comparator);
 
     /// Returns `Err` if inner children has errors.
     fn take_err(&mut self) -> Result<()>;
@@ -449,7 +450,7 @@ mod tests {
         children: Vec<I>,
     }
 
-    impl<I: Iterator, C: Comparator> KMergeCore for SimpleKMerger<I, C> {
+    impl<I: Iterator<Key=Slice,Value=Slice>, C: Comparator> KMergeCore for SimpleKMerger<I, C> {
         fn cmp(&self) -> &dyn Comparator {
             &self.cmp
         }
@@ -480,30 +481,30 @@ mod tests {
             index
         }
 
-        fn get_child(&self, i: usize) -> &dyn Iterator {
-            self.children.get(i).unwrap() as &dyn Iterator
+        fn get_child(&self, i: usize) -> &dyn Iterator<Key=Slice,Value=Slice> {
+            self.children.get(i).unwrap() as &dyn Iterator<Key=Slice,Value=Slice>
         }
 
-        fn get_child_mut(&mut self, i: usize) -> &mut dyn Iterator {
-            self.children.get_mut(i).unwrap() as &mut dyn Iterator
+        fn get_child_mut(&mut self, i: usize) -> &mut dyn Iterator<Key=Slice,Value=Slice> {
+            self.children.get_mut(i).unwrap() as &mut dyn Iterator<Key=Slice,Value=Slice>
         }
 
         fn for_each_child<F>(&mut self, mut f: F)
         where
-            F: FnMut(&mut dyn Iterator),
+            F: FnMut(&mut dyn Iterator<Key=Slice,Value=Slice>),
         {
             self.children
                 .iter_mut()
-                .for_each(|i| f(i as &mut dyn Iterator));
+                .for_each(|i| f(i as &mut dyn Iterator<Key=Slice,Value=Slice>));
         }
 
         fn for_not_ith<F>(&mut self, n: usize, mut f: F)
         where
-            F: FnMut(&mut dyn Iterator, &dyn Comparator),
+            F: FnMut(&mut dyn Iterator<Key=Slice,Value=Slice>, &dyn Comparator),
         {
             for (i, child) in self.children.iter_mut().enumerate() {
                 if i != n {
-                    f(child as &mut dyn Iterator, &self.cmp)
+                    f(child as &mut dyn Iterator<Key=Slice,Value=Slice>, &self.cmp)
                 }
             }
         }
@@ -554,7 +555,7 @@ mod tests {
         shadow: S, // The iterator to be tested
     }
 
-    impl<O: Iterator, S: Iterator> SortedIterTestSuite<O, S> {
+    impl<O: Iterator<Key=Slice,Value=Slice>, S: Iterator<Key=Slice,Value=Slice>> SortedIterTestSuite<O, S> {
         fn new(origin: O, shadow: S) -> Self {
             Self { origin, shadow }
         }
