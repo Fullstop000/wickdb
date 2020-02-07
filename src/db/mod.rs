@@ -1425,21 +1425,8 @@ mod tests {
             }
             res.trim_end_matches("0,").trim_end_matches(",").to_owned()
         }
-
-        fn subscribe_compaction_complete(&self) -> Receiver<()> {
-            let db = self.inner.clone();
-            let (sender, recv) = crossbeam_channel::bounded(0);
-            thread::spawn(move || {
-                let l = db.versions.lock().unwrap();
-                {
-                    let _ = db.background_work_finished_signal.wait(l);
-                    dbg!("backgroud_work_finished");
-                }
-                sender.send(()).unwrap();
-            });
-            recv
-        }
     }
+
     #[derive(Debug, Clone, Copy, FromPrimitive)]
     enum TestOption {
         Default = 1,
