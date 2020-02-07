@@ -1707,7 +1707,7 @@ mod tests {
             assert_eq!("v1", t.get("foo", None).unwrap()); // "v1" on immutable table
             t.put("k2", &"y".repeat(100000)).unwrap(); // trigger compaction
                                                        // Waiting for compaction finish
-            r.recv().unwrap();
+            r.recv_timeout(Duration::from_secs(30)).unwrap();
             // Try to retrieve key "foo" from level 0 files
             assert_eq!("v1", t.get("foo", None).unwrap()); // "v1" on SST files
         }
