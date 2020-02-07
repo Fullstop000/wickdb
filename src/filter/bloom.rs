@@ -115,7 +115,7 @@ mod tests {
     }
 
     impl Harness {
-        pub fn new() -> Self {
+        fn new() -> Self {
             Self {
                 policy: Box::new(BloomFilter::new(10)),
                 filter: vec![],
@@ -123,21 +123,21 @@ mod tests {
             }
         }
 
-        pub fn add_key(&mut self, key: Vec<u8>) {
+        fn add_key(&mut self, key: Vec<u8>) {
             self.keys.push(key);
         }
 
-        pub fn add_num(&mut self, num: u32) {
+        fn add_num(&mut self, num: u32) {
             let mut k: Vec<u8> = vec![0; 4];
             encode_fixed_32(k.as_mut_slice(), num);
             self.add_key(k);
         }
 
-        pub fn filter_len(&self) -> usize {
+        fn filter_len(&self) -> usize {
             self.filter.len()
         }
 
-        pub fn assert_or_return(&self, key: &[u8], want: bool, assert: bool) -> bool {
+        fn assert_or_return(&self, key: &[u8], want: bool, assert: bool) -> bool {
             let got = (&self).policy.may_contain(self.filter.as_slice(), key);
             if assert {
                 assert_eq!(got, want);
@@ -145,17 +145,17 @@ mod tests {
             got
         }
 
-        pub fn assert_num(&self, key: u32, want: bool, silent: bool) -> bool {
+        fn assert_num(&self, key: u32, want: bool, silent: bool) -> bool {
             let mut k: Vec<u8> = vec![0; 4];
             encode_fixed_32(k.as_mut_slice(), key);
             self.assert_or_return(k.as_slice(), want, !silent)
         }
 
-        pub fn build(&mut self) {
+        fn build(&mut self) {
             self.filter = (&self).policy.create_filter(self.keys.as_slice());
         }
 
-        pub fn reset(&mut self) {
+        fn reset(&mut self) {
             self.filter.clear();
             self.keys.clear();
         }

@@ -1389,6 +1389,8 @@ pub(crate) fn build_table<S: Storage + Clone>(
 }
 
 #[cfg(test)]
+// TODO: remove this after DB test cases are completed
+#[allow(dead_code)]
 mod tests {
     use super::*;
     use crate::storage::mem::MemStorage;
@@ -1496,9 +1498,9 @@ mod tests {
     {
         vec![
             TestOption::Default,
-            // TestOption::Reuse,
-            // TestOption::FilterPolicy,
-            // TestOption::UnCompressed,
+            TestOption::Reuse,
+            TestOption::FilterPolicy,
+            TestOption::UnCompressed,
         ]
         .into_iter()
         .map(|opt| {
@@ -1693,13 +1695,10 @@ mod tests {
 
     #[test]
     fn test_get_from_immutable_layer() {
-        for (i, t) in cases(|mut opt| {
+        for t in cases(|mut opt| {
             opt.write_buffer_size = 100000; // Small write buffer
             opt
-        })
-        .into_iter()
-        .enumerate()
-        {
+        }) {
             t.assert_put_get("foo", "v1");
             let r = t.db.subscribe_compaction_complete();
             // block `flush()`
@@ -1710,7 +1709,7 @@ mod tests {
                                                        // Waiting for compaction finish
             r.recv().unwrap();
             // Try to retrieve key "foo" from level 0 files
-            assert_eq!("v1", t.get("foo", None).unwrap()); // "v1" on level0 files
+            assert_eq!("v1", t.get("foo", None).unwrap()); // "v1" on SST files
         }
     }
 }

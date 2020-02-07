@@ -104,7 +104,6 @@ impl<F: File> Table<F> {
                             if let Ok(filter_block) =
                                 read_block(&t.file, &filter_handle, options.paranoid_checks)
                             {
-                                dbg!("read filter block");
                                 t.filter_reader = Some(FilterBlockReader::new(
                                     t.options.filter_policy.clone().unwrap(),
                                     filter_block,
@@ -155,8 +154,7 @@ impl<F: File> Table<F> {
 
     /// Finds the first entry with the key equal or greater than target and
     /// returns the block iterator direclty
-    ///
-    /// The given `key` is a user key
+    /// The given `key` is an internal key
     ///
     pub fn internal_get<C: Comparator + Clone>(
         &self,
@@ -177,9 +175,7 @@ impl<F: File> Table<F> {
             // check the filter block
             if let Some(filter) = &self.filter_reader {
                 if let Ok((handle, _)) = BlockHandle::decode_from(handle_val.as_slice()) {
-                    dbg!("has filter block");
                     if !filter.key_may_match(handle.offset, key) {
-                        dbg!("no key exist in filter block");
                         maybe_contained = false;
                     }
                 }
@@ -430,10 +426,7 @@ impl<C: Comparator + Clone, F: File> TableBuilder<C, F> {
                 } else {
                     String::from("")
                 };
-                meta_block_builder.add(
-                    filter_key.as_bytes(),
-                    filter_block_handler.encoded().as_slice(),
-                );
+                meta_block_builder.add(filter_key.as_bytes(), &filter_block_handler.encoded());
             }
             meta_block_builder.finish()
         };
@@ -472,6 +465,7 @@ impl<C: Comparator + Clone, F: File> TableBuilder<C, F> {
             "[table builder] try to close a closed TableBuilder"
         );
         self.closed = true;
+        // TODO: return Result<()>
         self.file.close().is_ok();
     }
 
@@ -502,15 +496,14 @@ impl<C: Comparator + Clone, F: File> TableBuilder<C, F> {
             // We've flushed a data block to the file so adding an relate index entry into index block
             assert!(self.data_block.is_empty(), "[table builder] the data block buffer is not empty after flushed, something is wrong");
             let s = if let Some(k) = key {
-                self.cmp.separator(self.last_key.as_slice(), k)
+                self.cmp.separator(&self.last_key, k)
             } else {
-                self.cmp.successor(self.last_key.as_slice())
+                self.cmp.successor(&self.last_key)
             };
             // TODO: use a allocted buffer instead
             let mut handle_encoding = vec![];
             self.pending_handle.encoded_to(&mut handle_encoding);
-            self.index_block
-                .add(s.as_slice(), handle_encoding.as_slice());
+            self.index_block.add(&s, &handle_encoding);
             self.pending_index_entry = false;
             return true;
         }

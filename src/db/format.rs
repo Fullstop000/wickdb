@@ -348,6 +348,12 @@ pub struct InternalFilterPolicy {
     user_policy: Rc<dyn FilterPolicy>,
 }
 
+impl InternalFilterPolicy {
+    pub fn new(user_policy: Rc<dyn FilterPolicy>) -> Self {
+        Self { user_policy }
+    }
+}
+
 impl FilterPolicy for InternalFilterPolicy {
     fn name(&self) -> &str {
         self.user_policy.name()
