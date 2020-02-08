@@ -95,6 +95,7 @@ pub struct Skiplist<C: Comparator, A: Arena> {
     pub(super) arena: A,
     // comparator is used to compare the key of node
     comparator: C,
+    count: AtomicUsize,
 }
 
 impl<C: Comparator, A: Arena> Skiplist<C, A> {
@@ -107,6 +108,7 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
             max_height: AtomicUsize::new(1),
             arena,
             head,
+            count: AtomicUsize::new(0),
         }
     }
 
@@ -153,6 +155,12 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
                 (*(prev[i - 1])).set_next(i, new_node as *mut Node);
             }
         }
+        self.count.fetch_add(1, Ordering::Release);
+    }
+
+    /// Returns current elements count
+    pub fn count(&self) -> usize {
+        self.count.load(Ordering::Acquire)
     }
 
     // Find the nearest node with a key >= the given key.

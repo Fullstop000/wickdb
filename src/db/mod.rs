@@ -857,11 +857,12 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         let empty_batch = WriteBatch::default();
         // Schedule a force memory compaction
         self.schedule_batch_and_wait(WriteOptions::default(), empty_batch, true)?;
-        // Waiting for memory compaction complete 
+        // Waiting for memory compaction complete
         thread::sleep(Duration::from_secs(1));
         if self.im_mem.read().unwrap().is_some() {
             return self.take_bg_error().map_or(Ok(()), |e| Err(e));
         }
+        assert_eq!(self.mem.read().unwrap().count(), 0);
         Ok(())
     }
 
@@ -1706,10 +1707,7 @@ mod tests {
     // Test look up key with snapshot
     fn test_get_with_snapshot() {
         for t in default_cases() {
-            let keys = vec![
-                String::from("foo"),
-                "x".repeat(200),
-            ];
+            let keys = vec![String::from("foo"), "x".repeat(200)];
             for key in keys {
                 t.assert_put_get(&key, "v1");
                 let s = t.db.snapshot();
@@ -1726,10 +1724,7 @@ mod tests {
     #[test]
     fn test_get_with_identical_snapshots() {
         for t in default_cases() {
-            let keys = vec![
-                String::from("foo"),
-                "x".repeat(200),
-            ];
+            let keys = vec![String::from("foo"), "x".repeat(200)];
             for key in keys {
                 t.assert_put_get(&key, "v1");
                 let s1 = t.db.snapshot();
@@ -1746,6 +1741,18 @@ mod tests {
                 mem::drop(s2);
                 assert_eq!(t.get(&key, Some(s3.sequence().into())).unwrap(), "v1");
             }
+        }
+    }
+
+    #[test]
+    fn test_get_level0_ordering() {
+        for t in default_cases() {
+            t.put("bar", "b").unwrap();
+            t.put("foo", "v1").unwrap();
+            t.db.inner.force_compact_mem_table().unwrap();
+            t.put("foo", "v2").unwrap();
+            t.db.inner.force_compact_mem_table().unwrap();
+            assert_eq!(t.get("foo", None).unwrap(), "v2");
         }
     }
 }
