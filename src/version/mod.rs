@@ -642,15 +642,15 @@ mod tests {
 
     struct FindFileTests {
         pub files: Vec<Arc<FileMetaData>>,
-        cmp: Arc<InternalKeyComparator>,
+        cmp: InternalKeyComparator,
     }
 
     impl FindFileTests {
         fn new() -> Self {
             let files: Vec<Arc<FileMetaData>> = Vec::new();
-            let cmp = Arc::new(InternalKeyComparator::new(Arc::new(
-                BytewiseComparator::new(),
-            )));
+            let cmp = InternalKeyComparator::new(Arc::new(
+                BytewiseComparator::default(),
+            ));
 
             Self { files, cmp }
         }
@@ -658,14 +658,14 @@ mod tests {
         fn generate(&mut self, smallest: &Slice, largest: &Slice) {
             let mut file = FileMetaData::default();
             file.number = self.files.len() as u64 + 1;
-            file.smallest = Rc::new(InternalKey::new(smallest, 100, ValueType::Value));
-            file.largest = Rc::new(InternalKey::new(largest, 100, ValueType::Value));
+            file.smallest = InternalKey::new(smallest.as_slice(), 100, ValueType::Value);
+            file.largest = InternalKey::new(largest.as_slice(), 100, ValueType::Value);
             self.files.push(Arc::new(file));
         }
 
         fn find(&self, key: &Slice) -> usize {
-            let target = Slice::from(InternalKey::new(key, 100, ValueType::Value).data());
-            Version::find_file(self.cmp.clone(), &self.files, &target)
+            let target = Slice::from(InternalKey::new(key.as_slice(), 100, ValueType::Value).data());
+            Version::find_file(self.cmp.clone(), &self.files, &target.as_slice())
         }
     }
 
