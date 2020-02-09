@@ -62,13 +62,10 @@ pub struct DBIterator<I: Iterator, S: Storage + Clone + 'static> {
     saved_value: Slice,
 }
 
-<<<<<<< HEAD
+
 impl<I: Iterator<Key = Slice, Value = Slice>, S: Storage + Clone> Iterator for DBIterator<I, S> {
     type Key = Slice;
     type Value = Slice;
-=======
-impl<I: Iterator<Key=Slice,Value=Slice>, S: Storage + Clone> Iterator for DBIterator<I, S> {
->>>>>>> completed assoicated type implemenation
     fn valid(&self) -> bool {
         self.valid
     }
@@ -187,11 +184,7 @@ impl<I: Iterator<Key=Slice,Value=Slice>, S: Storage + Clone> Iterator for DBIter
     }
 }
 
-<<<<<<< HEAD
 impl<I: Iterator<Key = Slice, Value = Slice>, S: Storage + Clone> DBIterator<I, S> {
-=======
-impl<I: Iterator<Key=Slice,Value=Slice>, S: Storage + Clone> DBIterator<I, S> {
->>>>>>> completed assoicated type implemenation
     pub fn new(iter: I, db: Arc<DBImpl<S>>, sequence: u64, ucmp: Arc<dyn Comparator>) -> Self {
         Self {
             valid: false,
@@ -350,16 +343,13 @@ impl<C: Comparator, M: Iterator, T: Iterator> DBIteratorCore<C, M, T> {
     }
 }
 
-<<<<<<< HEAD
+
 impl<
         C: Comparator,
         M: Iterator<Key = Slice, Value = Slice>,
         T: Iterator<Key = Slice, Value = Slice>,
     > KMergeCore for DBIteratorCore<C, M, T>
 {
-=======
-impl<C: Comparator, M: Iterator<Key=Slice,Value=Slice>, T: Iterator<Key=Slice,Value=Slice>> KMergeCore for DBIteratorCore<C, M, T> {
->>>>>>> completed assoicated type implemenation
     fn cmp(&self) -> &dyn Comparator {
         &self.cmp
     }
@@ -404,7 +394,6 @@ impl<C: Comparator, M: Iterator<Key=Slice,Value=Slice>, T: Iterator<Key=Slice,Va
         index
     }
 
-<<<<<<< HEAD
     fn get_child(&self, i: usize) -> &dyn Iterator<Key = Slice, Value = Slice> {
         if i < self.mem_iters.len() {
             self.mem_iters.get(i).unwrap() as &dyn Iterator<Key = Slice, Value = Slice>
@@ -421,29 +410,11 @@ impl<C: Comparator, M: Iterator<Key=Slice,Value=Slice>, T: Iterator<Key=Slice,Va
             let current = i - self.mem_iters.len();
             self.table_iters.get_mut(current).unwrap()
                 as &mut dyn Iterator<Key = Slice, Value = Slice>
-=======
-    fn get_child(&self, i: usize) -> &dyn Iterator<Key=Slice,Value=Slice> {
-        if i < self.mem_iters.len() {
-            self.mem_iters.get(i).unwrap() as &dyn Iterator<Key=Slice,Value=Slice>
-        } else {
-            let current = i - self.mem_iters.len();
-            self.table_iters.get(current).unwrap() as &dyn Iterator<Key=Slice,Value=Slice>
-        }
-    }
-
-    fn get_child_mut(&mut self, i: usize) -> &mut dyn Iterator<Key=Slice,Value=Slice> {
-        if i < self.mem_iters.len() {
-            self.mem_iters.get_mut(i).unwrap() as &mut dyn Iterator<Key=Slice,Value=Slice>
-        } else {
-            let current = i - self.mem_iters.len();
-            self.table_iters.get_mut(current).unwrap() as &mut dyn Iterator<Key=Slice,Value=Slice>
->>>>>>> completed assoicated type implemenation
         }
     }
 
     fn for_each_child<F>(&mut self, mut f: F)
     where
-<<<<<<< HEAD
         F: FnMut(&mut dyn Iterator<Key = Slice, Value = Slice>),
     {
         self.mem_iters
@@ -452,51 +423,29 @@ impl<C: Comparator, M: Iterator<Key=Slice,Value=Slice>, T: Iterator<Key=Slice,Va
         self.table_iters
             .iter_mut()
             .for_each(|i| f(i as &mut dyn Iterator<Key = Slice, Value = Slice>));
-=======
-        F: FnMut(&mut dyn Iterator<Key=Slice,Value=Slice>),
-    {
-        self.mem_iters
-            .iter_mut()
-            .for_each(|i| f(i as &mut dyn Iterator<Key=Slice,Value=Slice>));
-        self.table_iters
-            .iter_mut()
-            .for_each(|i| f(i as &mut dyn Iterator<Key=Slice,Value=Slice>));
->>>>>>> completed assoicated type implemenation
     }
 
     fn for_not_ith<F>(&mut self, n: usize, mut f: F)
     where
-<<<<<<< HEAD
         F: FnMut(&mut dyn Iterator<Key = Slice, Value = Slice>, &dyn Comparator),
-=======
-        F: FnMut(&mut dyn Iterator<Key=Slice,Value=Slice>, &dyn Comparator),
->>>>>>> completed assoicated type implemenation
     {
         if n < self.mem_iters.len() {
             for (i, child) in self.mem_iters.iter_mut().enumerate() {
                 if i != n {
-<<<<<<< HEAD
                     f(
                         child as &mut dyn Iterator<Key = Slice, Value = Slice>,
                         &self.cmp,
                     )
-=======
-                    f(child as &mut dyn Iterator<Key=Slice,Value=Slice>, &self.cmp)
->>>>>>> completed assoicated type implemenation
                 }
             }
         } else {
             let current = n - self.mem_iters.len();
             for (i, child) in self.table_iters.iter_mut().enumerate() {
                 if i != current {
-<<<<<<< HEAD
                     f(
                         child as &mut dyn Iterator<Key = Slice, Value = Slice>,
                         &self.cmp,
                     )
-=======
-                    f(child as &mut dyn Iterator<Key=Slice,Value=Slice>, &self.cmp)
->>>>>>> completed assoicated type implemenation
                 }
             }
         }

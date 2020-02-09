@@ -266,6 +266,7 @@ pub struct SkiplistIterator<C: Comparator, A: Arena> {
 }
 
 impl<C: Comparator, A: Arena> Iterator for SkiplistIterator<C, A> {
+
     type Key = Slice;
     type Value = Slice;
     /// Returns true whether the iterator is positioned at a valid node

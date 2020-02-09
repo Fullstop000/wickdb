@@ -218,6 +218,7 @@ impl<C: Comparator> BlockIterator<C> {
 }
 
 impl<C: Comparator> Iterator for BlockIterator<C> {
+
     type Key = Slice;
     type Value = Slice;
     #[inline]
