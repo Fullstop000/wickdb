@@ -359,6 +359,9 @@ pub trait KMergeCore {
 }
 
 impl<T: KMergeCore> Iterator for KMergeIter<T> {
+    type Key = Slice;
+    type Value = Slice;
+
     fn valid(&self) -> bool {
         let i = self.current;
         if i < self.core.iters_len() {
@@ -421,11 +424,11 @@ impl<T: KMergeCore> Iterator for KMergeIter<T> {
         self.current = self.core.find_largest();
     }
 
-    fn key(&self) -> Slice {
+    fn key(&self) -> Self::Key {
         self.core.get_child(self.current).key()
     }
 
-    fn value(&self) -> Slice {
+    fn value(&self) -> Self::Value {
         self.core.get_child(self.current).value()
     }
 
@@ -589,7 +592,9 @@ mod tests {
         }
     }
 
-    impl<O: Iterator, S: Iterator> Iterator for SortedIterTestSuite<O, S> {
+    impl<O: Iterator<Key=Slice,Value=Slice>, S: Iterator<Key=Slice,Value=Slice>> Iterator for SortedIterTestSuite<O, S> {
+        type Key = Slice;
+        type Value = Slice;
         fn valid(&self) -> bool {
             self.origin.valid() && self.shadow.valid()
         }
@@ -618,11 +623,11 @@ mod tests {
             self.shadow.prev();
         }
 
-        fn key(&self) -> Slice {
+        fn key(&self) -> Self::Key {
             unimplemented!()
         }
 
-        fn value(&self) -> Slice {
+        fn value(&self) -> Self::Value {
             unimplemented!()
         }
 
@@ -652,6 +657,8 @@ mod tests {
     }
 
     impl Iterator for TestSimpleArrayIter {
+        type Key=Slice;
+        type Value=Slice;
         fn valid(&self) -> bool {
             self.current < self.inner.len() && self.inner.len() > 0
         }
@@ -693,12 +700,12 @@ mod tests {
             }
         }
 
-        fn key(&self) -> Slice {
+        fn key(&self) -> Self::Key {
             self.valid_or_panic();
             Slice::from(self.inner[self.current].as_str())
         }
 
-        fn value(&self) -> Slice {
+        fn value(&self) -> Self::Value {
             self.key()
         }
 
