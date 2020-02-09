@@ -218,6 +218,8 @@ impl<C: Comparator> BlockIterator<C> {
 }
 
 impl<C: Comparator> Iterator for BlockIterator<C> {
+    type Key= Slice;
+    type Value = Slice;
     #[inline]
     fn valid(&self) -> bool {
         self.current < self.restarts
@@ -310,12 +312,12 @@ impl<C: Comparator> Iterator for BlockIterator<C> {
 
     // NOTICE: All the slices return by `key()` point to the same memory so be careful
     // when call this in the loop
-    fn key(&self) -> Slice {
+    fn key(&self) -> Self::Key {
         self.valid_or_panic();
         Slice::from(self.key.as_slice())
     }
 
-    fn value(&self) -> Slice {
+    fn value(&self) -> Self::Value {
         self.valid_or_panic();
         let val_offset = self.next_entry_offset() - self.value_len;
         let val = &self.data[val_offset as usize..(val_offset + self.value_len) as usize];

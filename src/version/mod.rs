@@ -575,6 +575,8 @@ impl LevelFileNumIterator {
 }
 
 impl Iterator for LevelFileNumIterator {
+    type Key = Slice;
+    type Value = Slice;
     fn valid(&self) -> bool {
         self.index < self.files.len()
     }
@@ -616,13 +618,13 @@ impl Iterator for LevelFileNumIterator {
     }
 
     // make sure the underlying data's lifetime is longer than returning Slice
-    fn key(&self) -> Slice {
+    fn key(&self) -> Self::Key {
         self.valid_or_panic();
         Slice::from(self.files[self.index].largest.data())
     }
 
     // make sure the iterator's lifetime is longer than returning Slice
-    fn value(&self) -> Slice {
+    fn value(&self) -> Self::Value {
         self.valid_or_panic();
         Slice::from(&self.value_buf[..])
     }

@@ -63,6 +63,8 @@ pub struct DBIterator<I: Iterator, S: Storage + Clone + 'static> {
 }
 
 impl<I: Iterator<Key=Slice,Value=Slice>, S: Storage + Clone> Iterator for DBIterator<I, S> {
+    type Key= Slice;
+    type Value = Slice;
     fn valid(&self) -> bool {
         self.valid
     }
@@ -156,7 +158,7 @@ impl<I: Iterator<Key=Slice,Value=Slice>, S: Storage + Clone> Iterator for DBIter
         self.find_prev_user_key();
     }
 
-    fn key(&self) -> Slice {
+    fn key(&self) -> Self::Key {
         self.valid_or_panic();
         match self.direction {
             Direction::Forward => Slice::from(extract_user_key(self.inner.key().as_slice())),
@@ -164,7 +166,7 @@ impl<I: Iterator<Key=Slice,Value=Slice>, S: Storage + Clone> Iterator for DBIter
         }
     }
 
-    fn value(&self) -> Slice {
+    fn value(&self) -> Self::Value {
         self.valid_or_panic();
         match self.direction {
             Direction::Forward => self.inner.value(),
