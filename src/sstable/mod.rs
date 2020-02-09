@@ -477,7 +477,11 @@ mod tests {
     // Helper class for tests to unify the interface between
     // BlockBuilder/TableBuilder and Block/Table
     trait Constructor {
+<<<<<<< HEAD
         type Iter: Iterator<Key = Slice, Value = Slice>;
+=======
+        type Iter: Iterator<Key=Slice,Value=Slice>;
+>>>>>>> completed assoicated type implemenation
 
         fn new(is_reversed: bool) -> Self;
 
@@ -588,7 +592,11 @@ mod tests {
         }
     }
 
+<<<<<<< HEAD
     impl<I: Iterator<Key = Slice, Value = Slice>> Iterator for KeyConvertingIterator<I> {
+=======
+    impl<I: Iterator<Key=Slice,Value=Slice>> Iterator for KeyConvertingIterator<I> {
+>>>>>>> completed assoicated type implemenation
         type Key = Slice;
         type Value = Slice;
         fn valid(&self) -> bool {
@@ -661,9 +669,14 @@ mod tests {
     }
 
     impl Iterator for EntryIterator {
+<<<<<<< HEAD
         type Key = Slice;
         type Value = Slice;
 
+=======
+        type  Key = Slice;
+        type Value = Slice;
+>>>>>>> completed assoicated type implemenation
         fn valid(&self) -> bool {
             self.current < self.data.len()
         }
@@ -997,7 +1010,11 @@ mod tests {
 
     // Return a String represents current entry of the given iterator
     #[inline]
+<<<<<<< HEAD
     fn format_entry(iter: &dyn Iterator<Key = Slice, Value = Slice>) -> String {
+=======
+    fn format_entry(iter: &dyn Iterator<Key=Slice,Value=Slice>) -> String {
+>>>>>>> completed assoicated type implemenation
         format!("'{:?}->{:?}'", iter.key(), iter.value())
     }
 
