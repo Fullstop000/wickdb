@@ -660,8 +660,14 @@ mod tests {
     }
 
     impl Iterator for EntryIterator {
+<<<<<<< HEAD
         type  Key = Slice;
         type Value = Slice;
+=======
+        type Key = Slice;
+        type Value = Slice;
+
+>>>>>>> complete db and mem assoicated-type implementation
         fn valid(&self) -> bool {
             self.current < self.data.len()
         }

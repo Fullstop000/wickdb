@@ -218,7 +218,11 @@ impl<C: Comparator> BlockIterator<C> {
 }
 
 impl<C: Comparator> Iterator for BlockIterator<C> {
+<<<<<<< HEAD
     type Key= Slice;
+=======
+    type Key = Slice;
+>>>>>>> complete db and mem assoicated-type implementation
     type Value = Slice;
     #[inline]
     fn valid(&self) -> bool {
