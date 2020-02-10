@@ -311,7 +311,6 @@ mod tests {
         }
 
         pub fn match_error(&self, msg: &str) -> bool {
-            dbg!(self.reporter.message.borrow());
             match self.reporter.message.borrow().find(msg) {
                 Some(_) => true,
                 None => false,

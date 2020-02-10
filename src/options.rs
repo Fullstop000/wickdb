@@ -19,6 +19,7 @@
 use crate::cache::lru::LRUCache;
 use crate::cache::Cache;
 use crate::db::filename::{generate_filename, FileType};
+use crate::db::format::InternalFilterPolicy;
 use crate::filter::FilterPolicy;
 use crate::logger::Logger;
 use crate::snapshot::Snapshot;
@@ -224,6 +225,9 @@ impl Options {
         self.apply_logger();
         if self.block_cache.is_none() {
             self.block_cache = Some(Arc::new(LRUCache::new(8 << 20, None)))
+        }
+        if let Some(fp) = std::mem::replace(&mut self.filter_policy, None) {
+            self.filter_policy = Some(Rc::new(InternalFilterPolicy::new(fp)));
         }
     }
     #[allow(unused_must_use)]

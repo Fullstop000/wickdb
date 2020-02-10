@@ -789,7 +789,7 @@ mod tests {
             data: &[(Vec<u8>, Vec<u8>)],
         ) -> Result<()> {
             for (key, value) in data.iter() {
-                let mut batch = WriteBatch::new();
+                let mut batch = WriteBatch::default();
                 batch.put(key.as_slice(), value.as_slice());
                 self.inner
                     .write(WriteOptions::default(), batch)

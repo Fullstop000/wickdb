@@ -15,7 +15,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use crate::compaction::{base_range, total_range, Compaction, CompactionStats, ManualCompaction};
+use crate::compaction::{base_range, total_range, Compaction, CompactionStats};
 use crate::db::build_table;
 use crate::db::filename::{generate_filename, parse_filename, update_current, FileType};
 use crate::db::format::{InternalKey, InternalKeyComparator};
@@ -112,23 +112,26 @@ impl VersionBuilder {
     }
 
     /// Apply all the changes on the base Version and produce a new Version based on it
-    /// same as `save_to` in C++ implementation
+    /// same as `SaveTo` in C++ implementation
     pub fn apply_to_new(&mut self) -> Version {
         // TODO: config this to the option
         let icmp = InternalKeyComparator::new(Arc::new(BytewiseComparator::default()));
         let mut v = Version::new(self.base.options.clone(), icmp.clone());
-        for (level, (mut base_files, delta)) in self
+        for (level, (base_files, delta)) in self
             .base
             .files
             .drain(..)
             .zip(self.levels.drain(..))
             .enumerate()
         {
-            for file in base_files.drain(..) {
+            for file in base_files {
                 // filter the deleted files
                 if !delta.deleted_files.contains(&file.number) {
                     v.files[level].push(file)
                 }
+            }
+            for added_file in delta.added_files {
+                v.files[level].push(Arc::new(added_file));
             }
             if level == 0 {
                 // sort by file number
@@ -145,8 +148,22 @@ impl VersionBuilder {
                 // sort by smallest key
                 v.files[level].sort_by(|a, b| icmp.compare(a.smallest.data(), b.smallest.data()))
             }
+            if level > 0 {
+                debug_assert!(!Self::has_overlapping(&icmp, &v.files[level]));
+            }
         }
         v
+    }
+
+    // Returns true if the given collection of files has overlapping with each other.
+    // Only used for files in level > 0
+    fn has_overlapping(icmp: &InternalKeyComparator, files: &[Arc<FileMetaData>]) -> bool {
+        for fs in files.windows(2) {
+            if icmp.compare(fs[0].largest.data(), fs[1].smallest.data()) != CmpOrdering::Less {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -158,8 +175,6 @@ pub struct VersionSet<S: Storage + Clone> {
     pub compaction_stats: Vec<CompactionStats>,
     // Set of table files to protect from deletion because they are part of ongoing compaction
     pub pending_outputs: HashSet<u64>,
-    // Represent a manual compaction, temporarily just for test
-    pub manual_compaction: Option<ManualCompaction>,
     // WAL writer
     pub record_writer: Option<Writer<S::F>>,
 
@@ -199,7 +214,6 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
             snapshots: SnapshotList::new(),
             compaction_stats,
             pending_outputs: HashSet::default(),
-            manual_compaction: None,
             db_name,
             storage,
             record_writer: None,
@@ -219,7 +233,8 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
     #[inline]
     pub fn level_files_count(&self, level: usize) -> usize {
         assert!(level < self.options.max_levels as usize);
-        self.versions.front().unwrap().files[level].len()
+        let level_files = &self.versions.front().unwrap().files;
+        level_files.get(level).map_or(0, |files| files.len())
     }
 
     /// Returns `prev_log_number`
@@ -238,17 +253,6 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
     #[inline]
     pub fn set_log_number(&mut self, log_num: u64) {
         self.log_number = log_num;
-    }
-
-    /// Whether the current version needs to be compacted
-    #[inline]
-    pub fn needs_compaction(&self) -> bool {
-        if self.manual_compaction.is_some() {
-            true
-        } else {
-            let current = self.current();
-            current.compaction_score > 1.0 || current.file_to_compact.read().unwrap().is_some()
-        }
     }
 
     /// Returns the next file number
@@ -543,7 +547,9 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         Some(self.setup_other_inputs(compaction))
     }
 
-    /// Persistent given memtable into a single level0 file.
+    /// Persistent given memtable into a single sst file and the
+    /// file could be pushed into level1 or level2 if there's no too much
+    /// overlapping.
     pub fn write_level0_files(
         &mut self,
         db_name: &str,

@@ -133,7 +133,7 @@ impl<F: File> Writer<F> {
         // write the header and the data
         self.dest.write(&buf)?;
         self.dest.write(data)?;
-        self.dest.flush()?;
+        // self.dest.flush()?;
         // update block_offset
         self.block_offset += HEADER_SIZE + size;
         Ok(())

@@ -136,6 +136,9 @@ impl<F: File> Table<F> {
                 let new_block = Block::new(data)?;
                 let b = Arc::new(new_block);
                 let iter = b.iter(cmp);
+                // FIXME:
+                // If we don't add block into the cache and use `b.iter`
+                // the `Slice` returns by `iter.key()` may cause UB
                 if options.fill_cache {
                     cache.insert(cache_key_buffer, b, charge);
                 }
@@ -151,8 +154,7 @@ impl<F: File> Table<F> {
 
     /// Finds the first entry with the key equal or greater than target and
     /// returns the block iterator direclty
-    ///
-    /// The given `key` is a user key
+    /// The given `key` is an internal key
     ///
     pub fn internal_get<C: Comparator + Clone>(
         &self,
@@ -184,6 +186,10 @@ impl<F: File> Table<F> {
                 block_iter.seek(key);
                 if block_iter.valid() {
                     return Ok(Some(block_iter));
+                }
+                block_iter.seek_to_first();
+                while block_iter.valid() {
+                    block_iter.next();
                 }
                 block_iter.status()?;
             }
@@ -420,10 +426,7 @@ impl<C: Comparator + Clone, F: File> TableBuilder<C, F> {
                 } else {
                     String::from("")
                 };
-                meta_block_builder.add(
-                    filter_key.as_bytes(),
-                    filter_block_handler.encoded().as_slice(),
-                );
+                meta_block_builder.add(filter_key.as_bytes(), &filter_block_handler.encoded());
             }
             meta_block_builder.finish()
         };
@@ -462,6 +465,7 @@ impl<C: Comparator + Clone, F: File> TableBuilder<C, F> {
             "[table builder] try to close a closed TableBuilder"
         );
         self.closed = true;
+        // TODO: return Result<()>
         self.file.close().is_ok();
     }
 
@@ -492,15 +496,14 @@ impl<C: Comparator + Clone, F: File> TableBuilder<C, F> {
             // We've flushed a data block to the file so adding an relate index entry into index block
             assert!(self.data_block.is_empty(), "[table builder] the data block buffer is not empty after flushed, something is wrong");
             let s = if let Some(k) = key {
-                self.cmp.separator(self.last_key.as_slice(), k)
+                self.cmp.separator(&self.last_key, k)
             } else {
-                self.cmp.successor(self.last_key.as_slice())
+                self.cmp.successor(&self.last_key)
             };
             // TODO: use a allocted buffer instead
             let mut handle_encoding = vec![];
             self.pending_handle.encoded_to(&mut handle_encoding);
-            self.index_block
-                .add(s.as_slice(), handle_encoding.as_slice());
+            self.index_block.add(&s, &handle_encoding);
             self.pending_index_entry = false;
             return true;
         }
@@ -563,13 +566,9 @@ fn write_raw_block<F: File>(
     Ok(())
 }
 
-/// Read the block identified from `file` according to the given `handle`.
-/// If the read data does not match the checksum, return a error marked as `Status::Corruption`
-pub fn read_block<F: File>(
-    file: &F,
-    handle: &BlockHandle,
-    verify_checksum: bool,
-) -> Result<Vec<u8>> {
+// Read the block identified from `file` according to the given `handle`.
+// If the read data does not match the checksum, return a error marked as `Status::Corruption`
+fn read_block<F: File>(file: &F, handle: &BlockHandle, verify_checksum: bool) -> Result<Vec<u8>> {
     let n = handle.size as usize;
     // TODO: use pre-allocated buf
     let mut buffer = vec![0; n + BLOCK_TRAILER_SIZE];

@@ -60,6 +60,7 @@ impl From<u32> for Tag {
 
 /// Represent a sst table in a level should be never
 /// altered once created.
+#[derive(Debug)]
 pub struct FileMetaData {
     // Seeks allowed until compaction
     //

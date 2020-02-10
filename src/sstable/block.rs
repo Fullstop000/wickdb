@@ -59,7 +59,7 @@ impl Block {
         let size = data.len();
         if size >= 4 {
             let max_restarts_allowed = (size - 4) / 4;
-            let restarts_len = Self::restarts_len(data.as_slice()) as usize;
+            let restarts_len = Self::restarts_len(&data) as usize;
             // make sure the size is enough for restarts
             if restarts_len <= max_restarts_allowed {
                 return Ok(Self {
@@ -147,7 +147,7 @@ impl<C: Comparator> BlockIterator<C> {
         }
     }
 
-    // return the offset in data just past the end of the current entry
+    // Returns the offset just pasts the end of the current entry
     #[inline]
     fn next_entry_offset(&self) -> u32 {
         self.key_offset + self.not_shared + self.value_len
@@ -318,7 +318,7 @@ impl<C: Comparator> Iterator for BlockIterator<C> {
     // when call this in the loop
     fn key(&self) -> Self::Key {
         self.valid_or_panic();
-        Slice::from(self.key.as_slice())
+        Slice::from(&self.key)
     }
 
     fn value(&self) -> Self::Value {
@@ -666,12 +666,18 @@ mod tests {
         assert_eq!(iter.key().as_str(), "bbb");
         assert_eq!(iter.value().as_str(), "bbb");
         // Seek
-        iter.seek("abd".as_bytes());
-        assert_eq!(iter.key().as_str(), "abd");
-        assert_eq!(iter.value().as_str(), "abd");
+        iter.seek("1".as_bytes());
+        assert_eq!(iter.key().as_str(), "1");
+        assert_eq!(iter.value().as_str(), "1");
         iter.seek("".as_bytes());
         assert_eq!(iter.key().as_str(), "1");
         assert_eq!(iter.value().as_str(), "1");
+        iter.seek("abd".as_bytes());
+        assert_eq!(iter.key().as_str(), "abd");
+        assert_eq!(iter.value().as_str(), "abd");
+        iter.seek("bbb".as_bytes());
+        assert_eq!(iter.key().as_str(), "bbb");
+        assert_eq!(iter.value().as_str(), "bbb");
         iter.seek("zzzzzzzzzzzzzzz".as_bytes());
         assert!(!iter.valid());
     }
