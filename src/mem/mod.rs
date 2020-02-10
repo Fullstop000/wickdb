@@ -166,7 +166,7 @@ impl MemTableIterator {
 }
 
 impl Iterator for MemTableIterator {
-    type Key= Slice;
+    type Key = Slice;
     type Value = Slice;
     fn valid(&self) -> bool {
         self.iter.valid()

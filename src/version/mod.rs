@@ -700,9 +700,7 @@ mod tests {
     impl FindFileTests {
         fn new() -> Self {
             let files: Vec<Arc<FileMetaData>> = Vec::new();
-            let cmp = InternalKeyComparator::new(Arc::new(
-                BytewiseComparator::default(),
-            ));
+            let cmp = InternalKeyComparator::new(Arc::new(BytewiseComparator::default()));
 
             Self { files, cmp }
         }
@@ -716,7 +714,8 @@ mod tests {
         }
 
         fn find(&self, key: &Slice) -> usize {
-            let target = Slice::from(InternalKey::new(key.as_slice(), 100, ValueType::Value).data());
+            let target =
+                Slice::from(InternalKey::new(key.as_slice(), 100, ValueType::Value).data());
             Version::find_file(self.cmp.clone(), &self.files, &target.as_slice())
         }
     }

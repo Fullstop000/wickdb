@@ -257,11 +257,7 @@ pub struct SkiplistIterator<C: Comparator, A: Arena> {
 }
 
 impl<C: Comparator, A: Arena> Iterator for SkiplistIterator<C, A> {
-<<<<<<< HEAD
-    type Key= Slice;
-=======
     type Key = Slice;
->>>>>>> complete db and mem assoicated-type implementation
     type Value = Slice;
     /// Returns true whether the iterator is positioned at a valid node
     #[inline]
