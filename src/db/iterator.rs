@@ -63,11 +63,7 @@ pub struct DBIterator<I: Iterator, S: Storage + Clone + 'static> {
 }
 
 impl<I: Iterator<Key=Slice,Value=Slice>, S: Storage + Clone> Iterator for DBIterator<I, S> {
-<<<<<<< HEAD
-    type Key= Slice;
-=======
     type Key = Slice;
->>>>>>> complete db and mem assoicated-type implementation
     type Value = Slice;
     fn valid(&self) -> bool {
         self.valid
