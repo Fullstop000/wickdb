@@ -1518,7 +1518,11 @@ mod tests {
         db: WickDB<MemStorage>,
     }
 
+<<<<<<< HEAD
     fn iter_to_string(iter: &dyn Iterator<Key = Slice, Value = Slice>) -> String {
+=======
+    fn iter_to_string(iter: &dyn Iterator<Key=Slice,Value=Slice>) -> String {
+>>>>>>> added associated type for db
         if iter.valid() {
             format!("{:?}->{:?}", iter.key(), iter.value())
         } else {
