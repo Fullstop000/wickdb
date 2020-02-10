@@ -661,11 +661,17 @@ mod tests {
     }
 
     impl Iterator for EntryIterator {
+<<<<<<< HEAD
 
         type Key = Slice;
         type Value = Slice;
 
 
+=======
+        type Key = Slice;
+        type Value = Slice;
+
+>>>>>>> remove unnecessary information
         fn valid(&self) -> bool {
             self.current < self.data.len()
         }

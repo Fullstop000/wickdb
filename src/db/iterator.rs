@@ -63,11 +63,15 @@ pub struct DBIterator<I: Iterator, S: Storage + Clone + 'static> {
 }
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 
 impl<I: Iterator<Key = Slice, Value = Slice>, S: Storage + Clone> Iterator for DBIterator<I, S> {
 =======
 impl<I: Iterator<Key=Slice,Value=Slice>, S: Storage + Clone> Iterator for DBIterator<I, S> {
 >>>>>>> fix conflict changes
+=======
+impl<I: Iterator<Key = Slice, Value = Slice>, S: Storage + Clone> Iterator for DBIterator<I, S> {
+>>>>>>> remove unnecessary information
     type Key = Slice;
     type Value = Slice;
     fn valid(&self) -> bool {
@@ -347,7 +351,10 @@ impl<C: Comparator, M: Iterator, T: Iterator> DBIteratorCore<C, M, T> {
     }
 }
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> remove unnecessary information
 impl<
         C: Comparator,
         M: Iterator<Key = Slice, Value = Slice>,

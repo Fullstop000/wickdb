@@ -1369,10 +1369,14 @@ pub(crate) fn build_table<S: Storage + Clone>(
     db_name: &str,
     table_cache: &TableCache<S>,
 <<<<<<< HEAD
+<<<<<<< HEAD
     iter: &mut dyn Iterator<Key = Slice, Value = Slice>,
 =======
     iter: &mut dyn Iterator<Key=Slice,Value=Slice>,
 >>>>>>> completed assoicated type implemenation
+=======
+    iter: &mut dyn Iterator<Key = Slice, Value = Slice>,
+>>>>>>> remove unnecessary information
     meta: &mut FileMetaData,
 ) -> Result<()> {
     meta.file_size = 0;
