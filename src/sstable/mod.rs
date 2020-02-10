@@ -476,7 +476,7 @@ mod tests {
     // Helper class for tests to unify the interface between
     // BlockBuilder/TableBuilder and Block/Table
     trait Constructor {
-        type Iter: Iterator<Key=Slice,Value=Slice>;
+        type Iter: Iterator<Key = Slice, Value = Slice>;
 
         fn new(is_reversed: bool) -> Self;
 
@@ -587,7 +587,7 @@ mod tests {
         }
     }
 
-    impl<I: Iterator<Key=Slice,Value=Slice>> Iterator for KeyConvertingIterator<I> {
+    impl<I: Iterator<Key = Slice, Value = Slice>> Iterator for KeyConvertingIterator<I> {
         type Key = Slice;
         type Value = Slice;
         fn valid(&self) -> bool {
@@ -660,14 +660,9 @@ mod tests {
     }
 
     impl Iterator for EntryIterator {
-<<<<<<< HEAD
-        type  Key = Slice;
-        type Value = Slice;
-=======
         type Key = Slice;
         type Value = Slice;
 
->>>>>>> complete db and mem assoicated-type implementation
         fn valid(&self) -> bool {
             self.current < self.data.len()
         }
@@ -1001,7 +996,7 @@ mod tests {
 
     // Return a String represents current entry of the given iterator
     #[inline]
-    fn format_entry(iter: &dyn Iterator<Key=Slice,Value=Slice>) -> String {
+    fn format_entry(iter: &dyn Iterator<Key = Slice, Value = Slice>) -> String {
         format!("'{:?}->{:?}'", iter.key(), iter.value())
     }
 
