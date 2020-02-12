@@ -25,6 +25,8 @@ use std::mem;
 ///
 /// An `Iterator` should be invalid once created
 pub trait Iterator {
+    type Key;
+    type Value;
     /// An iterator is either positioned at a key/value pair, or
     /// not valid.  This method returns true iff the iterator is valid.
     fn valid(&self) -> bool;
@@ -56,13 +58,13 @@ pub trait Iterator {
     /// the returned slice is valid only until the next modification of
     /// the iterator.
     /// REQUIRES: `valid()`
-    fn key(&self) -> Slice;
+    fn key(&self) -> Self::Key;
 
     /// Return the value for the current entry.  The underlying storage for
     /// the returned slice is valid only until the next modification of
     /// the iterator.
     /// REQUIRES: `valid()`
-    fn value(&self) -> Slice;
+    fn value(&self) -> Self::Value;
 
     /// If an error has occurred, return it.  Else return an ok status.
     fn status(&mut self) -> Result<()>;
@@ -82,12 +84,13 @@ pub struct ConcatenateIterator<I: Iterator, F: DerivedIterFactory> {
 
 /// A factory that takes value from the origin and
 pub trait DerivedIterFactory {
-    type Iter: Iterator;
+    type Iter: Iterator<Key = Slice, Value = Slice>;
+
     /// Create a new `Iterator` based on value yield by original `Iterator`
     fn derive(&self, value: &[u8]) -> Result<Self::Iter>;
 }
 
-impl<I: Iterator, F: DerivedIterFactory> ConcatenateIterator<I, F> {
+impl<I: Iterator<Key = Slice, Value = Slice>, F: DerivedIterFactory> ConcatenateIterator<I, F> {
     pub fn new(origin: I, factory: F) -> Self {
         Self {
             origin,
@@ -185,7 +188,11 @@ impl<I: Iterator, F: DerivedIterFactory> ConcatenateIterator<I, F> {
     }
 }
 
-impl<I: Iterator, F: DerivedIterFactory> Iterator for ConcatenateIterator<I, F> {
+impl<I: Iterator<Key = Slice, Value = Slice>, F: DerivedIterFactory> Iterator
+    for ConcatenateIterator<I, F>
+{
+    type Key = Slice;
+    type Value = Slice;
     fn valid(&self) -> bool {
         if let Some(di) = &self.derived {
             di.valid()
@@ -235,14 +242,14 @@ impl<I: Iterator, F: DerivedIterFactory> Iterator for ConcatenateIterator<I, F> 
         self.skip_backward();
     }
 
-    fn key(&self) -> Slice {
+    fn key(&self) -> Self::Key {
         self.valid_or_panic();
         self.derived
             .as_ref()
             .map_or(Slice::default(), |di| di.key())
     }
 
-    fn value(&self) -> Slice {
+    fn value(&self) -> Self::Value {
         self.valid_or_panic();
         self.derived
             .as_ref()
@@ -294,7 +301,11 @@ pub trait KMergeCore {
 
     /// Updates the smallest if given `iter` has a smaller value and returns true.
     /// Otherwise returns false.
-    fn smaller(&self, smallest: &mut Option<Slice>, iter: &dyn Iterator) -> bool {
+    fn smaller(
+        &self,
+        smallest: &mut Option<Slice>,
+        iter: &dyn Iterator<Key = Slice, Value = Slice>,
+    ) -> bool {
         if iter.valid()
             && (smallest.is_none()
                 || self
@@ -311,7 +322,11 @@ pub trait KMergeCore {
 
     /// Updates the smallest if given `iter` has a smaller value and returns true.
     /// Otherwise returns false.
-    fn larger(&self, largest: &mut Option<Slice>, iter: &dyn Iterator) -> bool {
+    fn larger(
+        &self,
+        largest: &mut Option<Slice>,
+        iter: &dyn Iterator<Key = Slice, Value = Slice>,
+    ) -> bool {
         if iter.valid()
             && (largest.is_none()
                 || self
@@ -333,26 +348,29 @@ pub trait KMergeCore {
     fn find_largest(&mut self) -> usize;
 
     /// Returns an immutable borrow of ith child iterator
-    fn get_child(&self, i: usize) -> &dyn Iterator;
+    fn get_child(&self, i: usize) -> &dyn Iterator<Key = Slice, Value = Slice>;
 
     /// Returns a mutable borrow of ith child iterator
-    fn get_child_mut(&mut self, i: usize) -> &mut dyn Iterator;
+    fn get_child_mut(&mut self, i: usize) -> &mut dyn Iterator<Key = Slice, Value = Slice>;
 
     /// Iterate each child iterator and call `f`
     fn for_each_child<F>(&mut self, f: F)
     where
-        F: FnMut(&mut dyn Iterator);
+        F: FnMut(&mut dyn Iterator<Key = Slice, Value = Slice>);
 
     /// Iterate each child iterator except the ith iterator and call `f`
     fn for_not_ith<F>(&mut self, i: usize, f: F)
     where
-        F: FnMut(&mut dyn Iterator, &dyn Comparator);
+        F: FnMut(&mut dyn Iterator<Key = Slice, Value = Slice>, &dyn Comparator);
 
     /// Returns `Err` if inner children has errors.
     fn take_err(&mut self) -> Result<()>;
 }
 
 impl<T: KMergeCore> Iterator for KMergeIter<T> {
+    type Key = Slice;
+    type Value = Slice;
+
     fn valid(&self) -> bool {
         let i = self.current;
         if i < self.core.iters_len() {
@@ -415,11 +433,11 @@ impl<T: KMergeCore> Iterator for KMergeIter<T> {
         self.current = self.core.find_largest();
     }
 
-    fn key(&self) -> Slice {
+    fn key(&self) -> Self::Key {
         self.core.get_child(self.current).key()
     }
 
-    fn value(&self) -> Slice {
+    fn value(&self) -> Self::Value {
         self.core.get_child(self.current).value()
     }
 
@@ -444,7 +462,7 @@ mod tests {
         children: Vec<I>,
     }
 
-    impl<I: Iterator, C: Comparator> KMergeCore for SimpleKMerger<I, C> {
+    impl<I: Iterator<Key = Slice, Value = Slice>, C: Comparator> KMergeCore for SimpleKMerger<I, C> {
         fn cmp(&self) -> &dyn Comparator {
             &self.cmp
         }
@@ -475,30 +493,33 @@ mod tests {
             index
         }
 
-        fn get_child(&self, i: usize) -> &dyn Iterator {
-            self.children.get(i).unwrap() as &dyn Iterator
+        fn get_child(&self, i: usize) -> &dyn Iterator<Key = Slice, Value = Slice> {
+            self.children.get(i).unwrap() as &dyn Iterator<Key = Slice, Value = Slice>
         }
 
-        fn get_child_mut(&mut self, i: usize) -> &mut dyn Iterator {
-            self.children.get_mut(i).unwrap() as &mut dyn Iterator
+        fn get_child_mut(&mut self, i: usize) -> &mut dyn Iterator<Key = Slice, Value = Slice> {
+            self.children.get_mut(i).unwrap() as &mut dyn Iterator<Key = Slice, Value = Slice>
         }
 
         fn for_each_child<F>(&mut self, mut f: F)
         where
-            F: FnMut(&mut dyn Iterator),
+            F: FnMut(&mut dyn Iterator<Key = Slice, Value = Slice>),
         {
             self.children
                 .iter_mut()
-                .for_each(|i| f(i as &mut dyn Iterator));
+                .for_each(|i| f(i as &mut dyn Iterator<Key = Slice, Value = Slice>));
         }
 
         fn for_not_ith<F>(&mut self, n: usize, mut f: F)
         where
-            F: FnMut(&mut dyn Iterator, &dyn Comparator),
+            F: FnMut(&mut dyn Iterator<Key = Slice, Value = Slice>, &dyn Comparator),
         {
             for (i, child) in self.children.iter_mut().enumerate() {
                 if i != n {
-                    f(child as &mut dyn Iterator, &self.cmp)
+                    f(
+                        child as &mut dyn Iterator<Key = Slice, Value = Slice>,
+                        &self.cmp,
+                    )
                 }
             }
         }
@@ -549,7 +570,9 @@ mod tests {
         shadow: S, // The iterator to be tested
     }
 
-    impl<O: Iterator, S: Iterator> SortedIterTestSuite<O, S> {
+    impl<O: Iterator<Key = Slice, Value = Slice>, S: Iterator<Key = Slice, Value = Slice>>
+        SortedIterTestSuite<O, S>
+    {
         fn new(origin: O, shadow: S) -> Self {
             Self { origin, shadow }
         }
@@ -583,7 +606,11 @@ mod tests {
         }
     }
 
-    impl<O: Iterator, S: Iterator> Iterator for SortedIterTestSuite<O, S> {
+    impl<O: Iterator<Key = Slice, Value = Slice>, S: Iterator<Key = Slice, Value = Slice>> Iterator
+        for SortedIterTestSuite<O, S>
+    {
+        type Key = Slice;
+        type Value = Slice;
         fn valid(&self) -> bool {
             self.origin.valid() && self.shadow.valid()
         }
@@ -612,11 +639,11 @@ mod tests {
             self.shadow.prev();
         }
 
-        fn key(&self) -> Slice {
+        fn key(&self) -> Self::Key {
             unimplemented!()
         }
 
-        fn value(&self) -> Slice {
+        fn value(&self) -> Self::Value {
             unimplemented!()
         }
 
@@ -646,6 +673,8 @@ mod tests {
     }
 
     impl Iterator for TestSimpleArrayIter {
+        type Key = Slice;
+        type Value = Slice;
         fn valid(&self) -> bool {
             self.current < self.inner.len() && self.inner.len() > 0
         }
@@ -687,12 +716,12 @@ mod tests {
             }
         }
 
-        fn key(&self) -> Slice {
+        fn key(&self) -> Self::Key {
             self.valid_or_panic();
             Slice::from(self.inner[self.current].as_str())
         }
 
-        fn value(&self) -> Slice {
+        fn value(&self) -> Self::Value {
             self.key()
         }
 

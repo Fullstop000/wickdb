@@ -257,6 +257,8 @@ pub struct SkiplistIterator<C: Comparator, A: Arena> {
 }
 
 impl<C: Comparator, A: Arena> Iterator for SkiplistIterator<C, A> {
+    type Key = Slice;
+    type Value = Slice;
     /// Returns true whether the iterator is positioned at a valid node
     #[inline]
     fn valid(&self) -> bool {
@@ -311,13 +313,13 @@ impl<C: Comparator, A: Arena> Iterator for SkiplistIterator<C, A> {
 
     /// Return the key of node in current position
     #[inline]
-    fn key(&self) -> Slice {
+    fn key(&self) -> Self::Key {
         self.panic_valid();
         unsafe { (*(self.node)).key().into() }
     }
     /// Should not be used
     #[inline]
-    fn value(&self) -> Slice {
+    fn value(&self) -> Self::Value {
         unimplemented!()
     }
 

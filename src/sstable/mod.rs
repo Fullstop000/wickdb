@@ -476,7 +476,7 @@ mod tests {
     // Helper class for tests to unify the interface between
     // BlockBuilder/TableBuilder and Block/Table
     trait Constructor {
-        type Iter: Iterator;
+        type Iter: Iterator<Key = Slice, Value = Slice>;
 
         fn new(is_reversed: bool) -> Self;
 
@@ -587,7 +587,9 @@ mod tests {
         }
     }
 
-    impl<I: Iterator> Iterator for KeyConvertingIterator<I> {
+    impl<I: Iterator<Key = Slice, Value = Slice>> Iterator for KeyConvertingIterator<I> {
+        type Key = Slice;
+        type Value = Slice;
         fn valid(&self) -> bool {
             self.inner.valid()
         }
@@ -613,7 +615,7 @@ mod tests {
             self.inner.prev()
         }
 
-        fn key(&self) -> Slice {
+        fn key(&self) -> Self::Key {
             match ParsedInternalKey::decode_from(self.inner.key().as_slice()) {
                 Some(parsed_ikey) => Slice::from(parsed_ikey.user_key),
                 None => {
@@ -624,7 +626,7 @@ mod tests {
             }
         }
 
-        fn value(&self) -> Slice {
+        fn value(&self) -> Self::Value {
             self.inner.value()
         }
 
@@ -658,6 +660,9 @@ mod tests {
     }
 
     impl Iterator for EntryIterator {
+        type Key = Slice;
+        type Value = Slice;
+
         fn valid(&self) -> bool {
             self.current < self.data.len()
         }
@@ -698,7 +703,7 @@ mod tests {
             }
         }
 
-        fn key(&self) -> Slice {
+        fn key(&self) -> Self::Key {
             if self.valid() {
                 Slice::from(self.data[self.current].0.as_slice())
             } else {
@@ -706,7 +711,7 @@ mod tests {
             }
         }
 
-        fn value(&self) -> Slice {
+        fn value(&self) -> Self::Value {
             if self.valid() {
                 Slice::from(self.data[self.current].1.as_slice())
             } else {
@@ -991,7 +996,7 @@ mod tests {
 
     // Return a String represents current entry of the given iterator
     #[inline]
-    fn format_entry(iter: &dyn Iterator) -> String {
+    fn format_entry(iter: &dyn Iterator<Key = Slice, Value = Slice>) -> String {
         format!("'{:?}->{:?}'", iter.key(), iter.value())
     }
 

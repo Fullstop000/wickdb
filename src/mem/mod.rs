@@ -166,6 +166,8 @@ impl MemTableIterator {
 }
 
 impl Iterator for MemTableIterator {
+    type Key = Slice;
+    type Value = Slice;
     fn valid(&self) -> bool {
         self.iter.valid()
     }
@@ -191,14 +193,14 @@ impl Iterator for MemTableIterator {
     }
 
     // Returns the internal key
-    fn key(&self) -> Slice {
+    fn key(&self) -> Self::Key {
         let key = self.iter.key();
         let mut s = key.as_slice();
         extract_varint32_encoded_slice(&mut s).into()
     }
 
     // Returns the Slice represents the value
-    fn value(&self) -> Slice {
+    fn value(&self) -> Self::Value {
         let key = self.iter.key();
         let mut src = key.as_slice();
         extract_varint32_encoded_slice(&mut src);

@@ -62,7 +62,9 @@ pub struct DBIterator<I: Iterator, S: Storage + Clone + 'static> {
     saved_value: Slice,
 }
 
-impl<I: Iterator, S: Storage + Clone> Iterator for DBIterator<I, S> {
+impl<I: Iterator<Key = Slice, Value = Slice>, S: Storage + Clone> Iterator for DBIterator<I, S> {
+    type Key = Slice;
+    type Value = Slice;
     fn valid(&self) -> bool {
         self.valid
     }
@@ -156,7 +158,7 @@ impl<I: Iterator, S: Storage + Clone> Iterator for DBIterator<I, S> {
         self.find_prev_user_key();
     }
 
-    fn key(&self) -> Slice {
+    fn key(&self) -> Self::Key {
         self.valid_or_panic();
         match self.direction {
             Direction::Forward => Slice::from(extract_user_key(self.inner.key().as_slice())),
@@ -164,7 +166,7 @@ impl<I: Iterator, S: Storage + Clone> Iterator for DBIterator<I, S> {
         }
     }
 
-    fn value(&self) -> Slice {
+    fn value(&self) -> Self::Value {
         self.valid_or_panic();
         match self.direction {
             Direction::Forward => self.inner.value(),
@@ -181,7 +183,7 @@ impl<I: Iterator, S: Storage + Clone> Iterator for DBIterator<I, S> {
     }
 }
 
-impl<I: Iterator, S: Storage + Clone> DBIterator<I, S> {
+impl<I: Iterator<Key = Slice, Value = Slice>, S: Storage + Clone> DBIterator<I, S> {
     pub fn new(iter: I, db: Arc<DBImpl<S>>, sequence: u64, ucmp: Arc<dyn Comparator>) -> Self {
         Self {
             valid: false,
@@ -340,7 +342,12 @@ impl<C: Comparator, M: Iterator, T: Iterator> DBIteratorCore<C, M, T> {
     }
 }
 
-impl<C: Comparator, M: Iterator, T: Iterator> KMergeCore for DBIteratorCore<C, M, T> {
+impl<
+        C: Comparator,
+        M: Iterator<Key = Slice, Value = Slice>,
+        T: Iterator<Key = Slice, Value = Slice>,
+    > KMergeCore for DBIteratorCore<C, M, T>
+{
     fn cmp(&self) -> &dyn Comparator {
         &self.cmp
     }
@@ -385,51 +392,58 @@ impl<C: Comparator, M: Iterator, T: Iterator> KMergeCore for DBIteratorCore<C, M
         index
     }
 
-    fn get_child(&self, i: usize) -> &dyn Iterator {
+    fn get_child(&self, i: usize) -> &dyn Iterator<Key = Slice, Value = Slice> {
         if i < self.mem_iters.len() {
-            self.mem_iters.get(i).unwrap() as &dyn Iterator
+            self.mem_iters.get(i).unwrap() as &dyn Iterator<Key = Slice, Value = Slice>
         } else {
             let current = i - self.mem_iters.len();
-            self.table_iters.get(current).unwrap() as &dyn Iterator
+            self.table_iters.get(current).unwrap() as &dyn Iterator<Key = Slice, Value = Slice>
         }
     }
 
-    fn get_child_mut(&mut self, i: usize) -> &mut dyn Iterator {
+    fn get_child_mut(&mut self, i: usize) -> &mut dyn Iterator<Key = Slice, Value = Slice> {
         if i < self.mem_iters.len() {
-            self.mem_iters.get_mut(i).unwrap() as &mut dyn Iterator
+            self.mem_iters.get_mut(i).unwrap() as &mut dyn Iterator<Key = Slice, Value = Slice>
         } else {
             let current = i - self.mem_iters.len();
-            self.table_iters.get_mut(current).unwrap() as &mut dyn Iterator
+            self.table_iters.get_mut(current).unwrap()
+                as &mut dyn Iterator<Key = Slice, Value = Slice>
         }
     }
 
     fn for_each_child<F>(&mut self, mut f: F)
     where
-        F: FnMut(&mut dyn Iterator),
+        F: FnMut(&mut dyn Iterator<Key = Slice, Value = Slice>),
     {
         self.mem_iters
             .iter_mut()
-            .for_each(|i| f(i as &mut dyn Iterator));
+            .for_each(|i| f(i as &mut dyn Iterator<Key = Slice, Value = Slice>));
         self.table_iters
             .iter_mut()
-            .for_each(|i| f(i as &mut dyn Iterator));
+            .for_each(|i| f(i as &mut dyn Iterator<Key = Slice, Value = Slice>));
     }
 
     fn for_not_ith<F>(&mut self, n: usize, mut f: F)
     where
-        F: FnMut(&mut dyn Iterator, &dyn Comparator),
+        F: FnMut(&mut dyn Iterator<Key = Slice, Value = Slice>, &dyn Comparator),
     {
         if n < self.mem_iters.len() {
             for (i, child) in self.mem_iters.iter_mut().enumerate() {
                 if i != n {
-                    f(child as &mut dyn Iterator, &self.cmp)
+                    f(
+                        child as &mut dyn Iterator<Key = Slice, Value = Slice>,
+                        &self.cmp,
+                    )
                 }
             }
         } else {
             let current = n - self.mem_iters.len();
             for (i, child) in self.table_iters.iter_mut().enumerate() {
                 if i != current {
-                    f(child as &mut dyn Iterator, &self.cmp)
+                    f(
+                        child as &mut dyn Iterator<Key = Slice, Value = Slice>,
+                        &self.cmp,
+                    )
                 }
             }
         }
