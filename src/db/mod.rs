@@ -1368,15 +1368,7 @@ pub(crate) fn build_table<S: Storage + Clone>(
     storage: &S,
     db_name: &str,
     table_cache: &TableCache<S>,
-<<<<<<< HEAD
-<<<<<<< HEAD
     iter: &mut dyn Iterator<Key = Slice, Value = Slice>,
-=======
-    iter: &mut dyn Iterator<Key=Slice,Value=Slice>,
->>>>>>> completed assoicated type implemenation
-=======
-    iter: &mut dyn Iterator<Key = Slice, Value = Slice>,
->>>>>>> remove unnecessary information
     meta: &mut FileMetaData,
 ) -> Result<()> {
     meta.file_size = 0;
@@ -1518,11 +1510,7 @@ mod tests {
         db: WickDB<MemStorage>,
     }
 
-<<<<<<< HEAD
     fn iter_to_string(iter: &dyn Iterator<Key = Slice, Value = Slice>) -> String {
-=======
-    fn iter_to_string(iter: &dyn Iterator<Key=Slice,Value=Slice>) -> String {
->>>>>>> added associated type for db
         if iter.valid() {
             format!("{:?}->{:?}", iter.key(), iter.value())
         } else {
@@ -1537,7 +1525,7 @@ mod tests {
     fn cases<F>(mut opt_hook: F) -> Vec<DBTest>
     where
         F: FnMut(Options) -> Options,
-    { 
+    {
         vec![
             TestOption::Default,
             TestOption::Reuse,
