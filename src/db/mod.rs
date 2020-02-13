@@ -1470,7 +1470,7 @@ mod tests {
         db: WickDB<MemStorage>,
     }
 
-    fn iter_to_string(iter: &dyn Iterator<Key=Slice,Value=Slice>) -> String {
+    fn iter_to_string(iter: &dyn Iterator<Key = Slice, Value = Slice>) -> String {
         if iter.valid() {
             format!("{:?}->{:?}", iter.key(), iter.value())
         } else {
