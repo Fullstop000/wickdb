@@ -1013,7 +1013,7 @@ impl<S: Storage + Clone> DerivedIterFactory for FileIterFactory<S> {
             let file_size = decode_fixed_64(&value[std::mem::size_of::<u64>()..]);
             self.table_cache.new_iter(
                 self.icmp.clone(),
-                self.options.clone(),
+                self.options,
                 file_number,
                 file_size,
             )
