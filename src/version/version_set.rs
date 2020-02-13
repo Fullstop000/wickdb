@@ -1033,6 +1033,7 @@ impl<S: Storage + Clone> DerivedIterFactory for FileIterFactory<S> {
             let file_number = decode_fixed_64(value);
             let file_size = decode_fixed_64(&value[std::mem::size_of::<u64>()..]);
 <<<<<<< HEAD
+<<<<<<< HEAD
             self.table_cache
                 .new_iter(self.icmp.clone(), self.options, file_number, file_size)
 =======
@@ -1043,6 +1044,10 @@ impl<S: Storage + Clone> DerivedIterFactory for FileIterFactory<S> {
                 file_size,
             )
 >>>>>>> cargo fmt
+=======
+            self.table_cache
+                .new_iter(self.icmp.clone(), self.options, file_number, file_size)
+>>>>>>> cargo fmt again
         }
     }
 }
