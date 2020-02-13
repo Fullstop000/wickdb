@@ -714,8 +714,8 @@ mod tests {
         }
 
         fn find(&self, key: &Slice) -> usize {
-            let target =
-                Slice::from(InternalKey::new(key.as_slice(), 100, ValueType::Value).data());
+            let ikey = InternalKey::new(key.as_slice(), 100, ValueType::Value);
+            let target = Slice::from(ikey.data());
             Version::find_file(self.cmp.clone(), &self.files, &target.as_slice())
         }
     }

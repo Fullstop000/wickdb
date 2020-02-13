@@ -1485,7 +1485,7 @@ mod tests {
     fn cases<F>(mut opt_hook: F) -> Vec<DBTest>
     where
         F: FnMut(Options) -> Options,
-    {
+    { 
         vec![
             TestOption::Default,
             TestOption::Reuse,
