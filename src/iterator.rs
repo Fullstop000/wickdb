@@ -84,7 +84,7 @@ pub struct ConcatenateIterator<I: Iterator, F: DerivedIterFactory> {
 
 /// A factory that takes value from the origin and
 pub trait DerivedIterFactory {
-    type Iter: Iterator<Key = Slice, Value = Slice>;
+    type Iter: Iterator;
 
     /// Create a new `Iterator` based on value yield by original `Iterator`
     fn derive(&self, value: &[u8]) -> Result<Self::Iter>;
@@ -191,8 +191,9 @@ impl<I: Iterator<Key = Slice, Value = Slice>, F: DerivedIterFactory> Concatenate
 impl<I: Iterator<Key = Slice, Value = Slice>, F: DerivedIterFactory> Iterator
     for ConcatenateIterator<I, F>
 {
-    type Key = Slice;
-    type Value = Slice;
+    type Key = <<F as DerivedIterFactory>::Iter as Iterator>::Key;
+    type Value = <<F as DerivedIterFactory>::Iter as Iterator>::Value;
+
     fn valid(&self) -> bool {
         if let Some(di) = &self.derived {
             di.valid()
@@ -245,15 +246,13 @@ impl<I: Iterator<Key = Slice, Value = Slice>, F: DerivedIterFactory> Iterator
     fn key(&self) -> Self::Key {
         self.valid_or_panic();
         self.derived
-            .as_ref()
-            .map_or(Slice::default(), |di| di.key())
+            .as_ref().unwrap().key()
     }
 
     fn value(&self) -> Self::Value {
         self.valid_or_panic();
         self.derived
-            .as_ref()
-            .map_or(Slice::default(), |di| di.value())
+            .as_ref().unwrap().value()
     }
 
     fn status(&mut self) -> Result<()> {
