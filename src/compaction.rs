@@ -48,11 +48,27 @@ impl PartialEq for ManualCompaction {
     }
 }
 
-/// A helper enum describing relations between the indexes of `inputs` in `Compaction`
-// TODO: use const instead
-pub enum CompactionInputsRelation {
-    Source = 0, // level n
-    Parent = 1, // level n + 1
+// A helper struct representing all the files to be compacted.
+// All the files in `base` or `parent` must be sorted by key range.
+#[derive(Default)]
+pub struct CompactionInputs {
+    // level n files
+    pub base: Vec<Arc<FileMetaData>>,
+    // level n+1 files
+    pub parent: Vec<Arc<FileMetaData>>,
+}
+
+impl CompactionInputs {
+    /// Add a file info to base level files
+    #[inline]
+    pub fn add_base(&mut self, f: Arc<FileMetaData>) {
+        self.base.push(f);
+        self.base.iter();
+    }
+
+    fn iter_all(&self) -> impl Iterator<Item = &Arc<FileMetaData>> {
+        self.base.iter().chain(self.parent.iter())
+    }
 }
 
 /// A Compaction encapsulates information about a compaction
@@ -66,7 +82,7 @@ pub struct Compaction<F: File> {
     // level n and level n + 1
     // This field should be accessed via CompactionInputRelation
     // and the files of level n and level n + 1 are all sorted
-    pub inputs: [Vec<Arc<FileMetaData>>; 2],
+    pub inputs: CompactionInputs,
 
     // State used to check for number of overlapping grandparent files
     // (parent == level n + 1, grandparent == level n + 2
@@ -114,7 +130,7 @@ impl<O: File> Compaction<O> {
             level,
             input_version: None,
             edit: VersionEdit::new(options.max_levels),
-            inputs: [vec![], vec![]],
+            inputs: CompactionInputs::default(),
             grand_parents: vec![],
             grand_parent_index: 0,
             seen_key: false,
@@ -130,10 +146,9 @@ impl<O: File> Compaction<O> {
     /// Is this a trivial compaction that can be implemented by just
     /// moving a single input file to the next level (no merging or splitting)
     pub fn is_trivial_move(&self) -> bool {
-        self.inputs[CompactionInputsRelation::Source as usize].len() == 1
-            && self.inputs[CompactionInputsRelation::Parent as usize].is_empty()
-            && total_file_size(self.grand_parents.as_slice())
-                <= self.options.max_grandparent_overlap_bytes()
+        self.inputs.base.len() == 1
+            && self.inputs.parent.is_empty()
+            && total_file_size(&self.grand_parents) <= self.options.max_grandparent_overlap_bytes()
     }
 
     /// Create an iterator that reads over all the compaction input tables with merged order.
@@ -157,30 +172,26 @@ impl<O: File> Compaction<O> {
         };
         // Level-0 files have to be merged together so we generate a merging iterator includes iterators for each level 0 file.
         // For other levels, we will make a concatenating iterator per level.
-        let mut level0 =
-            Vec::with_capacity(self.inputs[CompactionInputsRelation::Source as usize].len() + 1);
+        let mut level0 = Vec::with_capacity(self.inputs.base.len() + 1);
         let mut leveln = Vec::with_capacity(2);
-        for (i, input) in self.inputs.iter().enumerate() {
-            if !input.is_empty() {
-                if self.level + i == 0 {
-                    // level0
-                    for file in self.inputs[CompactionInputsRelation::Source as usize].iter() {
-                        // all the level0 tables are guaranteed being added into the table_cache via minor compaction
-                        level0.push(table_cache.new_iter(
-                            icmp.clone(),
-                            read_options,
-                            file.number,
-                            file.file_size,
-                        )?);
-                    }
-                } else {
-                    let origin = LevelFileNumIterator::new(icmp.clone(), self.inputs[i].clone());
-                    let factory =
-                        FileIterFactory::new(icmp.clone(), read_options, table_cache.clone());
-                    leveln.push(ConcatenateIterator::new(origin, factory));
-                }
+        for file in self.inputs.base.iter() {
+            if self.level == 0 {
+                level0.push(table_cache.new_iter(
+                    icmp.clone(),
+                    read_options.clone(),
+                    file.number,
+                    file.file_size,
+                )?);
+            } else {
+                let origin = LevelFileNumIterator::new(icmp.clone(), self.inputs.base.clone());
+                let factory = FileIterFactory::new(icmp.clone(), read_options, table_cache.clone());
+                leveln.push(ConcatenateIterator::new(origin, factory));
             }
         }
+        let origin = LevelFileNumIterator::new(icmp.clone(), self.inputs.parent.clone());
+        let factory = FileIterFactory::new(icmp.clone(), read_options, table_cache);
+        leveln.push(ConcatenateIterator::new(origin, factory));
+
         let iter = KMergeIter::new(SSTableIters::new(icmp, level0, leveln));
         Ok(iter)
     }
@@ -239,10 +250,8 @@ impl<O: File> Compaction<O> {
 
     /// Apply deletion for current inputs and current output files to the edit
     pub fn apply_to_edit(&mut self) {
-        for (delta, files) in self.inputs.iter().enumerate() {
-            for file in files.iter() {
-                self.edit.delete_file(self.level + delta, file.number)
-            }
+        for (delta, file) in self.inputs.iter_all().enumerate() {
+            self.edit.delete_file(self.level + delta, file.number)
         }
         for output in self.outputs.drain(..) {
             self.edit
@@ -255,9 +264,9 @@ impl<O: File> Compaction<O> {
     /// Calculate the read bytes
     #[inline]
     pub fn bytes_read(&self) -> u64 {
-        self.inputs.iter().fold(0, |accumulate, files| {
-            accumulate + files.iter().fold(0, |sum, file| sum + file.number)
-        })
+        self.inputs
+            .iter_all()
+            .fold(0, |sum, file| sum + file.file_size)
     }
 
     /// Calculate the written bytes

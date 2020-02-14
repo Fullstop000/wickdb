@@ -15,7 +15,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use crate::compaction::{base_range, total_range, Compaction, CompactionStats};
+use crate::compaction::{base_range, total_range, Compaction, CompactionInputs, CompactionStats};
 use crate::db::build_table;
 use crate::db::filename::{generate_filename, parse_filename, update_current, FileType};
 use crate::db::format::{InternalKey, InternalKeyComparator};
@@ -440,7 +440,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         Ok(())
     }
 
-    /// Return a compaction object for compacting the range `[begin,end]` in
+    /// Return a `Compaction` for compacting the range `[begin,end]` in
     /// the specified level.  Returns `None` if there is nothing in that
     /// level that overlaps the specified range
     pub fn compact_range(
@@ -471,13 +471,13 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         }
         let mut c = Compaction::new(self.options.clone(), level);
         c.input_version = Some(version);
-        c.inputs[0] = overlapping_inputs;
+        c.inputs.base = overlapping_inputs;
         Some(self.setup_other_inputs(c))
     }
 
     /// Pick level and inputs for a new compaction.
-    /// Returns `None` if there is no compaction to be done.
-    /// Otherwise returns compaction object that
+    /// Returns `None` if no compaction needs to be done.
+    /// Otherwise returns a `Compaction` that
     /// describes the compaction.
     pub fn pick_compaction(&mut self) -> Option<Compaction<S::F>> {
         let current = self.current();
@@ -511,21 +511,21 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
                             .compare(file.largest.data(), self.compaction_pointer[level].data())
                             == CmpOrdering::Greater
                     {
-                        compaction.inputs[0].push(file.clone());
+                        compaction.inputs.add_base(file.clone());
                         break;
                     }
                 }
-                if compaction.inputs[0].is_empty() {
+                if compaction.inputs.base.is_empty() {
                     if let Some(file) = current.files[0].first() {
                         // Wrap-around to the beginning of the key space
-                        compaction.inputs[0].push(file.clone())
+                        compaction.inputs.add_base(file.clone())
                     }
                 }
                 compaction
             } else if seek_compaction {
                 let level = current.file_to_compact_level.load(Ordering::Acquire);
                 let mut compaction = Compaction::new(self.options.clone(), level);
-                compaction.inputs[0].push(file_to_compact);
+                compaction.inputs.add_base(file_to_compact);
                 compaction
             } else {
                 return None;
@@ -535,13 +535,13 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         // Files in level 0 may overlap each other, so pick up all overlapping ones
         if compaction.level == 0 {
             let (smallest, largest) =
-                base_range(&compaction.inputs[0], compaction.level, &self.icmp);
+                base_range(&compaction.inputs.base, compaction.level, &self.icmp);
             // Note that the next call will discard the file we placed in
             // inputs[0] earlier and replace it with an overlapping set
             // which will include the picked file.
-            compaction.inputs[0] =
+            compaction.inputs.base =
                 current.get_overlapping_inputs(compaction.level, Some(smallest), Some(largest));
-            assert!(!compaction.inputs[0].is_empty());
+            assert!(!compaction.inputs.base.is_empty());
         }
 
         Some(self.setup_other_inputs(compaction))
@@ -788,7 +788,8 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         let mut c = self.add_boundary_inputs(c);
         let current = &self.current();
         // TODO: remove this clone
-        let not_expand = std::mem::replace(&mut c.inputs, [vec![], vec![]])[0].clone();
+        let inputs = std::mem::replace(&mut c.inputs, CompactionInputs::default());
+        let not_expand = inputs.base;
         // Calculate the key range in current level after `add_boundary_inputs`
         let (smallest, largest) = base_range(&not_expand, c.level, &self.icmp);
         // figure out the overlapping files in next level
@@ -871,14 +872,17 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
             .compaction_pointers
             .push((c.level, final_largest.clone()));
         self.compaction_pointer[c.level] = final_largest.clone();
-        let final_inputs = [current_files, next_files];
+        let final_inputs = CompactionInputs {
+            base: current_files,
+            parent: next_files,
+        };
         c.inputs = final_inputs;
         c
     }
 
     // A helper of 'add_boundary_input_for_compact_files' for files in `c.level`
     fn add_boundary_inputs(&self, mut c: Compaction<S::F>) -> Compaction<S::F> {
-        self.add_boundary_inputs_for_compact_files(c.level, &mut c.inputs[0]);
+        self.add_boundary_inputs_for_compact_files(c.level, &mut c.inputs.base);
         c
     }
 
