@@ -168,7 +168,7 @@ impl<O: File> Compaction<O> {
                         // all the level0 tables are guaranteed being added into the table_cache via minor compaction
                         level0.push(table_cache.new_iter(
                             icmp.clone(),
-                            read_options.clone(),
+                            read_options,
                             file.number,
                             file.file_size,
                         )?);
