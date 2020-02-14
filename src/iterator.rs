@@ -245,14 +245,12 @@ impl<I: Iterator<Key = Slice, Value = Slice>, F: DerivedIterFactory> Iterator
 
     fn key(&self) -> Self::Key {
         self.valid_or_panic();
-        self.derived
-            .as_ref().unwrap().key()
+        self.derived.as_ref().unwrap().key()
     }
 
     fn value(&self) -> Self::Value {
         self.valid_or_panic();
-        self.derived
-            .as_ref().unwrap().value()
+        self.derived.as_ref().unwrap().value()
     }
 
     fn status(&mut self) -> Result<()> {
