@@ -16,7 +16,7 @@ pub mod format;
 pub mod iterator;
 
 use crate::batch::{WriteBatch, HEADER_SIZE};
-use crate::compaction::{Compaction, CompactionInputsRelation, ManualCompaction};
+use crate::compaction::{Compaction, ManualCompaction};
 use crate::db::filename::{generate_filename, parse_filename, update_current, FileType};
 use crate::db::format::{
     InternalKey, InternalKeyComparator, LookupKey, ParsedInternalKey, ValueType, MAX_KEY_SEQUENCE,
@@ -962,14 +962,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
                                 "(end)".to_owned()
                             };
                             let stop = if let Some(c) = &compaction {
-                                format!(
-                                    "{:?}",
-                                    c.inputs[CompactionInputsRelation::Source as usize]
-                                        .last()
-                                        .unwrap()
-                                        .largest
-                                        .clone()
-                                )
+                                format!("{:?}", c.inputs.base.last().unwrap().largest.clone())
                             } else {
                                 "(end)".to_owned()
                             };
@@ -986,9 +979,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
             } {
                 if !is_manual && compaction.is_trivial_move() {
                     // just move file to next level
-                    let f = compaction.inputs[CompactionInputsRelation::Source as usize]
-                        .first()
-                        .unwrap();
+                    let f = compaction.inputs.base.first().unwrap();
                     compaction.edit.delete_file(compaction.level, f.number);
                     compaction.edit.add_file(
                         compaction.level + 1,
@@ -1013,9 +1004,9 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
                     let level = compaction.level;
                     info!(
                         "Compacting {}@{} + {}@{} files",
-                        compaction.inputs[CompactionInputsRelation::Source as usize].len(),
+                        compaction.inputs.base.len(),
                         level,
-                        compaction.inputs[CompactionInputsRelation::Parent as usize].len(),
+                        compaction.inputs.parent.len(),
                         level + 1
                     );
                     {
@@ -1179,9 +1170,9 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         if status.is_ok() {
             info!(
                 "Compacted {}@{} + {}@{} files => {} bytes",
-                c.inputs[CompactionInputsRelation::Source as usize].len(),
+                c.inputs.base.len(),
                 c.level,
-                c.inputs[CompactionInputsRelation::Parent as usize].len(),
+                c.inputs.parent.len(),
                 c.level + 1,
                 c.total_bytes,
             );
