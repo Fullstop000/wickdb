@@ -361,12 +361,14 @@ pub struct DBImpl<S: Storage + Clone> {
 
     // The version set
     versions: Mutex<VersionSet<S>>,
-    // ManualCompaction config
-    manual_compaction: ShardedLock<Option<ManualCompaction>>,
+
+    // The queue for ManualCompaction
+    // All the compaction will be executed one by one once compaction is triggered
+    manual_compaction_queue: Mutex<VecDeque<ManualCompaction>>,
 
     // signal of compaction finished
     background_work_finished_signal: Condvar,
-    // whether we have a compaction running
+    // whether we have scheduled and running a compaction
     background_compaction_scheduled: AtomicBool,
     // signal of schedule a compaction
     do_compaction: (Sender<()>, Receiver<()>),
@@ -408,7 +410,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
             process_batch_sem: Condvar::new(),
             table_cache: TableCache::new(db_name, o.clone(), o.table_cache_size(), storage.clone()),
             versions: Mutex::new(VersionSet::new(db_name, o.clone(), storage)),
-            manual_compaction: ShardedLock::new(None),
+            manual_compaction_queue: Mutex::new(VecDeque::new()),
             background_work_finished_signal: Condvar::new(),
             background_compaction_scheduled: AtomicBool::new(false),
             do_compaction: crossbeam_channel::unbounded(),
@@ -879,11 +881,13 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
     // and a key after all keys for `end` in the database.
     fn compact_range(&self, begin: Option<&[u8]>, end: Option<&[u8]>) -> Result<()> {
         let mut max_level_with_files = 1;
-        let versions = self.versions.lock().unwrap();
-        let current = versions.current();
-        for l in 1..self.options.max_levels as usize {
-            if current.overlap_in_level(l, begin, end) {
-                max_level_with_files = l;
+        {
+            let versions = self.versions.lock().unwrap();
+            let current = versions.current();
+            for l in 1..self.options.max_levels as usize {
+                if current.overlap_in_level(l, begin, end) {
+                    max_level_with_files = l;
+                }
             }
         }
         self.force_compact_mem_table()?;
@@ -897,35 +901,19 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
     // compaction completes
     fn manual_compact_range(&self, level: usize, begin: Option<&[u8]>, end: Option<&[u8]>) {
         assert!(level + 1 < self.options.max_levels as usize);
-        let manual = ManualCompaction {
-            level,
-            done: Arc::new(AtomicBool::new(false)),
-            begin: begin.map(|k| InternalKey::new(k, MAX_KEY_SEQUENCE, VALUE_TYPE_FOR_SEEK)),
-            end: end.map(|k| InternalKey::new(k, 0, ValueType::Value)),
-        };
-
-        let l = Mutex::new(());
-        // Waiting for next compaction window
-        while !manual.done.load(Ordering::Acquire)
-            && !self.background_compaction_scheduled.load(Ordering::Acquire)
-            && self.has_bg_error()
+        let (sender, finished) = crossbeam_channel::bounded(1);
         {
-            if self.manual_compaction.read().unwrap().is_none() {
-                *self.manual_compaction.write().unwrap() = Some(manual.clone());
-                let versions = self.versions.lock().unwrap();
-                self.maybe_schedule_compaction(versions.current());
-            } else {
-                let _ = self
-                    .background_work_finished_signal
-                    .wait(l.lock().unwrap())
-                    .unwrap();
-            }
+            let mut m_queue = self.manual_compaction_queue.lock().unwrap();
+            m_queue.push_back(ManualCompaction {
+                level,
+                done: sender,
+                begin: begin.map(|k| InternalKey::new(k, MAX_KEY_SEQUENCE, VALUE_TYPE_FOR_SEEK)),
+                end: end.map(|k| InternalKey::new(k, 0, ValueType::Value)),
+            });
         }
-        if let Some(m) = &*self.manual_compaction.read().unwrap() {
-            if m == &manual {
-                *self.manual_compaction.write().unwrap() = None;
-            }
-        }
+        let v = self.versions.lock().unwrap().current();
+        self.maybe_schedule_compaction(v);
+        finished.recv().unwrap();
     }
 
     // The complete compaction process
@@ -935,48 +923,41 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
             // minor compaction
             self.compact_mem_table();
         } else {
-            let mut is_manual = false;
             let mut versions = self.versions.lock().unwrap();
-            if let Some(mut compaction) = {
-                match &*self.manual_compaction.read().unwrap() {
-                    // manual compaction
-                    Some(manual) => {
-                        if manual.done.load(Ordering::Acquire) {
-                            versions.pick_compaction()
-                        } else {
-                            let compaction = versions.compact_range(
-                                manual.level,
-                                manual.begin.as_ref(),
-                                manual.end.as_ref(),
-                            );
-                            manual.done.store(compaction.is_none(), Ordering::Release);
-                            let begin = if let Some(begin) = &manual.begin {
-                                format!("{:?}", begin)
-                            } else {
-                                "(begin)".to_owned()
-                            };
-                            let end = if let Some(end) = &manual.end {
-                                format!("{:?}", end)
-                            } else {
-                                "(end)".to_owned()
-                            };
-                            let stop = if let Some(c) = &compaction {
-                                format!("{:?}", c.inputs.base.last().unwrap().largest.clone())
-                            } else {
-                                "(end)".to_owned()
-                            };
-                            info!(
-                                "Manual compaction at level-{} from {} .. {}; will stop at {}",
-                                manual.level, begin, end, stop
-                            );
-                            is_manual = true;
-                            compaction
-                        }
-                    }
-                    None => versions.pick_compaction(),
+            let (compaction, signal) = {
+                if let Some(manual) = self.manual_compaction_queue.lock().unwrap().pop_front() {
+                    let compaction = versions.compact_range(
+                        manual.level,
+                        manual.begin.as_ref(),
+                        manual.end.as_ref(),
+                    );
+                    manual.done.send(()).unwrap();
+                    let begin = if let Some(begin) = &manual.begin {
+                        format!("{:?}", begin)
+                    } else {
+                        "(begin)".to_owned()
+                    };
+                    let end = if let Some(end) = &manual.end {
+                        format!("{:?}", end)
+                    } else {
+                        "(end)".to_owned()
+                    };
+                    let stop = if let Some(c) = &compaction {
+                        format!("{:?}", c.inputs.base.last().unwrap().largest.clone())
+                    } else {
+                        "(end)".to_owned()
+                    };
+                    info!(
+                        "Manual compaction at level-{} from {} .. {}; will stop at {}",
+                        manual.level, begin, end, stop
+                    );
+                    (compaction, Some(manual.done))
+                } else {
+                    (versions.pick_compaction(), None)
                 }
-            } {
-                if !is_manual && compaction.is_trivial_move() {
+            };
+            if let Some(mut compaction) = compaction {
+                if compaction.is_trivial_move() {
                     // just move file to next level
                     let f = compaction.inputs.base.first().unwrap();
                     compaction.edit.delete_file(compaction.level, f.number);
@@ -1025,14 +1006,8 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
                         info!("Compaction error: {:?}", e)
                     }
                 }
-                if is_manual {
-                    self.manual_compaction
-                        .read()
-                        .unwrap()
-                        .as_ref()
-                        .unwrap()
-                        .done
-                        .store(true, Ordering::Release);
+                if let Some(signal) = signal {
+                    signal.send(()).unwrap();
                 }
             }
         }
@@ -1226,7 +1201,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         || self.has_bg_error()
             // Got err
         ||  (self.im_mem.read().unwrap().is_none()
-            && self.manual_compaction.read().unwrap().is_none() && !version.needs_compaction())
+            && self.manual_compaction_queue.lock().unwrap().is_empty() && !version.needs_compaction())
         {
             // No work needs to be done
         } else {
@@ -1385,6 +1360,7 @@ mod tests {
     use super::*;
     use crate::storage::mem::MemStorage;
     use crate::{BloomFilter, CompressionType};
+    use std::ops::Deref;
     use std::rc::Rc;
 
     impl<S: Storage + Clone> WickDB<S> {
@@ -1628,6 +1604,13 @@ mod tests {
         }
     }
 
+    impl Deref for DBTest {
+        type Target = WickDB<MemStorage>;
+        fn deref(&self) -> &Self::Target {
+            &self.db
+        }
+    }
+
     #[test]
     fn test_empty_db() {
         for t in default_cases() {
@@ -1698,7 +1681,7 @@ mod tests {
     fn test_get_from_versions() {
         for t in default_cases() {
             t.assert_put_get("foo", "v1");
-            t.db.inner.force_compact_mem_table().unwrap();
+            t.inner.force_compact_mem_table().unwrap();
             assert_eq!("v1", t.get("foo", None).unwrap());
         }
     }
@@ -1721,15 +1704,16 @@ mod tests {
         }
     }
 
+    // Ensure `get` returns same result with the same snapshot and the same key
     #[test]
     fn test_get_with_identical_snapshots() {
         for t in default_cases() {
             let keys = vec![String::from("foo"), "x".repeat(200)];
             for key in keys {
                 t.assert_put_get(&key, "v1");
-                let s1 = t.db.snapshot();
-                let s2 = t.db.snapshot();
-                let s3 = t.db.snapshot();
+                let s1 = t.snapshot();
+                let s2 = t.snapshot();
+                let s3 = t.snapshot();
                 t.assert_put_get(&key, "v2");
                 assert_eq!(t.get(&key, Some(s1.sequence().into())).unwrap(), "v1");
                 assert_eq!(t.get(&key, Some(s2.sequence().into())).unwrap(), "v1");
@@ -1745,13 +1729,45 @@ mod tests {
     }
 
     #[test]
+    fn test_iterate_over_empty_snapshot() {
+        for t in default_cases() {
+            let s = t.snapshot();
+            let mut read_opt = ReadOptions::default();
+            read_opt.snapshot = Some(s.sequence().into());
+            t.put("foo", "v1").unwrap();
+            t.put("foo", "v2").unwrap();
+            let mut iter = t.iter(read_opt).unwrap();
+            iter.seek_to_first();
+            // No entry at this snapshot
+            assert!(!iter.valid());
+            // flush entries into sst file
+            t.inner.force_compact_mem_table().unwrap();
+            let mut iter = t.iter(read_opt).unwrap();
+            iter.seek_to_first();
+            assert!(!iter.valid());
+        }
+    }
+
+    #[test]
     fn test_get_level0_ordering() {
         for t in default_cases() {
             t.put("bar", "b").unwrap();
             t.put("foo", "v1").unwrap();
-            t.db.inner.force_compact_mem_table().unwrap();
+            t.inner.force_compact_mem_table().unwrap();
             t.put("foo", "v2").unwrap();
-            t.db.inner.force_compact_mem_table().unwrap();
+            t.inner.force_compact_mem_table().unwrap();
+            assert_eq!(t.get("foo", None).unwrap(), "v2");
+        }
+    }
+
+    #[test]
+    fn test_get_ordered_by_levels() {
+        for t in default_cases() {
+            t.put("foo", "v1").unwrap();
+            t.compact(Some(b"a"), Some(b"z"));
+            assert_eq!(t.get("foo", None).unwrap(), "v1");
+            t.put("foo", "v2").unwrap();
+            t.inner.force_compact_mem_table().unwrap();
             assert_eq!(t.get("foo", None).unwrap(), "v2");
         }
     }

@@ -18,6 +18,8 @@
 use std::collections::vec_deque::VecDeque;
 use std::sync::Arc;
 
+const MIN_SNAPSHOT: u64 = 0;
+
 /// Abstract handle to particular state of a DB.
 /// A `Snapshot` is an immutable object and can therefore be safely
 /// accessed from multiple threads without any external synchronization.
@@ -47,17 +49,24 @@ impl From<u64> for Snapshot {
 /// Although Rust provides a standard double linked list, use a array based containers are faster.
 /// See https://doc.rust-lang.org/std/collections/struct.LinkedList.html
 pub struct SnapshotList {
-    // Since the Snapshot is immutable, the Rc is suitable here
+    // The initialized snapshot with `MIN_SNAPSHOT` number.
+    first: Arc<Snapshot>,
+    // All the newly allocated snapshots.
+    // A new snapshot will be `pushed back` into `snapshots`
+    // Since a Snapshot will be never altered after allocated, `Arc` is suitable here
     snapshots: VecDeque<Arc<Snapshot>>,
 }
 
 impl SnapshotList {
     pub fn new() -> Self {
+        let first = Arc::new(MIN_SNAPSHOT.into());
         Self {
+            first,
             snapshots: VecDeque::new(),
         }
     }
 
+    /// Returns true if current snapshot list is empty.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.snapshots.is_empty()
@@ -65,23 +74,28 @@ impl SnapshotList {
 
     #[inline]
     pub fn oldest(&self) -> Arc<Snapshot> {
-        assert!(!self.is_empty());
-        self.snapshots.front().unwrap().clone()
+        if self.is_empty() {
+            self.first.clone()
+        } else {
+            self.snapshots.front().unwrap().clone()
+        }
     }
 
     #[inline]
-    #[allow(dead_code)]
-    pub fn newest(&self) -> Arc<Snapshot> {
-        assert!(!self.is_empty());
-        self.snapshots.back().unwrap().clone()
+    fn newest(&self) -> Arc<Snapshot> {
+        if self.is_empty() {
+            self.first.clone()
+        } else {
+            self.snapshots.back().unwrap().clone()
+        }
     }
 
     /// Creates a `Snapshot` and appends it to the end of the list
     pub fn snapshot(&mut self, seq: u64) -> Arc<Snapshot> {
         let last_seq = self.last_seq();
-        assert!(seq >= last_seq, "[snapshot] the sequence number shouldn't be monotonically decreasing : [new: {}], [last: {}]", seq, last_seq);
+        assert!(seq >= last_seq, "[snapshot] the sequence number must be monotonically increasing : [new: {}], [last: {}]", seq, last_seq);
         if last_seq == seq {
-            self.snapshots.back().unwrap().clone()
+            self.newest()
         } else {
             let s = Arc::new(Snapshot {
                 sequence_number: seq,
@@ -98,23 +112,23 @@ impl SnapshotList {
     }
 
     #[inline]
-    pub(super) fn last_seq(&self) -> u64 {
-        match self.snapshots.back() {
-            Some(s) => s.sequence_number,
-            None => 0,
-        }
+    fn last_seq(&self) -> u64 {
+        self.snapshots
+            .back()
+            .map_or(self.first.sequence(), |s| s.sequence_number)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::snapshot::SnapshotList;
+    use super::*;
 
     #[test]
     pub fn test_new_is_empty() {
-        let s = SnapshotList::new();
+        let mut s = SnapshotList::new();
         assert!(s.is_empty());
-        assert_eq!(0, s.last_seq());
+        assert_eq!(MIN_SNAPSHOT, s.last_seq());
+        assert_eq!(MIN_SNAPSHOT, s.snapshot(MIN_SNAPSHOT).sequence());
     }
 
     #[test]
@@ -134,9 +148,9 @@ mod tests {
     #[test]
     pub fn test_append_new_snapshot() {
         let mut s = SnapshotList::new();
-        for i in [1, 1, 2, 3].iter() {
-            let s = s.snapshot(*i);
-            assert_eq!(s.sequence(), *i);
+        for i in vec![1, 1, 2, 3] {
+            let s = s.snapshot(i);
+            assert_eq!(s.sequence(), i);
         }
         assert_eq!(1, s.oldest().sequence());
         assert_eq!(3, s.newest().sequence());
