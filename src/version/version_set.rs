@@ -216,7 +216,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         let mut versions = VecDeque::new();
         versions.push_front(first_v);
         Self {
-            snapshots: SnapshotList::new(),
+            snapshots: SnapshotList::default(),
             compaction_stats,
             pending_outputs: HashSet::default(),
             db_name,

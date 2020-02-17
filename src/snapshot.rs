@@ -57,15 +57,17 @@ pub struct SnapshotList {
     snapshots: VecDeque<Arc<Snapshot>>,
 }
 
-impl SnapshotList {
-    pub fn new() -> Self {
+impl Default for SnapshotList {
+    fn default() -> Self {
         let first = Arc::new(MIN_SNAPSHOT.into());
         Self {
             first,
             snapshots: VecDeque::new(),
         }
     }
+}
 
+impl SnapshotList {
     /// Returns true if current snapshot list is empty.
     #[inline]
     pub fn is_empty(&self) -> bool {
@@ -124,30 +126,36 @@ mod tests {
     use super::*;
 
     #[test]
-    pub fn test_new_is_empty() {
-        let mut s = SnapshotList::new();
+    fn test_new_is_empty() {
+        let mut s = SnapshotList::default();
         assert!(s.is_empty());
         assert_eq!(MIN_SNAPSHOT, s.last_seq());
         assert_eq!(MIN_SNAPSHOT, s.snapshot(MIN_SNAPSHOT).sequence());
     }
 
     #[test]
-    #[should_panic]
-    pub fn test_panic_oldest_when_empty() {
-        let s = SnapshotList::new();
-        s.oldest();
+    fn test_oldest() {
+        let mut s = SnapshotList::default();
+        assert_eq!(MIN_SNAPSHOT, s.oldest().sequence());
+        for i in vec![1, 1, 2, 3] {
+            s.snapshot(i);
+        }
     }
 
     #[test]
-    #[should_panic]
-    pub fn test_panic_newest_when_empty() {
-        let s = SnapshotList::new();
-        s.newest();
+    fn test_gc() {
+        let mut s = SnapshotList::default();
+        s.snapshot(1);
+        let s2 = s.snapshot(2);
+        s.snapshot(3);
+        s.gc();
+        assert_eq!(1, s.snapshots.len());
+        assert_eq!(s2.sequence(), s.snapshots.pop_front().unwrap().sequence());
     }
 
     #[test]
-    pub fn test_append_new_snapshot() {
-        let mut s = SnapshotList::new();
+    fn test_append_new_snapshot() {
+        let mut s = SnapshotList::default();
         for i in vec![1, 1, 2, 3] {
             let s = s.snapshot(i);
             assert_eq!(s.sequence(), i);

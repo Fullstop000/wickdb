@@ -1748,6 +1748,7 @@ mod tests {
         }
     }
 
+    // Test that "get" always retrieve entries from the right sst file
     #[test]
     fn test_get_level0_ordering() {
         for t in default_cases() {
