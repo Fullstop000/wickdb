@@ -41,7 +41,7 @@ pub struct ManualCompaction {
 
 // A helper struct representing all the files to be compacted.
 // All the files in `base` or `parent` must be sorted by key range.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct CompactionInputs {
     // level n files
     pub base: Vec<Arc<FileMetaData>>,

@@ -860,6 +860,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         // Schedule a force memory compaction
         self.schedule_batch_and_wait(WriteOptions::default(), empty_batch, true)?;
         // Waiting for memory compaction complete
+        // TODO: This is not safe because there could be several compaction be triggered one by one
         thread::sleep(Duration::from_secs(1));
         if self.im_mem.read().unwrap().is_some() {
             return self.take_bg_error().map_or(Ok(()), |e| Err(e));
@@ -999,6 +1000,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
                             compaction.oldest_snapshot_alive = snapshots.oldest().sequence();
                         }
                     }
+                    println!("{}", format!("level@{} {:?}", &compaction.level, &compaction.inputs));
                     self.delete_obsolete_files(self.do_compaction(&mut compaction));
                 }
                 if !self.is_shutting_down.load(Ordering::Acquire) {
@@ -1592,6 +1594,29 @@ mod tests {
             self.put(key, value).unwrap();
             assert_eq!(value, self.get(key, None).unwrap());
         }
+
+        // Check the number of sst files at `level` in current version
+        fn assert_file_num_at_level(&self, level: usize, expect: usize) {
+            let got = self.inner.versions.lock().unwrap().level_files_count(level);
+            assert_eq!(got, expect);
+        }
+
+        // Check all the number of sst files at each level in current version 
+        fn assert_file_num_at_each_level(&self, expect: Vec<usize>) {
+            let current = self.inner.versions.lock().unwrap().current();
+            let max_level = self.options().max_levels as usize;
+            let mut got = Vec::with_capacity(max_level);
+            for l in 0..max_level {
+                got.push(current.get_level_files(l).len());
+            }
+            assert_eq!(got, expect);
+        }
+
+        // Print all sst files at current version
+        fn print_sst_files(&self) {
+            let current = self.inner.versions.lock().unwrap().current();
+            println!("{}", current.level_summary());
+        }
     }
 
     impl Default for DBTest {
@@ -1671,6 +1696,7 @@ mod tests {
             t.put("k2", &"y".repeat(100000)).unwrap(); // trigger compaction
                                                        // Waiting for compaction finish
             thread::sleep(Duration::from_secs(2));
+            t.assert_file_num_at_level(2, 1);
             // Try to retrieve key "foo" from level 0 files
             assert_eq!("v1", t.get("foo", None).unwrap()); // "v1" on SST files
         }
@@ -1697,7 +1723,7 @@ mod tests {
                 t.put(&key, "v2").unwrap();
                 assert_eq!(t.get(&key, None).unwrap(), "v2");
                 assert_eq!(t.get(&key, Some(s.sequence().into())).unwrap(), "v1");
-                t.db.inner.force_compact_mem_table().unwrap();
+                t.inner.force_compact_mem_table().unwrap();
                 assert_eq!(t.get(&key, None).unwrap(), "v2");
                 assert_eq!(t.get(&key, Some(s.sequence().into())).unwrap(), "v1");
             }
@@ -1719,7 +1745,7 @@ mod tests {
                 assert_eq!(t.get(&key, Some(s2.sequence().into())).unwrap(), "v1");
                 assert_eq!(t.get(&key, Some(s3.sequence().into())).unwrap(), "v1");
                 mem::drop(s1);
-                t.db.inner.force_compact_mem_table().unwrap();
+                t.inner.force_compact_mem_table().unwrap();
                 assert_eq!(t.get(&key, None).unwrap(), "v2");
                 assert_eq!(t.get(&key, Some(s2.sequence().into())).unwrap(), "v1");
                 mem::drop(s2);
@@ -1755,8 +1781,12 @@ mod tests {
             t.put("bar", "b").unwrap();
             t.put("foo", "v1").unwrap();
             t.inner.force_compact_mem_table().unwrap();
+            t.assert_file_num_at_level(2, 1);
             t.put("foo", "v2").unwrap();
             t.inner.force_compact_mem_table().unwrap();
+            // The 2nd sst file is placed at level1 because the key "foo" is overlapped with
+            // sst file in level 2 (produced by last "force_compact_mem_table")
+            t.assert_file_num_at_each_level(vec![0, 1, 1, 0, 0, 0, 0]);
             assert_eq!(t.get("foo", None).unwrap(), "v2");
         }
     }
@@ -1770,6 +1800,25 @@ mod tests {
             t.put("foo", "v2").unwrap();
             t.inner.force_compact_mem_table().unwrap();
             assert_eq!(t.get("foo", None).unwrap(), "v2");
+        }
+    }
+
+    #[test]
+    fn test_pick_correct_file() {
+        for t in default_cases() {
+            t.put("a", "va").unwrap();
+            t.compact(Some(b"a"), Some(b"b"));
+            t.put("x", "vx").unwrap();
+            t.compact(Some(b"x"), Some(b"y"));
+            t.put("f", "vf").unwrap();
+            t.compact(Some(b"f"), Some(b"g"));
+            // Each sst file's key range doesn't overlap. So all the sst files are 
+            // placed at level 2
+            t.assert_file_num_at_level(2, 3);
+            t.print_sst_files();
+            assert_eq!(t.get("a", None).unwrap(), "va");
+            assert_eq!(t.get("x", None).unwrap(), "vx");
+            assert_eq!(t.get("f", None).unwrap(), "vf");
         }
     }
 }

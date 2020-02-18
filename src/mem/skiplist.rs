@@ -159,6 +159,7 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
     }
 
     /// Returns current elements count
+    #[inline]
     pub fn count(&self) -> usize {
         self.count.load(Ordering::Acquire)
     }

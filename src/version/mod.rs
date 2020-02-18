@@ -270,6 +270,7 @@ impl Version {
                 InternalKey::new(smallest_ukey, MAX_KEY_SEQUENCE, VALUE_TYPE_FOR_SEEK);
             let largest_ikey = InternalKey::new(largest_ukey, 0, ValueType::Deletion);
             while level < self.options.max_mem_compact_level {
+                // Stops if overlaps at next level
                 if self.overlap_in_level(level + 1, Some(smallest_ukey), Some(largest_ukey)) {
                     break;
                 }
