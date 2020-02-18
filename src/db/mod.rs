@@ -1000,7 +1000,6 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
                             compaction.oldest_snapshot_alive = snapshots.oldest().sequence();
                         }
                     }
-                    println!("{}", format!("level@{} {:?}", &compaction.level, &compaction.inputs));
                     self.delete_obsolete_files(self.do_compaction(&mut compaction));
                 }
                 if !self.is_shutting_down.load(Ordering::Acquire) {
@@ -1601,7 +1600,7 @@ mod tests {
             assert_eq!(got, expect);
         }
 
-        // Check all the number of sst files at each level in current version 
+        // Check all the number of sst files at each level in current version
         fn assert_file_num_at_each_level(&self, expect: Vec<usize>) {
             let current = self.inner.versions.lock().unwrap().current();
             let max_level = self.options().max_levels as usize;
@@ -1812,7 +1811,7 @@ mod tests {
             t.compact(Some(b"x"), Some(b"y"));
             t.put("f", "vf").unwrap();
             t.compact(Some(b"f"), Some(b"g"));
-            // Each sst file's key range doesn't overlap. So all the sst files are 
+            // Each sst file's key range doesn't overlap. So all the sst files are
             // placed at level 2
             t.assert_file_num_at_level(2, 3);
             t.print_sst_files();
