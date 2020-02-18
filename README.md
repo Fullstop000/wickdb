@@ -6,6 +6,8 @@
 [![dependency status](https://deps.rs/repo/github/Fullstop000/wickdb/status.svg)](https://deps.rs/repo/github/Fullstop000/wickdb)
 [![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2FFullstop000%2Fwickdb.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2FFullstop000%2Fwickdb?ref=badge_shield)
 
+**This project is under rapidly development**
+
 You can find a simple worked example in `examples`. 
 
 ### Plan & Progress
@@ -23,22 +25,21 @@ You can find a simple worked example in `examples`.
   - [x] Version
   - [x] VersionEdit
   - [x] VersionSet
-  - [x] Storage (aka Env)
+  - [x] Storage
   - [x] DB
 - [x] Compaction implementation
 - [x] Scheduling
 
 #### [ongoing] Test cases & Benches
 
-- [ ] Solid test cases
-- [ ] Benchmark
+- Adding more test cases. The progress is tracked by this [issue](https://github.com/Fullstop000/wickdb/issues/3).
+- Adding benchmarks. The progress is tracked by this [issue](https://github.com/Fullstop000/wickdb/issues/21).
 
 #### Remove unsafe codes
 
 We should use Rust as safe as we could because that's why we prefer using Rust.
 
-- `Slice` could be replaced using crate [bytes](https://docs.rs/bytes).
-- `LRUCache` is a double-linked circle list implemented by raw pointer.
+- [`Slice`](https://github.com/Fullstop000/wickdb/blob/master/src/util/slice.rs) is extremly unsafe. The progress is tracked by this [issue](https://github.com/Fullstop000/wickdb/issues/24).
 
 ### Developing
 
