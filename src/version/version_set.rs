@@ -30,7 +30,7 @@ use crate::storage::{File, Storage};
 use crate::table_cache::TableCache;
 use crate::util::coding::decode_fixed_64;
 use crate::util::collection::HashSet;
-use crate::util::comparator::{BytewiseComparator, Comparator};
+use crate::util::comparator::Comparator;
 use crate::util::reporter::LogReporter;
 use crate::util::slice::Slice;
 use crate::version::version_edit::{FileDelta, FileMetaData, VersionEdit};
@@ -53,15 +53,15 @@ struct LevelState {
 }
 
 /// Summarizes the files added and deleted from a set of version edits.
-pub struct VersionBuilder {
+pub struct VersionBuilder<'a> {
     // file changes for every level
     levels: Vec<LevelState>,
-    base: Version,
+    base: &'a Version,
 }
 
-impl VersionBuilder {
-    pub fn new(base: Version) -> Self {
-        let max_levels = base.options.max_levels as usize;
+impl<'a> VersionBuilder<'a> {
+    pub fn new(max_levels: usize, base: &'a Version) -> Self {
+        // let max_levels = base.options.max_levels as usize;
         let mut levels = Vec::with_capacity(max_levels);
         for _ in 0..max_levels {
             levels.push(LevelState {
@@ -72,7 +72,7 @@ impl VersionBuilder {
         Self { levels, base }
     }
 
-    /// Add the given VersionEdit for later applying
+    /// Add the given `FileDelta` for later applying
     /// 'vset.compaction_pointers' will be updated
     /// same as `apply` in C++ implementation
     pub fn accumulate<S: Storage + Clone>(&mut self, delta: FileDelta, vset: &mut VersionSet<S>) {
@@ -113,15 +113,15 @@ impl VersionBuilder {
 
     /// Apply all the changes on the base Version and produce a new Version based on it
     /// same as `SaveTo` in C++ implementation
-    pub fn apply_to_new(&mut self) -> Version {
+    pub fn apply_to_new(self, icmp: &InternalKeyComparator) -> Version {
         // TODO: config this to the option
-        let icmp = InternalKeyComparator::new(Arc::new(BytewiseComparator::default()));
         let mut v = Version::new(self.base.options.clone(), icmp.clone());
         for (level, (base_files, delta)) in self
             .base
             .files
-            .drain(..)
-            .zip(self.levels.drain(..))
+            .clone()
+            .into_iter()
+            .zip(self.levels)
             .enumerate()
         {
             for file in base_files {
@@ -210,6 +210,11 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         for _ in 0..options.max_levels {
             compaction_stats.push(CompactionStats::new());
         }
+        let icmp = InternalKeyComparator::new(options.comparator.clone());
+        // Create an empty version as the first
+        let first_v = Arc::new(Version::new(options.clone(), icmp.clone()));
+        let mut versions = VecDeque::new();
+        versions.push_front(first_v);
         Self {
             snapshots: SnapshotList::new(),
             compaction_stats,
@@ -217,15 +222,15 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
             db_name,
             storage,
             record_writer: None,
-            options: options.clone(),
-            icmp: InternalKeyComparator::new(options.comparator.clone()),
+            options,
+            icmp,
             next_file_number: 0,
             last_sequence: 0,
             log_number: 0,
             prev_log_number: 0,
             manifest_file_number: 0,
             manifest_writer: None,
-            versions: VecDeque::new(),
+            versions,
             compaction_pointer: vec![],
         }
     }
@@ -293,9 +298,11 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         self.last_sequence = new
     }
 
-    /// Get the current newest version
+    /// Get the current newest version.
     #[inline]
     pub fn current(&self) -> Arc<Version> {
+        // In `VersionSet::new()`, we always create a empty version as the first one so
+        // that the `unwrap()` here is safe
         self.versions.front().unwrap().clone()
     }
 
@@ -369,11 +376,11 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         let mut record = vec![];
         edit.encode_to(&mut record);
 
-        let mut v = Version::new(self.options.clone(), self.icmp.clone());
-        let mut builder = VersionBuilder::new(v);
+        let this = self.current();
+        let mut builder = VersionBuilder::new(self.options.max_levels as usize, this.as_ref());
         let file_delta = edit.take_file_delta();
         builder.accumulate(file_delta, self);
-        v = builder.apply_to_new();
+        let mut v = builder.apply_to_new(&self.icmp);
         v.finalize();
 
         // cleanup all the old versions
@@ -654,8 +661,8 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
             }
         };
         let file_length = current_manifest.len();
-        let mut builder =
-            VersionBuilder::new(Version::new(self.options.clone(), self.icmp.clone()));
+        let base = Version::new(self.options.clone(), self.icmp.clone());
+        let mut builder = VersionBuilder::new(self.options.max_levels as usize, &base);
         let reporter = LogReporter::new();
         let mut reader = Reader::new(current_manifest, Some(Box::new(reporter.clone())), true, 0);
         let mut buf = vec![];
@@ -724,7 +731,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         self.mark_file_number_used(prev_log_number);
         self.mark_file_number_used(log_number);
 
-        let mut new_v = builder.apply_to_new();
+        let mut new_v = builder.apply_to_new(&self.icmp);
         new_v.finalize();
         self.versions.push_front(Arc::new(new_v));
         self.manifest_file_number = next_file_number;
