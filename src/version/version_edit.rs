@@ -397,15 +397,15 @@ impl Debug for VersionEdit {
             write!(f, "\n  LastSeq: {}", last_seq)?;
         }
         for (level, key) in self.file_delta.compaction_pointers.iter() {
-            write!(f, "\n  CompactPointer: {} {:?}", level, key)?;
+            write!(f, "\n  CompactPointer: @{} {:?}", level, key)?;
         }
         for (level, file_num) in self.file_delta.deleted_files.iter() {
-            write!(f, "\n  DeleteFile: {} {}", level, file_num)?;
+            write!(f, "\n  DeleteFile: @{} #{}", level, file_num)?;
         }
         for (level, meta) in self.file_delta.new_files.iter() {
             write!(
                 f,
-                "\n  AddFile: {} {} {} {:?}..{:?}",
+                "\n  AddFile: @{} #{} {}bytes range: [{:?}, {:?}]",
                 level, meta.number, meta.file_size, meta.smallest, meta.largest
             )?;
         }

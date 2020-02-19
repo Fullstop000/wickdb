@@ -152,8 +152,10 @@ impl Version {
                     // If what we found is the first file, it could still not includes the target
                     // so let's check the smallest ukey. We use `ukey` because of the given `LookupKey`
                     // could has the same `ukey` as the `smallest` but a bigger `seq` number than it, which is smaller
-                    // in a comparsion by `icmp`.
-                    if ucmp.compare(ukey, target.smallest.user_key()) != CmpOrdering::Less {
+                    // in a comparison by `icmp`.
+                    if ucmp.compare(ukey, target.smallest.user_key()) != CmpOrdering::Less
+                        && level + 1 < self.options.max_levels as usize
+                    {
                         files_to_seek.push(target)
                     }
                 }
@@ -622,6 +624,15 @@ impl LevelFileNumIterator {
         }
     }
 
+    #[inline]
+    fn fill_value_buf(&mut self) {
+        if self.valid() {
+            let file = &self.files[self.index];
+            put_fixed_64(&mut self.value_buf, file.number);
+            put_fixed_64(&mut self.value_buf, file.file_size);
+        }
+    }
+
     fn valid_or_panic(&self) {
         assert!(self.valid(), "[level file num iterator] out of bounds")
     }
@@ -636,6 +647,7 @@ impl Iterator for LevelFileNumIterator {
 
     fn seek_to_first(&mut self) {
         self.index = 0;
+        self.fill_value_buf();
     }
 
     fn seek_to_last(&mut self) {
@@ -644,20 +656,19 @@ impl Iterator for LevelFileNumIterator {
         } else {
             self.index = self.files.len() - 1;
         }
+        self.fill_value_buf();
     }
 
     fn seek(&mut self, target: &[u8]) {
         let index = Version::find_file(self.icmp.clone(), self.files.as_slice(), target);
         self.index = index;
-        let file = &self.files[index];
-        // fill the buf
-        put_fixed_64(&mut self.value_buf, file.number);
-        put_fixed_64(&mut self.value_buf, file.file_size);
+        self.fill_value_buf();
     }
 
     fn next(&mut self) {
         self.valid_or_panic();
         self.index += 1;
+        self.fill_value_buf();
     }
 
     fn prev(&mut self) {
@@ -667,6 +678,7 @@ impl Iterator for LevelFileNumIterator {
             self.index = self.files.len();
         } else {
             self.index -= 1;
+            self.fill_value_buf();
         }
     }
 
@@ -679,7 +691,7 @@ impl Iterator for LevelFileNumIterator {
     // make sure the iterator's lifetime is longer than returning Slice
     fn value(&self) -> Self::Value {
         self.valid_or_panic();
-        Slice::from(&self.value_buf[..])
+        Slice::from(&self.value_buf)
     }
 
     fn status(&mut self) -> Result<()> {

@@ -133,7 +133,7 @@ impl<'a> Debug for ParsedInternalKey<'a> {
 /// ```
 ///
 // TODO: use &'a [u8] instead of Vec<u8>
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Default, Clone, PartialEq, Eq)]
 pub struct InternalKey {
     data: Vec<u8>,
 }
@@ -199,12 +199,6 @@ impl Debug for InternalKey {
             let s = unsafe { ::std::str::from_utf8_unchecked(self.data.as_slice()) };
             write!(f, "(bad){}", s)
         }
-    }
-}
-
-impl Default for InternalKey {
-    fn default() -> Self {
-        InternalKey { data: vec![] }
     }
 }
 

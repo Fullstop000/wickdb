@@ -927,32 +927,34 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
             let mut versions = self.versions.lock().unwrap();
             let (compaction, signal) = {
                 if let Some(manual) = self.manual_compaction_queue.lock().unwrap().pop_front() {
-                    let compaction = versions.compact_range(
-                        manual.level,
-                        manual.begin.as_ref(),
-                        manual.end.as_ref(),
-                    );
-                    manual.done.send(()).unwrap();
                     let begin = if let Some(begin) = &manual.begin {
                         format!("{:?}", begin)
                     } else {
-                        "(begin)".to_owned()
+                        "(-∞)".to_owned()
                     };
                     let end = if let Some(end) = &manual.end {
                         format!("{:?}", end)
                     } else {
-                        "(end)".to_owned()
+                        "(+∞)".to_owned()
                     };
-                    let stop = if let Some(c) = &compaction {
-                        format!("{:?}", c.inputs.base.last().unwrap().largest.clone())
-                    } else {
-                        "(end)".to_owned()
-                    };
-                    info!(
-                        "Manual compaction at level-{} from {} .. {}; will stop at {}",
-                        manual.level, begin, end, stop
-                    );
-                    (compaction, Some(manual.done))
+                    match versions.compact_range(
+                        manual.level,
+                        manual.begin.as_ref(),
+                        manual.end.as_ref(),
+                    ) {
+                        Some(c) => {
+                            info!(
+                                "Received manual compaction at level-{} from {} .. {}; will stop at {:?}",
+                                manual.level, begin, end, &c.inputs.base.last().unwrap().largest
+                            );
+                            (Some(c), Some(manual.done))
+                        }
+                        None => {
+                            info!("Received manual compaction at level-{} from {} .. {}; No compaction needs to be done", manual.level, begin, end);
+                            manual.done.send(()).unwrap();
+                            (None, None)
+                        }
+                    }
                 } else {
                     (versions.pick_compaction(), None)
                 }
@@ -970,7 +972,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
                         f.largest.clone(),
                     );
                     if let Err(e) = versions.log_and_apply(&mut compaction.edit) {
-                        debug!("Error in compaction: {:?}", &e);
+                        error!("Error in compaction: {:?}", &e);
                         self.record_bg_error(e);
                     }
                     let current_summary = versions.current().level_summary();
@@ -1000,11 +1002,13 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
                             compaction.oldest_snapshot_alive = snapshots.oldest().sequence();
                         }
                     }
+                    // Unlock VersionSet here to avoid dead lock
+                    mem::drop(versions);
                     self.delete_obsolete_files(self.do_compaction(&mut compaction));
                 }
                 if !self.is_shutting_down.load(Ordering::Acquire) {
                     if let Some(e) = self.bg_error.read().unwrap().as_ref() {
-                        info!("Compaction error: {:?}", e)
+                        error!("Compaction error: {:?}", e)
                     }
                 }
                 if let Some(signal) = signal {
@@ -1051,7 +1055,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
             let ikey = input_iter.key();
             // Checkout whether we need rotate a new output file
             if c.should_stop_before(ikey.as_slice(), icmp.clone()) && c.builder.is_some() {
-                status = self.finish_output_file(c, input_iter.valid());
+                status = self.finish_output_file(c, input_iter.status());
                 if status.is_err() {
                     break;
                 }
@@ -1109,7 +1113,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
                         let builder = c.builder.as_ref().unwrap();
                         // Rotate a new output file if the current one is big enough
                         if builder.file_size() >= self.options.max_file_size {
-                            status = self.finish_output_file(c, input_iter.valid());
+                            status = self.finish_output_file(c, input_iter.status());
                             if status.is_err() {
                                 break;
                             }
@@ -1129,14 +1133,14 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
             status = Err(Error::DBClosed("major compaction".to_owned()))
         }
         if status.is_ok() && c.builder.is_some() {
-            status = self.finish_output_file(c, input_iter.valid())
+            status = self.finish_output_file(c, input_iter.status())
         }
-
         if status.is_ok() {
             status = input_iter.status()
         }
-        // Calculate the stats of this compaction
+        // Collect the stats of this compaction even if some err occurred
         let mut versions = self.versions.lock().unwrap();
+        let level_summary_before = versions.current().level_summary();
         versions.compaction_stats[c.level + 1].accumulate(
             now.elapsed().unwrap().as_micros() as u64 - mem_compaction_duration,
             c.bytes_read(),
@@ -1159,7 +1163,10 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         }
 
         let summary = versions.current().level_summary();
-        info!("compacted to : {}", summary);
+        info!(
+            "Compaction result summary : \n\t before {} \n\t now {}",
+            level_summary_before, summary
+        );
 
         // Close unclosed table builder and remove files in `pending_outputs`
         if let Some(builder) = c.builder.as_mut() {
@@ -1217,30 +1224,29 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         }
     }
 
-    // Finish the current output file by calling `buidler.finish` and insert it into the table cache
+    // Finish the current output file by calling `builder.finish` and insert it into the table cache
     fn finish_output_file(
         &self,
-        compact: &mut Compaction<S::F>,
-        input_iter_valid: bool,
+        c: &mut Compaction<S::F>,
+        input_iter_status: Result<()>,
     ) -> Result<()> {
-        assert!(!compact.outputs.is_empty());
-        assert!(compact.builder.is_some());
-        let current_entries = compact.builder.as_ref().unwrap().num_entries();
-        let status = if input_iter_valid {
-            compact.builder.as_mut().unwrap().finish(true)
+        assert!(!c.outputs.is_empty());
+        assert!(c.builder.is_some());
+        let current_entries = c.builder.as_ref().unwrap().num_entries();
+        let status = if input_iter_status.is_ok() {
+            c.builder.as_mut().unwrap().finish(true)
         } else {
-            compact.builder.as_mut().unwrap().close();
-            Ok(())
+            c.builder.as_mut().unwrap().close();
+            input_iter_status
         };
-        let current_bytes = compact.builder.as_ref().unwrap().file_size();
+        let current_bytes = c.builder.as_ref().unwrap().file_size();
         // update current output
-        let length = compact.outputs.len();
-        compact.outputs[length - 1].file_size = current_bytes;
-        compact.total_bytes += current_bytes;
-        compact.builder = None;
+        c.outputs.last_mut().unwrap().file_size = current_bytes;
+        c.total_bytes += current_bytes;
+        c.builder = None;
         if status.is_ok() && current_entries > 0 {
-            let output_number = compact.outputs[length - 1].number;
-            // make sure that the new file is in the cache
+            let output_number = c.outputs.last().unwrap().number;
+            // add the new file into the table cache
             let _ = self.table_cache.new_iter(
                 self.internal_comparator.clone(),
                 ReadOptions::default(),
@@ -1249,7 +1255,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
             )?;
             info!(
                 "Generated table #{}@{}: {} keys, {} bytes",
-                output_number, compact.level, current_entries, current_bytes
+                output_number, c.level, current_entries, current_bytes
             );
         }
         status
@@ -1455,9 +1461,9 @@ mod tests {
     {
         vec![
             TestOption::Default,
-            TestOption::Reuse,
-            TestOption::FilterPolicy,
-            TestOption::UnCompressed,
+            // TestOption::Reuse,
+            // TestOption::FilterPolicy,
+            // TestOption::UnCompressed,
         ]
         .into_iter()
         .map(|opt| {
@@ -1594,10 +1600,13 @@ mod tests {
             assert_eq!(value, self.get(key, None).unwrap());
         }
 
+        fn num_sst_files_at_level(&self, level: usize) -> usize {
+            self.inner.versions.lock().unwrap().level_files_count(level)
+        }
+
         // Check the number of sst files at `level` in current version
         fn assert_file_num_at_level(&self, level: usize, expect: usize) {
-            let got = self.inner.versions.lock().unwrap().level_files_count(level);
-            assert_eq!(got, expect);
+            assert_eq!(self.num_sst_files_at_level(level), expect);
         }
 
         // Check all the number of sst files at each level in current version
@@ -1818,6 +1827,41 @@ mod tests {
             assert_eq!(t.get("a", None).unwrap(), "va");
             assert_eq!(t.get("x", None).unwrap(), "vx");
             assert_eq!(t.get("f", None).unwrap(), "vf");
+        }
+    }
+
+    #[test]
+    fn test_get_encounters_empty_level() {
+        for t in default_cases() {
+            // Arrange for the following to happen:
+            //   * sstable A in level 0
+            //   * nothing in level 1
+            //   * sstable B in level 2
+            // Then do enough Get() calls to arrange for an automatic compaction
+            // of sstable A.  A bug would cause the compaction to be marked as
+            // occurring at level 1 (instead of the correct level 0).
+
+            // Step 1: First place sstables in levels 0 and 2
+            while t.num_sst_files_at_level(0) == 0 || t.num_sst_files_at_level(2) == 0 {
+                t.put("a", "begin").unwrap();
+                t.put("z", "end").unwrap();
+                t.inner.force_compact_mem_table().unwrap();
+            }
+            t.print_sst_files();
+            // Clear level 1 if necessary
+            t.inner.manual_compact_range(1, None, None);
+            t.print_sst_files();
+            t.assert_file_num_at_level(0, 1);
+            t.assert_file_num_at_level(1, 0);
+            t.assert_file_num_at_level(2, 1);
+
+            // Read a bunch of times to trigger compaction (drain `allow_seek`)
+            for _ in 0..1000 {
+                assert_eq!(t.get("missing", None), None);
+            }
+            // Wait for compaction to finish
+            thread::sleep(Duration::from_secs(1));
+            t.assert_file_num_at_level(0, 0);
         }
     }
 }

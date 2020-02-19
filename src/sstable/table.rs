@@ -458,15 +458,14 @@ impl<C: Comparator + Clone, F: File> TableBuilder<C, F> {
 
     /// Mark this builder as closed
     #[inline]
-    #[allow(unused_must_use)]
     pub fn close(&mut self) {
         assert!(
             !self.closed,
             "[table builder] try to close a closed TableBuilder"
         );
         self.closed = true;
-        // TODO: return Result<()>
-        self.file.close().is_ok();
+        // TODO: maybe return Result<()> ?
+        let _ = self.file.close();
     }
 
     /// Returns the number of key/value added so far.

@@ -97,7 +97,7 @@ pub struct Compaction<F: File> {
     // we can drop all entries for the same key with sequence numbers < S
     pub oldest_snapshot_alive: u64,
 
-    // all output files information
+    // all output files information sorted by produced order (file number order)
     pub outputs: Vec<FileMetaData>,
 
     // current table builder for output sst file

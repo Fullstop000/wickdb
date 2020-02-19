@@ -206,9 +206,12 @@ unsafe impl<S: Storage + Clone> Send for VersionSet<S> {}
 
 impl<S: Storage + Clone + 'static> VersionSet<S> {
     pub fn new(db_name: &'static str, options: Arc<Options>, storage: S) -> Self {
-        let mut compaction_stats = vec![];
-        for _ in 0..options.max_levels {
+        let max_level = options.max_levels as usize;
+        let mut compaction_stats = Vec::with_capacity(max_level);
+        let mut compaction_pointer = Vec::with_capacity(max_level);
+        for _ in 0..max_level {
             compaction_stats.push(CompactionStats::new());
+            compaction_pointer.push(InternalKey::default());
         }
         let icmp = InternalKeyComparator::new(options.comparator.clone());
         // Create an empty version as the first
@@ -231,7 +234,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
             manifest_file_number: 0,
             manifest_writer: None,
             versions,
-            compaction_pointer: vec![],
+            compaction_pointer,
         }
     }
     /// Returns the number of files in a certain level
@@ -531,9 +534,14 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
                 compaction
             } else if seek_compaction {
                 let level = current.file_to_compact_level.load(Ordering::Acquire);
-                let mut compaction = Compaction::new(self.options.clone(), level);
-                compaction.inputs.add_base(file_to_compact);
-                compaction
+                if level < self.options.max_levels as usize - 1 {
+                    let mut compaction = Compaction::new(self.options.clone(), level);
+                    compaction.inputs.add_base(file_to_compact);
+                    compaction
+                } else {
+                    // We've run out of the levels
+                    return None;
+                }
             } else {
                 return None;
             }
@@ -568,7 +576,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         let now = SystemTime::now();
         let mut meta = FileMetaData::default();
         meta.number = self.inc_next_file_number();
-        info!("Level-0 table #{} : started", meta.number);
+        info!("Level-0 table #{} : start building", meta.number);
         let build_result = build_table(
             self.options.clone(),
             &self.storage,
@@ -578,7 +586,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
             &mut meta,
         );
         info!(
-            "Level-0 table #{} : {} bytes [{:?}]",
+            "Level-0 table #{} : try to write {} bytes [{:?}]",
             meta.number, meta.file_size, &build_result
         );
         let mut level = 0;
@@ -619,19 +627,20 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
     }
 
     /// Create new table builder and physical file for current output in Compaction
-    pub fn open_compaction_output_file(&mut self, compact: &mut Compaction<S::F>) -> Result<()> {
-        assert!(compact.builder.is_none());
+    pub fn open_compaction_output_file(&mut self, c: &mut Compaction<S::F>) -> Result<()> {
+        assert!(c.builder.is_none());
         let file_number = self.inc_next_file_number();
         self.pending_outputs.insert(file_number);
         let mut output = FileMetaData::default();
         output.number = file_number;
         let file_name = generate_filename(self.db_name, FileType::Table, file_number);
         let file = self.storage.create(file_name.as_str())?;
-        compact.builder = Some(TableBuilder::new(
+        c.builder = Some(TableBuilder::new(
             file,
             self.icmp.clone(),
             self.options.clone(),
         ));
+        c.outputs.push(output);
         Ok(())
     }
 
@@ -794,7 +803,6 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
     fn setup_other_inputs(&mut self, c: Compaction<S::F>) -> Compaction<S::F> {
         let mut c = self.add_boundary_inputs(c);
         let current = &self.current();
-        // TODO: remove this clone
         let inputs = std::mem::replace(&mut c.inputs, CompactionInputs::default());
         let not_expand = inputs.base;
         // Calculate the key range in current level after `add_boundary_inputs`
@@ -991,6 +999,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
     }
 }
 
+///
 pub struct FileIterFactory<S: Storage + Clone> {
     options: ReadOptions,
     table_cache: TableCache<S>,
@@ -1014,6 +1023,7 @@ impl<S: Storage + Clone> FileIterFactory<S> {
 impl<S: Storage + Clone> DerivedIterFactory for FileIterFactory<S> {
     type Iter = TableIterator<InternalKeyComparator, S::F>;
 
+    // The value is a bytes with fixed encoded file number and fixed encoded file size
     fn derive(&self, value: &[u8]) -> Result<Self::Iter> {
         if value.len() != FILE_META_LENGTH {
             Err(Error::Corruption(

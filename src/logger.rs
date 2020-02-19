@@ -78,7 +78,7 @@ impl Log for Logger {
             let target = r.target();
             let module = r.module_path_static().unwrap_or("");
             let file = r.file_static().unwrap_or("");
-            let line = dbg!(r.line()).unwrap_or(0);
+            let line = r.line().unwrap_or(0);
 
             let s = slog::RecordStatic {
                 location: &slog::RecordLocation {
