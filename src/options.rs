@@ -18,7 +18,6 @@
 // use crate::cache::lru::SharedLRUCache;
 use crate::cache::lru::LRUCache;
 use crate::cache::Cache;
-use crate::db::filename::{generate_filename, FileType};
 use crate::db::format::InternalFilterPolicy;
 use crate::filter::FilterPolicy;
 use crate::logger::Logger;
@@ -162,8 +161,10 @@ pub struct Options {
     /// NewBloomFilterPolicy() here.
     pub filter_policy: Option<Rc<dyn FilterPolicy>>,
 
-    /// The underlying logger default to a `LOG` file
-    pub logger: Option<Box<dyn Log>>,
+    /// The underlying logger
+    /// In dev mode, default using a std output
+    /// In release mode, default using a file `LOG` for output
+    pub logger: Option<slog::Logger>,
 
     /// The maximum log level
     pub logger_level: LevelFilter,
@@ -178,7 +179,7 @@ impl Options {
     }
 
     /// Maximum bytes of overlaps in grandparent (i.e., level+2) before we
-    /// stop building a single file in a level->level+1 compaction.
+    /// stop building a single file in a level-> level+1 compaction.
     pub(crate) fn max_grandparent_overlap_bytes(&self) -> u64 {
         10 * self.max_file_size as u64
     }
@@ -213,16 +214,7 @@ impl Options {
         self.write_buffer_size = Self::clip_range(self.write_buffer_size, 64 << 10, 1 << 30);
         self.max_file_size = Self::clip_range(self.max_file_size, 1 << 20, 1 << 30);
         self.block_size = Self::clip_range(self.block_size, 1 << 10, 4 << 20);
-
-        if self.logger.is_none() {
-            let _ = storage.mkdir_all(&db_name);
-            if let Ok(f) =
-                storage.create(generate_filename(&db_name, FileType::InfoLog, 0).as_str())
-            {
-                self.logger = Some(Box::new(Logger::new(f, self.logger_level)))
-            }
-        }
-        self.apply_logger();
+        self.apply_logger(storage, &db_name);
         if self.block_cache.is_none() {
             self.block_cache = Some(Arc::new(LRUCache::new(8 << 20, None)))
         }
@@ -230,14 +222,15 @@ impl Options {
             self.filter_policy = Some(Rc::new(InternalFilterPolicy::new(fp)));
         }
     }
+
     #[allow(unused_must_use)]
-    fn apply_logger(&mut self) {
-        if let Some(logger) = self.logger.take() {
-            let static_logger: &'static dyn Log = Box::leak(logger);
-            log::set_logger(static_logger);
-            log::set_max_level(self.logger_level);
-            info!("Logger initialized");
-        }
+    fn apply_logger<S: Storage>(&mut self, storage: &S, db_path: &str) {
+        let user_logger = std::mem::replace(&mut self.logger, None);
+        let logger = Logger::new(user_logger, self.logger_level, storage, db_path);
+        let static_logger: &'static dyn Log = Box::leak(Box::new(logger));
+        log::set_logger(static_logger);
+        log::set_max_level(self.logger_level);
+        info!("Logger initialized");
     }
 
     fn clip_range<N: PartialOrd + Eq + Copy>(n: N, min: N, max: N) -> N {
@@ -277,7 +270,7 @@ impl Default for Options {
             reuse_logs: true,
             filter_policy: None,
             logger: None,
-            logger_level: LevelFilter::Info,
+            logger_level: LevelFilter::Warn,
         }
     }
 }
