@@ -91,6 +91,11 @@ impl MemTable {
         MemTableIterator::new(self.table.clone())
     }
 
+    /// Returns current elements count in inner Skiplist
+    pub fn count(&self) -> usize {
+        self.table.count()
+    }
+
     /// Add an entry into memtable that maps key to value at the
     /// specified sequence number and with the specified type.
     /// Typically value will be empty if the type is `Deletion`.

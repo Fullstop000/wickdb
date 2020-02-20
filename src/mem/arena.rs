@@ -182,6 +182,7 @@ mod tests {
     #[test]
     fn test_allocate_fallback() {
         let a = BlockArena::default();
+        assert_eq!(a.memory_used(), 0);
         a.allocate_fallback(1);
         assert_eq!(a.memory_used(), BLOCK_SIZE);
         assert_eq!(a.bytes_remaining.load(Ordering::Acquire), BLOCK_SIZE - 1);

@@ -26,31 +26,22 @@ use crate::util::comparator::Comparator;
 use crate::version::version_edit::{FileMetaData, VersionEdit};
 use crate::version::version_set::{total_file_size, FileIterFactory, SSTableIters};
 use crate::version::{LevelFileNumIterator, Version};
+use crossbeam_channel::Sender;
 use std::cmp::Ordering as CmpOrdering;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 /// Information for a manual compaction
 #[derive(Clone)]
 pub struct ManualCompaction {
     pub level: usize,
-    pub done: Arc<AtomicBool>,
+    pub done: Sender<()>,
     pub begin: Option<InternalKey>, // None means beginning of key range
     pub end: Option<InternalKey>,   // None means end of key range
 }
 
-impl PartialEq for ManualCompaction {
-    fn eq(&self, other: &ManualCompaction) -> bool {
-        Arc::ptr_eq(&self.done, &other.done)
-            && self.level == other.level
-            && self.begin == other.begin
-            && self.end == other.end
-    }
-}
-
 // A helper struct representing all the files to be compacted.
 // All the files in `base` or `parent` must be sorted by key range.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct CompactionInputs {
     // level n files
     pub base: Vec<Arc<FileMetaData>>,
@@ -106,7 +97,7 @@ pub struct Compaction<F: File> {
     // we can drop all entries for the same key with sequence numbers < S
     pub oldest_snapshot_alive: u64,
 
-    // all output files information
+    // all output files information sorted by produced order (file number order)
     pub outputs: Vec<FileMetaData>,
 
     // current table builder for output sst file
@@ -145,6 +136,7 @@ impl<O: File> Compaction<O> {
 
     /// Is this a trivial compaction that can be implemented by just
     /// moving a single input file to the next level (no merging or splitting)
+    // TODO: improve this to satisfy more complicate moving
     pub fn is_trivial_move(&self) -> bool {
         self.inputs.base.len() == 1
             && self.inputs.parent.is_empty()
