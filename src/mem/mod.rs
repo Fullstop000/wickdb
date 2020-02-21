@@ -18,7 +18,7 @@
 pub mod arena;
 pub mod skiplist;
 
-use crate::db::format::{InternalKeyComparator, LookupKey, ValueType};
+use crate::db::format::{InternalKeyComparator, LookupKey, ValueType, INTERNAL_KEY_TAIL};
 use crate::iterator::Iterator;
 use crate::mem::arena::{Arena, BlockArena};
 use crate::mem::skiplist::{Skiplist, SkiplistIterator};
@@ -38,6 +38,7 @@ pub struct KeyComparator {
 }
 
 impl Comparator for KeyComparator {
+    // `a` and `b` should be a `LookupKey` each
     fn compare(&self, mut a: &[u8], mut b: &[u8]) -> Ordering {
         let ia = extract_varint32_encoded_slice(&mut a);
         let ib = extract_varint32_encoded_slice(&mut b);
@@ -120,11 +121,14 @@ impl MemTable {
     ///
     pub fn add(&self, seq_number: u64, val_type: ValueType, key: &[u8], value: &[u8]) {
         let key_size = key.len();
-        let internal_key_size = key_size + 8;
+        let internal_key_size = key_size + INTERNAL_KEY_TAIL;
         let mut buf = vec![];
         VarintU32::put_varint(&mut buf, internal_key_size as u32);
         buf.extend_from_slice(key);
-        put_fixed_64(&mut buf, (seq_number << 8) | val_type as u64);
+        put_fixed_64(
+            &mut buf,
+            (seq_number << INTERNAL_KEY_TAIL) | val_type as u64,
+        );
         VarintU32::put_varint_prefixed_slice(&mut buf, value);
         self.table.insert(&buf);
     }
@@ -134,20 +138,26 @@ impl MemTable {
     /// If memtable does not contain the key, return `None`
     pub fn get(&self, key: &LookupKey) -> Option<Result<Slice>> {
         let mk = key.mem_key();
-        // internal key
-        let mut iter = self.iter();
+        let mut iter = SkiplistIterator::new(self.table.clone());
         iter.seek(mk);
         if iter.valid() {
-            let internal_key = iter.key();
+            let encoded_entry = iter.key();
+            let mut e = encoded_entry.as_slice();
+            let ikey = extract_varint32_encoded_slice(&mut e);
+            let key_size = ikey.len();
             // only check the user key here
-            match self.cmp.icmp.user_comparator.compare(
-                Slice::new(internal_key.as_ptr(), internal_key.size() - 8).as_slice(),
-                key.user_key(),
-            ) {
+            match self
+                .cmp
+                .icmp
+                .user_comparator
+                .compare(&ikey[..key_size - INTERNAL_KEY_TAIL], key.user_key())
+            {
                 Ordering::Equal => {
-                    let tag = decode_fixed_64(&internal_key.as_slice()[internal_key.size() - 8..]);
+                    let tag = decode_fixed_64(&ikey[key_size - INTERNAL_KEY_TAIL..]);
                     match ValueType::from(tag & 0xff as u64) {
-                        ValueType::Value => return Some(Ok(iter.value())),
+                        ValueType::Value => {
+                            return Some(Ok(extract_varint32_encoded_slice(&mut e).into()))
+                        }
                         ValueType::Deletion => return Some(Err(Error::NotFound(None))),
                         ValueType::Unknown => { /* fallback to None*/ }
                     }
@@ -161,12 +171,14 @@ impl MemTable {
 
 pub struct MemTableIterator {
     iter: SkiplistIterator<KeyComparator, BlockArena>,
+    // Tmp buffer for encoding `InternalKey` to `LookupKey` when call `seek`
+    tmp: Vec<u8>,
 }
 
 impl MemTableIterator {
     pub fn new(table: Rc<Skiplist<KeyComparator, BlockArena>>) -> Self {
         let iter = SkiplistIterator::new(table);
-        Self { iter }
+        Self { iter, tmp: vec![] }
     }
 }
 
@@ -185,8 +197,11 @@ impl Iterator for MemTableIterator {
         self.iter.seek_to_last()
     }
 
+    // target should be an encoded `LookupKey`
     fn seek(&mut self, target: &[u8]) {
-        self.iter.seek(target)
+        self.tmp.clear();
+        VarintU32::put_varint_prefixed_slice(&mut self.tmp, target);
+        self.iter.seek(&self.tmp)
     }
 
     fn next(&mut self) {

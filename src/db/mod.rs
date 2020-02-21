@@ -1461,9 +1461,9 @@ mod tests {
     {
         vec![
             TestOption::Default,
-            // TestOption::Reuse,
-            // TestOption::FilterPolicy,
-            // TestOption::UnCompressed,
+            TestOption::Reuse,
+            TestOption::FilterPolicy,
+            TestOption::UnCompressed,
         ]
         .into_iter()
         .map(|opt| {
@@ -1479,6 +1479,15 @@ mod tests {
             let name = "db_test";
             let db = WickDB::open_db(opt, name, store.clone()).unwrap();
             DBTest { store, db }
+        }
+
+        // Put entries with default `WriteOptions`
+        fn put_entries(&self, entries: Vec<(&str, &str)>) {
+            for (k, v) in entries {
+                self.db
+                    .put(WriteOptions::default(), k.as_bytes(), v.as_bytes())
+                    .unwrap()
+            }
         }
 
         fn put(&self, k: &str, v: &str) -> Result<()> {
@@ -1862,6 +1871,197 @@ mod tests {
             // Wait for compaction to finish
             thread::sleep(Duration::from_secs(1));
             t.assert_file_num_at_level(0, 0);
+        }
+    }
+
+    #[test]
+    fn test_iter_empty_db() {
+        let t = DBTest::default();
+        let mut iter = t.iter(ReadOptions::default()).unwrap();
+        iter.seek_to_first();
+        assert!(!iter.valid());
+        iter.seek_to_last();
+        assert!(!iter.valid());
+        iter.seek(b"foo");
+        assert!(!iter.valid());
+    }
+
+    fn assert_iter_entry(iter: &dyn Iterator<Key = Slice, Value = Slice>, k: &str, v: &str) {
+        assert_eq!(iter.key().as_str(), k);
+        assert_eq!(iter.value().as_str(), v);
+    }
+
+    #[test]
+    fn test_iter_single() {
+        let t = DBTest::default();
+        t.put("a", "va").unwrap();
+        let mut iter = t.iter(ReadOptions::default()).unwrap();
+        iter.seek_to_first();
+        assert_iter_entry(&iter, "a", "va");
+        iter.next();
+        assert!(!iter.valid());
+        iter.seek_to_first();
+        assert_iter_entry(&iter, "a", "va");
+        iter.prev();
+        assert!(!iter.valid());
+
+        iter.seek_to_last();
+        assert_iter_entry(&iter, "a", "va");
+        iter.next();
+        assert!(!iter.valid());
+        iter.seek_to_last();
+        assert_iter_entry(&iter, "a", "va");
+        iter.prev();
+        assert!(!iter.valid());
+
+        iter.seek(b"");
+        assert_iter_entry(&iter, "a", "va");
+        iter.next();
+        assert!(!iter.valid());
+
+        iter.seek(b"a");
+        assert_iter_entry(&iter, "a", "va");
+        iter.next();
+        assert!(!iter.valid());
+
+        iter.seek(b"b");
+        assert!(!iter.valid());
+    }
+
+    #[test]
+    fn test_iter_multi() {
+        let t = DBTest::default();
+        t.put_entries(vec![("a", "va"), ("b", "vb"), ("c", "vc")]);
+
+        let mut iter = t.iter(ReadOptions::default()).unwrap();
+        iter.seek_to_first();
+        assert_iter_entry(&iter, "a", "va");
+        iter.next();
+        assert_iter_entry(&iter, "b", "vb");
+        iter.next();
+        assert_iter_entry(&iter, "c", "vc");
+        iter.next();
+        assert!(!iter.valid());
+        iter.seek_to_first();
+        assert_iter_entry(&iter, "a", "va");
+        iter.prev();
+        assert!(!iter.valid());
+
+        iter.seek_to_last();
+        assert_iter_entry(&iter, "c", "vc");
+        iter.prev();
+        assert_iter_entry(&iter, "b", "vb");
+        iter.prev();
+        assert_iter_entry(&iter, "a", "va");
+        iter.prev();
+        assert!(!iter.valid());
+        iter.seek_to_last();
+        assert_iter_entry(&iter, "c", "vc");
+        iter.next();
+        assert!(!iter.valid());
+
+        iter.seek(b"");
+        assert_iter_entry(&iter, "a", "va");
+        iter.seek(b"a");
+        assert_iter_entry(&iter, "a", "va");
+        iter.seek(b"ax");
+        assert_iter_entry(&iter, "b", "vb");
+        iter.seek(b"b");
+        assert_iter_entry(&iter, "b", "vb");
+        iter.seek(b"z");
+        assert!(!iter.valid());
+
+        // Switch from reverse to forward
+        iter.seek_to_last();
+        iter.prev();
+        iter.prev();
+        iter.next();
+        assert_iter_entry(&iter, "b", "vb");
+
+        // Switch from forward to reverse
+        iter.seek_to_first();
+        iter.next();
+        iter.next();
+        iter.prev();
+        assert_iter_entry(&iter, "b", "vb");
+
+        // Make sure iter stays at snapshot
+        t.put_entries(vec![
+            ("a", "va2"),
+            ("a2", "va3"),
+            ("b", "vb2"),
+            ("c", "vc2"),
+        ]);
+        t.delete("b").unwrap();
+        iter.seek_to_first();
+        assert_iter_entry(&iter, "a", "va");
+        iter.next();
+        assert_iter_entry(&iter, "b", "vb");
+        iter.next();
+        assert_iter_entry(&iter, "c", "vc");
+        iter.next();
+        assert!(!iter.valid());
+        iter.seek_to_last();
+        assert_iter_entry(&iter, "c", "vc");
+        iter.prev();
+        assert_iter_entry(&iter, "b", "vb");
+        iter.prev();
+        assert_iter_entry(&iter, "a", "va");
+        iter.prev();
+        assert!(!iter.valid());
+    }
+
+    #[test]
+    fn test_iter_small_and_large_mix() {
+        let t = DBTest::default();
+        let count = 100_000;
+        t.put_entries(vec![
+            ("a", "va"),
+            ("b", &"b".repeat(count)),
+            ("c", "vc"),
+            ("d", &"d".repeat(count)),
+            ("e", &"e".repeat(count)),
+        ]);
+        let mut iter = t.iter(ReadOptions::default()).unwrap();
+
+        iter.seek_to_first();
+        assert_iter_entry(&iter, "a", "va");
+        iter.next();
+        assert_iter_entry(&iter, "b", &"b".repeat(count));
+        iter.next();
+        assert_iter_entry(&iter, "c", "vc");
+        iter.next();
+        assert_iter_entry(&iter, "d", &"d".repeat(count));
+        iter.next();
+        assert_iter_entry(&iter, "e", &"e".repeat(count));
+        iter.next();
+        assert!(!iter.valid());
+
+        iter.seek_to_last();
+        assert_iter_entry(&iter, "e", &"e".repeat(count));
+        iter.prev();
+        assert_iter_entry(&iter, "d", &"d".repeat(count));
+        iter.prev();
+        assert_iter_entry(&iter, "c", "vc");
+        iter.prev();
+        assert_iter_entry(&iter, "b", &"b".repeat(count));
+        iter.prev();
+        assert_iter_entry(&iter, "a", "va");
+        iter.prev();
+        assert!(!iter.valid());
+    }
+
+    #[test]
+    fn test_iter_multi_with_delete() {
+        for t in default_cases() {
+            t.put_entries(vec![("a", "va"), ("b", "vb"), ("c", "vc")]);
+            t.delete("b").unwrap();
+            assert_eq!(t.get("b", None), None);
+            let mut iter = t.iter(ReadOptions::default()).unwrap();
+            iter.seek(b"c");
+            assert_iter_entry(&iter, "c", "vc");
+            iter.prev();
+            assert_iter_entry(&iter, "a", "va");
         }
     }
 }
