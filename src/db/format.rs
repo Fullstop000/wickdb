@@ -28,7 +28,10 @@ use std::sync::Arc;
 /// The max key sequence number. The value is 2^56 - 1 because the seq number
 /// only takes 56 bits when is serialized to `InternalKey`
 pub const MAX_KEY_SEQUENCE: u64 = (1u64 << 56) - 1;
-const INTERNAL_KEY_TAIL: usize = 8; // 7bytes sequence number + 1byte type number
+
+/// The tail bytes length of an internal key
+/// 7bytes sequence number + 1byte type number
+pub const INTERNAL_KEY_TAIL: usize = 8;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ValueType {

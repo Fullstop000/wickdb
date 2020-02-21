@@ -372,7 +372,8 @@ mod test_footer {
 #[cfg(test)]
 mod tests {
     use crate::db::format::{
-        InternalKeyComparator, LookupKey, ParsedInternalKey, ValueType, MAX_KEY_SEQUENCE,
+        InternalKey, InternalKeyComparator, ParsedInternalKey, ValueType, MAX_KEY_SEQUENCE,
+        VALUE_TYPE_FOR_SEEK,
     };
     use crate::db::{WickDB, WickDBIterator, DB};
     use crate::iterator::Iterator;
@@ -603,8 +604,8 @@ mod tests {
         }
 
         fn seek(&mut self, target: &[u8]) {
-            let lkey = LookupKey::new(target, MAX_KEY_SEQUENCE);
-            self.inner.seek(lkey.mem_key());
+            let ikey = InternalKey::new(target, MAX_KEY_SEQUENCE, VALUE_TYPE_FOR_SEEK);
+            self.inner.seek(ikey.data());
         }
 
         fn next(&mut self) {
