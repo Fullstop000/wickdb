@@ -154,18 +154,18 @@ impl MemTable {
     }
 }
 
-pub struct MemTableIterator {
-    iter: SkiplistIterator<KeyComparator, BlockArena>,
+pub struct MemTableIterator<'a> {
+    iter: SkiplistIterator<'a,KeyComparator, BlockArena>,
 }
 
-impl MemTableIterator {
+impl MemTableIterator<'_> {
     pub fn new(table: Rc<Skiplist<KeyComparator, BlockArena>>) -> Self {
         let iter = SkiplistIterator::new(table);
         Self { iter }
     }
 }
 
-impl Iterator for MemTableIterator {
+impl Iterator for MemTableIterator<'_> {
     type Key = Slice;
     type Value = Slice;
     fn valid(&self) -> bool {
@@ -195,14 +195,14 @@ impl Iterator for MemTableIterator {
     // Returns the internal key
     fn key(&self) -> Self::Key {
         let key = self.iter.key();
-        let mut s = key.as_slice();
+        let mut s = key;
         extract_varint32_encoded_slice(&mut s).into()
     }
 
     // Returns the Slice represents the value
     fn value(&self) -> Self::Value {
         let key = self.iter.key();
-        let mut src = key.as_slice();
+        let mut src = key;
         extract_varint32_encoded_slice(&mut src);
         extract_varint32_encoded_slice(&mut src).into()
     }
