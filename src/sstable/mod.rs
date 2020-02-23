@@ -725,12 +725,12 @@ mod tests {
         }
     }
 
-    struct MemTableConstructor {
+    struct MemTableConstructor<'a> {
         inner: MemTable,
     }
 
-    impl Constructor for MemTableConstructor {
-        type Iter = KeyConvertingIterator<MemTableIterator>;
+    impl<'a> Constructor for MemTableConstructor<'a> {
+        type Iter = KeyConvertingIterator<MemTableIterator<'a>>;
 
         fn new(is_reversed: bool) -> Self {
             let icmp = InternalKeyComparator::new(Arc::new(TestComparator::new(is_reversed)));

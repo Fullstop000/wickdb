@@ -260,14 +260,14 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
 }
 
 /// Iteration over the contents of a skip list
-pub struct SkiplistIterator<C: Comparator, A: Arena> {
+pub struct SkiplistIterator<'a,C: Comparator, A: Arena> {
     skl: Rc<Skiplist<C, A>>,
     node: *const Node,
 }
 
-impl<C: Comparator, A: Arena> Iterator for SkiplistIterator<C, A> {
-    type Key = Slice;
-    type Value = Slice;
+impl<'a,C: Comparator, A: Arena> Iterator for SkiplistIterator<'a,C, A> {
+    type Key = &'a [u8];
+    type Value = &'a [u8];
     /// Returns true whether the iterator is positioned at a valid node
     #[inline]
     fn valid(&self) -> bool {
@@ -314,7 +314,7 @@ impl<C: Comparator, A: Arena> Iterator for SkiplistIterator<C, A> {
     fn prev(&mut self) {
         self.panic_valid();
         let key = self.key();
-        self.node = self.skl.find_less_than(key.as_slice());
+        self.node = self.skl.find_less_than(key);
         if self.node == self.skl.head {
             self.node = ptr::null_mut();
         }
@@ -337,7 +337,7 @@ impl<C: Comparator, A: Arena> Iterator for SkiplistIterator<C, A> {
     }
 }
 
-impl<C: Comparator, A: Arena> SkiplistIterator<C, A> {
+impl<'a,C: Comparator, A: Arena> SkiplistIterator<'a,C, A> {
     pub fn new(skl: Rc<Skiplist<C, A>>) -> Self {
         Self {
             skl,
@@ -578,12 +578,12 @@ mod tests {
         assert_eq!(ptr::null(), iter.node);
 
         iter.seek_to_first();
-        assert_eq!("key1", iter.key().as_str());
+        assert_eq!("key1".as_bytes(), iter.key());
         for key in inputs.clone() {
             if !iter.valid() {
                 break;
             }
-            assert_eq!(key, iter.key().as_str());
+            assert_eq!(key.as_bytes(), iter.key());
             iter.next();
         }
         assert!(!iter.valid());
@@ -591,23 +591,23 @@ mod tests {
         iter.seek_to_first();
         iter.next();
         iter.prev();
-        assert_eq!(inputs[0], iter.key().as_str());
+        assert_eq!(inputs[0].as_bytes(), iter.key());
         iter.seek_to_first();
         iter.seek_to_last();
         for key in inputs.into_iter().rev() {
             if !iter.valid() {
                 break;
             }
-            assert_eq!(key, iter.key().as_str());
+            assert_eq!(key.as_bytes(), iter.key());
             iter.prev();
         }
         assert!(!iter.valid());
         iter.seek("key7".as_bytes());
-        assert_eq!("key7", iter.key().as_str());
+        assert_eq!("key7".as_bytes(), iter.key());
         iter.seek("key4".as_bytes());
-        assert_eq!("key5", iter.key().as_str());
+        assert_eq!("key5".as_bytes(), iter.key());
         iter.seek("".as_bytes());
-        assert_eq!("key1", iter.key().as_str());
+        assert_eq!("key1".as_bytes(), iter.key());
         iter.seek("llllllllllllllll".as_bytes());
         assert!(!iter.valid());
     }
@@ -758,7 +758,7 @@ mod tests {
                     make_key(K as u64, 0)
                 } else {
                     let s = iter.key();
-                    let k = decode_fixed_64(s.as_slice());
+                    let k = decode_fixed_64(s);
                     assert!(is_valid_key(k));
                     k
                 };

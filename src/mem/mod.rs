@@ -142,7 +142,7 @@ impl MemTable {
         iter.seek(mk);
         if iter.valid() {
             let encoded_entry = iter.key();
-            let mut e = encoded_entry.as_slice();
+            let mut e = encoded_entry;
             let ikey = extract_varint32_encoded_slice(&mut e);
             let key_size = ikey.len();
             // only check the user key here
@@ -169,20 +169,20 @@ impl MemTable {
     }
 }
 
-pub struct MemTableIterator {
-    iter: SkiplistIterator<KeyComparator, BlockArena>,
+pub struct MemTableIterator<'a> {
+    iter: SkiplistIterator<'a,KeyComparator, BlockArena>,
     // Tmp buffer for encoding `InternalKey` to `LookupKey` when call `seek`
     tmp: Vec<u8>,
 }
 
-impl MemTableIterator {
+impl<'a> MemTableIterator<'a> {
     pub fn new(table: Rc<Skiplist<KeyComparator, BlockArena>>) -> Self {
         let iter = SkiplistIterator::new(table);
         Self { iter, tmp: vec![] }
     }
 }
 
-impl Iterator for MemTableIterator {
+impl<'a> Iterator for MemTableIterator<'a> {
     type Key = Slice;
     type Value = Slice;
     fn valid(&self) -> bool {
@@ -215,14 +215,14 @@ impl Iterator for MemTableIterator {
     // Returns the internal key
     fn key(&self) -> Self::Key {
         let key = self.iter.key();
-        let mut s = key.as_slice();
+        let mut s = key;
         extract_varint32_encoded_slice(&mut s).into()
     }
 
     // Returns the Slice represents the value
     fn value(&self) -> Self::Value {
         let key = self.iter.key();
-        let mut src = key.as_slice();
+        let mut src = key;
         extract_varint32_encoded_slice(&mut src);
         extract_varint32_encoded_slice(&mut src).into()
     }
