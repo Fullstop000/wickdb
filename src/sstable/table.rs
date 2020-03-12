@@ -25,7 +25,7 @@ use crate::util::coding::{decode_fixed_32, put_fixed_32, put_fixed_64};
 use crate::util::comparator::Comparator;
 use crate::util::crc32::{extend, mask, unmask, value};
 use crate::{Error, Result};
-use snap::max_compress_len;
+use snap::raw::max_compress_len;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -524,7 +524,7 @@ fn compress_block(
 ) -> Result<(Vec<u8>, CompressionType)> {
     match compression {
         CompressionType::SnappyCompression => {
-            let mut enc = snap::Encoder::new();
+            let mut enc = snap::raw::Encoder::new();
             // TODO: avoid this allocation ?
             let mut buffer = vec![0; max_compress_len(raw_block.len())];
             match enc.compress(raw_block, buffer.as_mut_slice()) {
@@ -573,9 +573,9 @@ fn read_block<F: File>(file: &F, handle: &BlockHandle, verify_checksum: bool) ->
     let mut buffer = vec![0; n + BLOCK_TRAILER_SIZE];
     file.read_exact_at(buffer.as_mut_slice(), handle.offset)?;
     if verify_checksum {
-        let crc = unmask(decode_fixed_32(&buffer.as_slice()[n + 1..]));
+        let crc = unmask(decode_fixed_32(&buffer[n + 1..]));
         // Compression type is included in CRC checksum
-        let actual = value(&buffer.as_slice()[..=n]);
+        let actual = value(&buffer[..=n]);
         if crc != actual {
             return Err(Error::Corruption("block checksum mismatch".to_owned()));
         }
@@ -589,7 +589,7 @@ fn read_block<F: File>(file: &F, handle: &BlockHandle, verify_checksum: bool) ->
             CompressionType::SnappyCompression => {
                 // TODO: use pre-allocated buf
                 let mut decompressed = vec![];
-                match snap::decompress_len(&buffer.as_slice()[..n]) {
+                match snap::raw::decompress_len(&buffer[..n]) {
                     Ok(len) => {
                         decompressed.resize(len, 0u8);
                     }
@@ -597,9 +597,8 @@ fn read_block<F: File>(file: &F, handle: &BlockHandle, verify_checksum: bool) ->
                         return Err(Error::CompressionFailed(e));
                     }
                 }
-                let mut dec = snap::Decoder::new();
-                if let Err(e) = dec.decompress(&buffer.as_slice()[..n], decompressed.as_mut_slice())
-                {
+                let mut dec = snap::raw::Decoder::new();
+                if let Err(e) = dec.decompress(&buffer[..n], decompressed.as_mut_slice()) {
                     return Err(Error::CompressionFailed(e));
                 }
                 decompressed
