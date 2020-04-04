@@ -44,6 +44,7 @@ impl From<u8> for CompressionType {
 }
 
 /// Options to control the behavior of a database (passed to `DB::Open`)
+#[derive(Clone)]
 pub struct Options {
     // -------------------
     // Parameters that affect behavior:

@@ -151,7 +151,7 @@ impl VersionEdit {
 
     #[inline]
     pub fn take_file_delta(&mut self) -> FileDelta {
-        mem::replace(&mut self.file_delta, FileDelta::default())
+        mem::take(&mut self.file_delta)
     }
 
     /// Add the specified file at the specified number

@@ -803,7 +803,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
     fn setup_other_inputs(&mut self, c: Compaction<S::F>) -> Compaction<S::F> {
         let mut c = self.add_boundary_inputs(c);
         let current = &self.current();
-        let inputs = std::mem::replace(&mut c.inputs, CompactionInputs::default());
+        let inputs = std::mem::take(&mut c.inputs);
         let not_expand = inputs.base;
         // Calculate the key range in current level after `add_boundary_inputs`
         let (smallest, largest) = base_range(&not_expand, c.level, &self.icmp);

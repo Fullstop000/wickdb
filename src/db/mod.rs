@@ -91,6 +91,8 @@ pub trait DB {
 #[derive(Clone)]
 pub struct WickDB<S: Storage + Clone + 'static> {
     inner: Arc<DBImpl<S>>,
+    shutdown_batch_processing_thread: (Sender<()>, Receiver<()>),
+    shutdown_compaction_thread: (Sender<()>, Receiver<()>),
 }
 
 pub type WickDBIterator<S> = DBIterator<
@@ -152,15 +154,18 @@ impl<S: Storage + Clone> DB for WickDB<S> {
 
     fn close(&mut self) -> Result<()> {
         self.inner.is_shutting_down.store(true, Ordering::Release);
-        match &self.inner.db_lock {
-            Some(lock) => lock.unlock(),
-            None => Ok(()),
-        }
+        self.inner.schedule_close_batch();
+        dbg!("scheduled close batch");
+        let _ = self.shutdown_batch_processing_thread.1.recv();
+        // Send a signal to avoid blocking forever
+        let _ = self.inner.do_compaction.0.send(());
+        let _ = self.shutdown_compaction_thread.1.recv();
+        self.inner.close()
     }
 
     fn destroy(&mut self) -> Result<()> {
         let db = self.inner.clone();
-        db.is_shutting_down.store(true, Ordering::Release);
+        self.close()?;
         db.env.remove_dir(&db.db_name, true)
     }
 
@@ -195,9 +200,12 @@ impl<S: Storage + Clone> WickDB<S> {
         db.delete_obsolete_files(versions);
         let wick_db = WickDB {
             inner: Arc::new(db),
+            shutdown_batch_processing_thread: crossbeam_channel::bounded(1),
+            shutdown_compaction_thread: crossbeam_channel::bounded(1),
         };
         wick_db.process_compaction();
         wick_db.process_batch();
+        // Schedule a compaction to current version for potential unfinished work
         wick_db.inner.maybe_schedule_compaction(current);
         Ok(wick_db)
     }
@@ -223,9 +231,17 @@ impl<S: Storage + Clone> WickDB<S> {
     // 5. Update sequence of version set
     fn process_batch(&self) {
         let db = self.inner.clone();
+        let shutdown = self.shutdown_batch_processing_thread.0.clone();
         thread::spawn(move || {
             loop {
                 if db.is_shutting_down.load(Ordering::Acquire) {
+                    // Cleanup all the batch queue
+                    let mut queue = db.batch_queue.lock().unwrap();
+                    while let Some(batch) = queue.pop_front() {
+                        let _ = batch.signal.send(Err(Error::DBClosed(
+                            "DB is closing. Clean up all the batch in queue".to_owned(),
+                        )));
+                    }
                     break;
                 }
                 let first = {
@@ -236,6 +252,9 @@ impl<S: Storage + Clone> WickDB<S> {
                     }
                     queue.pop_front().unwrap()
                 };
+                if first.stop_process {
+                    break;
+                }
                 let force = first.force_mem_compaction;
                 // TODO: The VersionSet is locked when processing `make_room_for_write`
                 match db.make_room_for_write(force) {
@@ -313,6 +332,8 @@ impl<S: Storage + Clone> WickDB<S> {
                     }
                 }
             }
+            debug!("batch processing thread is shutting down...");
+            shutdown.send(()).unwrap();
         });
     }
 
@@ -320,6 +341,7 @@ impl<S: Storage + Clone> WickDB<S> {
     // The compaction might run recursively since we produce new table files.
     fn process_compaction(&self) {
         let db = self.inner.clone();
+        let shutdown = self.shutdown_compaction_thread.0.clone();
         thread::spawn(move || {
             while let Ok(()) = db.do_compaction.1.recv() {
                 if db.is_shutting_down.load(Ordering::Acquire) {
@@ -338,6 +360,8 @@ impl<S: Storage + Clone> WickDB<S> {
                 let current = db.versions.lock().unwrap().current();
                 db.maybe_schedule_compaction(current);
             }
+            debug!("compaction thread is shutting down...");
+            shutdown.send(()).unwrap();
         });
     }
 }
@@ -389,9 +413,18 @@ unsafe impl<S: Storage + Clone> Send for DBImpl<S> {}
 impl<S: Storage + Clone> Drop for DBImpl<S> {
     #[allow(unused_must_use)]
     fn drop(&mut self) {
+        if !self.is_shutting_down.load(Ordering::Acquire) {
+            let _ = self.close();
+        }
+    }
+}
+
+impl<S: Storage + Clone> DBImpl<S> {
+    fn close(&self) -> Result<()> {
         self.is_shutting_down.store(true, Ordering::Release);
-        if let Some(lock) = self.db_lock.as_ref() {
-            lock.unlock();
+        match &self.db_lock {
+            Some(lock) => lock.unlock(),
+            None => Ok(()),
         }
     }
 }
@@ -701,6 +734,20 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         }
     }
 
+    // Schedule a WriteBatch to close batch processing thread for gracefully shutting down db
+    fn schedule_close_batch(&self) {
+        let (send, _) = crossbeam_channel::bounded(0);
+        let task = BatchTask {
+            stop_process: true,
+            force_mem_compaction: false,
+            batch: WriteBatch::default(),
+            signal: send,
+            options: WriteOptions::default(),
+        };
+        self.batch_queue.lock().unwrap().push_back(task);
+        self.process_batch_sem.notify_all();
+    }
+
     // Schedule the WriteBatch and wait for the result from the receiver.
     // This function wakes up the thread in `process_batch`.
     // An empty `WriteBatch` will trigger a force memtable compaction.
@@ -718,6 +765,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         }
         let (send, recv) = crossbeam_channel::bounded(0);
         let task = BatchTask {
+            stop_process: false,
             force_mem_compaction,
             batch,
             signal: send,
@@ -747,7 +795,8 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         // Group several batches from queue
         while !queue.is_empty() {
             let current = queue.pop_front().unwrap();
-            if current.options.sync && !grouped.options.sync {
+            if current.stop_process || (current.options.sync && !grouped.options.sync) {
+                // Do not include a stop process batch
                 // Do not include a sync write into a batch handled by a non-sync write.
                 queue.push_front(current);
                 break;
@@ -1291,6 +1340,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
 
 // A wrapper struct for scheduling `WriteBatch`
 struct BatchTask {
+    stop_process: bool, // flag for shutdown the batch processing thread gracefully
     force_mem_compaction: bool,
     batch: WriteBatch,
     signal: Sender<Result<()>>,
@@ -1439,7 +1489,8 @@ mod tests {
         }
     }
     struct DBTest {
-        store: MemStorage, // With the same db's inner storage
+        store: MemStorage, // Used as the db's inner storage
+        opt: Options,      // Used as the db's options
         db: WickDB<MemStorage>,
     }
 
@@ -1477,8 +1528,18 @@ mod tests {
         fn new(opt: Options) -> Self {
             let store = MemStorage::default();
             let name = "db_test";
-            let db = WickDB::open_db(opt, name, store.clone()).unwrap();
-            DBTest { store, db }
+            let db = WickDB::open_db(opt.clone(), name, store.clone()).unwrap();
+            DBTest { store, opt, db }
+        }
+
+        // Close the inner db without destroy the contents and establish a new WickDB on same db path with same option
+        fn reopen(&mut self) -> Result<()> {
+            dbg!("before close");
+            self.db.close()?;
+            dbg!("after close");
+            let db = WickDB::open_db(self.opt.clone(), self.db.inner.db_name, self.store.clone())?;
+            self.db = db;
+            Ok(())
         }
 
         // Put entries with default `WriteOptions`
@@ -1641,8 +1702,8 @@ mod tests {
             let store = MemStorage::default();
             let name = "db_test";
             let opt = new_test_options(TestOption::Default);
-            let db = WickDB::open_db(opt, name, store.clone()).unwrap();
-            DBTest { store, db }
+            let db = WickDB::open_db(opt.clone(), name, store.clone()).unwrap();
+            DBTest { store, opt, db }
         }
     }
 
@@ -2062,6 +2123,23 @@ mod tests {
             assert_iter_entry(&iter, "c", "vc");
             iter.prev();
             assert_iter_entry(&iter, "a", "va");
+        }
+    }
+
+    #[test]
+    fn test_recover() {
+        for mut t in default_cases() {
+            t.put_entries(vec![("foo", "v1"), ("baz", "v5")]);
+            t.reopen().unwrap();
+            assert_eq!(t.get("foo", None).unwrap(), "v1");
+            assert_eq!(t.get("baz", None).unwrap(), "v5");
+
+            t.put_entries(vec![("bar", "v2"), ("foo", "v3")]);
+            t.reopen().unwrap();
+            assert_eq!(t.get("foo", None).unwrap(), "v3");
+            t.put("foo", "v4").unwrap();
+            assert_eq!(t.get("bar", None).unwrap(), "v2");
+            assert_eq!(t.get("foo", None).unwrap(), "v3");
         }
     }
 }
