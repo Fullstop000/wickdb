@@ -109,7 +109,7 @@ pub struct VersionEdit {
     pub file_delta: FileDelta,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct FileDelta {
     // (level, InternalKey)
     pub compaction_pointers: Vec<(usize, InternalKey)>,

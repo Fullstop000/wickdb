@@ -394,6 +394,12 @@ impl FileNode {
     }
 }
 
+impl Drop for FileNode {
+    fn drop(&mut self) {
+        let _ = self.close();
+    }
+}
+
 impl File for FileNode {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         if self.is_manifest() && self.manifest_write_error.load(Ordering::Acquire) {
@@ -434,7 +440,7 @@ impl File for FileNode {
     }
 
     fn close(&mut self) -> Result<()> {
-        Ok(())
+        self.inner.write().unwrap().close()
     }
 
     fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
@@ -485,6 +491,12 @@ impl Default for InmemFile {
     }
 }
 
+impl Drop for InmemFile {
+    fn drop(&mut self) {
+        let _ = self.close();
+    }
+}
+
 impl File for InmemFile {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         let pos = self.contents.position();
@@ -502,6 +514,8 @@ impl File for InmemFile {
     }
 
     fn close(&mut self) -> Result<()> {
+        // Reset read cursor to 0
+        self.contents.set_position(0);
         Ok(())
     }
 
@@ -883,5 +897,21 @@ mod tests {
             let res = clean(input);
             assert_eq!(res.to_str().unwrap(), expected);
         }
+    }
+
+    #[test]
+    fn test_reopen_file_and_read() {
+        let store = MemStorage::default();
+        let mut f = store.create("test").unwrap();
+        let contents = "a".repeat(1000);
+        f.write(contents.as_bytes()).unwrap();
+        let mut got = vec![];
+        f.read_all(&mut got).unwrap();
+        assert_eq!(&contents.as_bytes(), &got.as_slice());
+        f.close().unwrap();
+        let mut f = store.open("test").unwrap();
+        let mut got = vec![];
+        f.read_all(&mut got).unwrap();
+        assert_eq!(&contents.as_bytes(), &got.as_slice());
     }
 }

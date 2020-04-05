@@ -155,12 +155,13 @@ impl<S: Storage + Clone> DB for WickDB<S> {
     fn close(&mut self) -> Result<()> {
         self.inner.is_shutting_down.store(true, Ordering::Release);
         self.inner.schedule_close_batch();
-        dbg!("scheduled close batch");
         let _ = self.shutdown_batch_processing_thread.1.recv();
         // Send a signal to avoid blocking forever
         let _ = self.inner.do_compaction.0.send(());
         let _ = self.shutdown_compaction_thread.1.recv();
-        self.inner.close()
+        self.inner.close()?;
+        debug!("DB {} closed", &self.inner.db_name);
+        Ok(())
     }
 
     fn destroy(&mut self) -> Result<()> {
@@ -178,6 +179,7 @@ impl<S: Storage + Clone> WickDB<S> {
     /// Create a new WickDB
     pub fn open_db(mut options: Options, db_name: &'static str, storage: S) -> Result<Self> {
         options.initialize(db_name.to_owned(), &storage);
+        debug!("Open db: '{}'", db_name);
         let mut db = DBImpl::new(options, db_name, storage);
         let (mut edit, should_save_manifest) = db.recover()?;
         let mut versions = db.versions.lock().unwrap();
@@ -193,6 +195,7 @@ impl<S: Storage + Clone> WickDB<S> {
         if should_save_manifest {
             edit.set_prev_log_number(0);
             edit.set_log_number(versions.log_number());
+            dbg!("log_and_apply in open_db");
             versions.log_and_apply(&mut edit)?;
         }
 
@@ -332,8 +335,8 @@ impl<S: Storage + Clone> WickDB<S> {
                     }
                 }
             }
-            debug!("batch processing thread is shutting down...");
             shutdown.send(()).unwrap();
+            debug!("batch processing thread shut down");
         });
     }
 
@@ -360,8 +363,8 @@ impl<S: Storage + Clone> WickDB<S> {
                 let current = db.versions.lock().unwrap().current();
                 db.maybe_schedule_compaction(current);
             }
-            debug!("compaction thread is shutting down...");
             shutdown.send(()).unwrap();
+            debug!("compaction thread shut down");
         });
     }
 }
@@ -525,13 +528,16 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
                 new_db.set_log_number(0);
                 new_db.set_next_file(2);
                 new_db.set_last_sequence(0);
+                // Create manifest
                 let manifest_filenum = 1;
                 let manifest_filename =
                     generate_filename(self.db_name, FileType::Manifest, manifest_filenum);
+                debug!("Create manifest file: {}", &manifest_filename);
                 let manifest = self.env.create(manifest_filename.as_str())?;
                 let mut manifest_writer = Writer::new(manifest);
                 let mut record = vec![];
                 new_db.encode_to(&mut record);
+                debug!("Append manifest record: {:?}", &new_db);
                 match manifest_writer.add_record(&record) {
                     Ok(()) => update_current(&self.env, self.db_name, manifest_filenum)?,
                     Err(e) => {
@@ -563,7 +569,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         let prev_log = versions.prev_log_number();
         let all_files = self.env.list(self.db_name)?;
         let mut logs_to_recover = vec![];
-        for filename in all_files.iter() {
+        for filename in all_files {
             if let Some((file_type, file_number)) = parse_filename(filename) {
                 if file_type == FileType::Log && (file_number >= min_log || file_number == prev_log)
                 {
@@ -1468,7 +1474,7 @@ mod tests {
     }
 
     fn new_test_options(o: TestOption) -> Options {
-        match o {
+        let opt = match o {
             TestOption::Default => Options::default(),
             TestOption::Reuse => {
                 let mut o = Options::default();
@@ -1486,7 +1492,8 @@ mod tests {
                 o.compression = CompressionType::NoCompression;
                 o
             }
-        }
+        };
+        opt
     }
     struct DBTest {
         store: MemStorage, // Used as the db's inner storage
@@ -1534,9 +1541,7 @@ mod tests {
 
         // Close the inner db without destroy the contents and establish a new WickDB on same db path with same option
         fn reopen(&mut self) -> Result<()> {
-            dbg!("before close");
             self.db.close()?;
-            dbg!("after close");
             let db = WickDB::open_db(self.opt.clone(), self.db.inner.db_name, self.store.clone())?;
             self.db = db;
             Ok(())
@@ -2127,7 +2132,15 @@ mod tests {
     }
 
     #[test]
-    fn test_recover() {
+    fn test_reopen_with_empty_db() {
+        for mut t in default_cases() {
+            t.reopen().unwrap();
+            t.reopen().unwrap();
+        }
+    }
+
+    #[test]
+    fn test_recover_with_entries() {
         for mut t in default_cases() {
             t.put_entries(vec![("foo", "v1"), ("baz", "v5")]);
             t.reopen().unwrap();
@@ -2139,7 +2152,8 @@ mod tests {
             assert_eq!(t.get("foo", None).unwrap(), "v3");
             t.put("foo", "v4").unwrap();
             assert_eq!(t.get("bar", None).unwrap(), "v2");
-            assert_eq!(t.get("foo", None).unwrap(), "v3");
+            assert_eq!(t.get("foo", None).unwrap(), "v4");
+            assert_eq!(t.get("baz", None).unwrap(), "v5");
         }
     }
 }
