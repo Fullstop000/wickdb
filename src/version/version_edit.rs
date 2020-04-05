@@ -109,7 +109,7 @@ pub struct VersionEdit {
     pub file_delta: FileDelta,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct FileDelta {
     // (level, InternalKey)
     pub compaction_pointers: Vec<(usize, InternalKey)>,
@@ -151,7 +151,7 @@ impl VersionEdit {
 
     #[inline]
     pub fn take_file_delta(&mut self) -> FileDelta {
-        mem::replace(&mut self.file_delta, FileDelta::default())
+        mem::take(&mut self.file_delta)
     }
 
     /// Add the specified file at the specified number

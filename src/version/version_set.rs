@@ -669,7 +669,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
                 )));
             }
         };
-        let file_length = current_manifest.len();
+        let file_length = current_manifest.len()?;
         let base = Version::new(self.options.clone(), self.icmp.clone());
         let mut builder = VersionBuilder::new(self.options.max_levels as usize, &base);
         let reporter = LogReporter::new();
@@ -690,6 +690,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
             }
             let mut edit = VersionEdit::new(self.options.max_levels);
             edit.decoded_from(&buf)?;
+            debug!("Decoded manifest record: {:?}", &edit);
             if let Some(ref cmp_name) = edit.comparator_name {
                 if cmp_name.as_str() != self.icmp.user_comparator.name() {
                     return Err(Error::InvalidArgument(
@@ -715,6 +716,10 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
                 last_sequence = n;
                 has_last_sequence = true;
             }
+        }
+
+        if let Err(e) = reporter.result() {
+            return Err(e);
         }
 
         if !has_next_file_number {
@@ -803,7 +808,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
     fn setup_other_inputs(&mut self, c: Compaction<S::F>) -> Compaction<S::F> {
         let mut c = self.add_boundary_inputs(c);
         let current = &self.current();
-        let inputs = std::mem::replace(&mut c.inputs, CompactionInputs::default());
+        let inputs = std::mem::take(&mut c.inputs);
         let not_expand = inputs.base;
         // Calculate the key range in current level after `add_boundary_inputs`
         let (smallest, largest) = base_range(&not_expand, c.level, &self.icmp);
@@ -963,7 +968,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
     }
 
     // See if we can reuse the existing MANIFEST file
-    fn should_reuse_manifest(&mut self, manifest_file: &str, file_size: Result<u64>) -> bool {
+    fn should_reuse_manifest(&mut self, manifest_file: &str, file_size: u64) -> bool {
         if !self.options.reuse_logs {
             return false;
         }
@@ -971,27 +976,22 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
             if file_type != FileType::Manifest {
                 return false;
             };
-            match file_size {
-                Ok(len) => {
-                    // Make new compacted MANIFEST if old one is too big
-                    if len > self.options.max_file_size {
-                        return false;
-                    }
-                    match self.storage.open(manifest_file) {
-                        Ok(f) => {
-                            info!("Reusing MANIFEST {}", manifest_file);
-                            let writer = Writer::new(f);
-                            self.manifest_writer = Some(writer);
-                            self.manifest_file_number = file_number;
-                            true
-                        }
-                        Err(e) => {
-                            error!("Reuse MANIFEST {:?}", e);
-                            false
-                        }
-                    }
+            // Make new compacted MANIFEST if old one is too big
+            if file_size > self.options.max_file_size {
+                return false;
+            }
+            match self.storage.open(manifest_file) {
+                Ok(f) => {
+                    info!("Reusing MANIFEST {}", manifest_file);
+                    let writer = Writer::new(f);
+                    self.manifest_writer = Some(writer);
+                    self.manifest_file_number = file_number;
+                    true
                 }
-                Err(_) => false,
+                Err(e) => {
+                    error!("Reuse MANIFEST {:?}", e);
+                    false
+                }
             }
         } else {
             false

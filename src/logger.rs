@@ -44,21 +44,22 @@ impl Logger {
         let inner = match inner {
             Some(l) => l,
             None => {
-                let drain = if cfg!(debug_assertions) {
+                if cfg!(debug_assertions) {
                     // Use std out
                     let decorator = slog_term::TermDecorator::new().build();
-                    let drain = slog_term::FullFormat::new(decorator).build().fuse();
-                    slog_async::Async::new(drain).build().fuse()
+                    let drain = Mutex::new(slog_term::FullFormat::new(decorator).build()).fuse();
+                    slog::Logger::root(drain, o!())
                 } else {
                     // Use a file `Log` to record all logs
+                    // TODO: add file rotation
                     let file = storage
                         .create(generate_filename(db_path, FileType::InfoLog, 0).as_str())
                         .unwrap();
-                    slog_async::Async::new(FileBasedDrain::new(file))
+                    let drain = slog_async::Async::new(FileBasedDrain::new(file))
                         .build()
-                        .fuse()
-                };
-                slog::Logger::root(drain, o!())
+                        .fuse();
+                    slog::Logger::root(drain, o!())
+                }
             }
         };
         Self { inner, level }
@@ -91,7 +92,16 @@ impl Log for Logger {
                 level,
                 tag: target,
             };
-            self.inner.log(&slog::Record::new(&s, args, slog::b!()))
+            if cfg!(debug_assertions) {
+                let meta_info = format!("{}:{}", file, line);
+                self.inner.log(&slog::Record::new(
+                    &s,
+                    args,
+                    slog::b!("[location]" => meta_info),
+                ))
+            } else {
+                self.inner.log(&slog::Record::new(&s, args, slog::b!()))
+            }
         }
     }
 
