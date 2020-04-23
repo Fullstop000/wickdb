@@ -18,7 +18,7 @@ use log::{LevelFilter, Log, Metadata, Record};
 use slog::{o, Drain, Level};
 
 use std::sync::Mutex;
-
+use std::io;
 /// A `slog` based logger which can be used with `log` crate
 ///
 /// See `slog` at https://github.com/slog-rs/slog
@@ -64,6 +64,8 @@ impl Logger {
         };
         Self { inner, level }
     }
+
+
 }
 
 impl Log for Logger {
@@ -152,6 +154,74 @@ impl<F: File> Drain for FileBasedDrain<F> {
         Ok(())
     }
 }
+
+trait Rotator: Send {
+   
+        /// Check if the option is enabled in configuration.
+        /// Return true if the `rotator` is valid.
+        fn is_enabled(&self) -> bool;
+    
+        /// Call by operator, initializes the states of rotators.
+        fn prepare(&mut self, file:  &dyn File) -> io::Result<()>;
+    
+        /// Return if the file need to be rotated.
+        fn should_rotate(&self) -> bool;
+    
+        /// Call by operator, update rotators' state while the operator try to write some data.
+        fn on_write(&mut self, data: &[u8]) -> io::Result<()>;
+    
+        /// Call by operator, update rotators' state while the operator execute a rotation.
+        fn on_rotate(&mut self) -> io::Result<()>;
+    
+    
+}
+
+
+struct RotatedFileBySize {
+    rotation_size: u64,
+    file_size: u64
+}
+
+impl RotatedFileBySize {
+    fn new(rotation_size: u64) -> Self {
+        RotatedFileBySize {
+            rotation_size,
+            file_size: 0,
+        }
+    }
+}
+
+impl Rotator for RotatedFileBySize {
+    
+     fn is_enabled(&self) -> bool {
+        self.rotation_size != 0
+     }
+    
+    
+     fn prepare(&mut self, file: &dyn File) -> io::Result<()>{
+         self.file_size += file.len().unwrap();
+         Ok(())
+     }
+ 
+    
+     fn should_rotate(&self) -> bool {
+         self.file_size > self.rotation_size
+     }
+
+     fn on_write(&mut self, data: &[u8]) -> io::Result<()>{
+         self.file_size += data.len() as u64;
+         Ok(())
+     }
+ 
+   
+     fn on_rotate(&mut self) -> io::Result<()>{
+         self.file_size =0;
+         Ok(())
+     }
+ 
+
+}
+
 
 #[cfg(test)]
 mod tests {
