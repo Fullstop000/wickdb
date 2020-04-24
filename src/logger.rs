@@ -13,12 +13,14 @@
 
 use crate::db::filename::{generate_filename, FileType};
 use crate::storage::{File, Storage};
+use crate::error::Result;
 
 use log::{LevelFilter, Log, Metadata, Record};
 use slog::{o, Drain, Level};
 
 use std::sync::Mutex;
-use std::io;
+
+
 /// A `slog` based logger which can be used with `log` crate
 ///
 /// See `slog` at https://github.com/slog-rs/slog
@@ -106,8 +108,8 @@ impl Log for Logger {
             }
         }
     }
-
     fn flush(&self) {}
+
 }
 
 fn log_to_slog_level(level: log::Level) -> Level {
@@ -122,13 +124,34 @@ fn log_to_slog_level(level: log::Level) -> Level {
 
 struct FileBasedDrain<F: File> {
     inner: Mutex<F>,
+    rotators:Vec<Box<dyn Rotator>>,
 }
 
 impl<F: File> FileBasedDrain<F> {
     fn new(f: F) -> Self {
         FileBasedDrain {
             inner: Mutex::new(f),
+            rotators:vec![],
         }
+    }
+
+    fn add_rotator<R: 'static + Rotator>(mut self,rotator:R) -> Self {
+        if rotator.is_enabled() {
+        self.rotators.push(Box::new(rotator));
+        }
+        self
+    }
+
+
+    fn flush(&mut self) -> Result<()> {
+        let mut file = self.inner.lock().unwrap();
+        for rotator in self.rotators.iter() {
+           if rotator.should_rotate(file.len().unwrap()){
+               file.flush()?
+           }
+
+        }
+        file.flush()
     }
 }
 
@@ -140,7 +163,7 @@ impl<F: File> Drain for FileBasedDrain<F> {
         &self,
         record: &slog::Record,
         values: &slog::OwnedKVList,
-    ) -> Result<Self::Ok, Self::Err> {
+    ) -> std::result::Result<Self::Ok, Self::Err> {
         // Ignore errors here
         let _ = self.inner.lock().unwrap().write(
             format!(
@@ -151,9 +174,14 @@ impl<F: File> Drain for FileBasedDrain<F> {
             )
             .as_bytes(),
         );
+            
+        
         Ok(())
     }
+
+   
 }
+
 
 trait Rotator: Send {
    
@@ -162,16 +190,14 @@ trait Rotator: Send {
         fn is_enabled(&self) -> bool;
     
         /// Call by operator, initializes the states of rotators.
-        fn prepare(&mut self, file:  &dyn File) -> io::Result<()>;
+        // fn prepare(&mut self, file:  &dyn File) -> io::Result<()>;
     
         /// Return if the file need to be rotated.
-        fn should_rotate(&self) -> bool;
+        fn should_rotate(&self, size:u64) -> bool;
     
-        /// Call by operator, update rotators' state while the operator try to write some data.
-        fn on_write(&mut self, data: &[u8]) -> io::Result<()>;
-    
-        /// Call by operator, update rotators' state while the operator execute a rotation.
-        fn on_rotate(&mut self) -> io::Result<()>;
+        // fn on_write(&mut self, buf:&[u8]) -> Result<()>;
+        // Call by operator, update rotators' state while the operator execute a rotation.
+        // fn on_rotate(&mut self) -> Result<()>;
     
     
 }
@@ -179,14 +205,14 @@ trait Rotator: Send {
 
 struct RotatedFileBySize {
     rotation_size: u64,
-    file_size: u64
+    // file_size: u64
 }
 
 impl RotatedFileBySize {
     fn new(rotation_size: u64) -> Self {
         RotatedFileBySize {
             rotation_size,
-            file_size: 0,
+            // file_size: 0,
         }
     }
 }
@@ -196,29 +222,11 @@ impl Rotator for RotatedFileBySize {
      fn is_enabled(&self) -> bool {
         self.rotation_size != 0
      }
-    
-    
-     fn prepare(&mut self, file: &dyn File) -> io::Result<()>{
-         self.file_size += file.len().unwrap();
-         Ok(())
-     }
  
     
-     fn should_rotate(&self) -> bool {
-         self.file_size > self.rotation_size
+     fn should_rotate(&self,size: u64) -> bool {
+         size > self.rotation_size
      }
-
-     fn on_write(&mut self, data: &[u8]) -> io::Result<()>{
-         self.file_size += data.len() as u64;
-         Ok(())
-     }
- 
-   
-     fn on_rotate(&mut self) -> io::Result<()>{
-         self.file_size =0;
-         Ok(())
-     }
- 
 
 }
 
