@@ -185,7 +185,13 @@ impl Version {
                                     == CmpOrdering::Equal
                                 {
                                     match parsed_key.value_type {
-                                        ValueType::Value => return Ok((Some(value), seek_stats)),
+                                        ValueType::Value => {
+                                            if value.size() > 30 {
+                                                info!("v1 {:?}", &value.as_slice()[..30]);
+                                                info!("{:?}: {}", value.as_ptr(), value.size());
+                                            }
+                                            return Ok((Some(value), seek_stats))
+                                        },
                                         ValueType::Deletion => return Ok((None, seek_stats)),
                                         _ => {}
                                     }
