@@ -2213,10 +2213,10 @@ mod tests {
         }) {
             // Trigger a long memtable compaction and reopen the database during it
             t.put_entries(vec![
-                ("foo", "v1"),                             // Goes to 1st log file
+                ("foo", "v1"),                            // Goes to 1st log file
                 ("big1", "x".repeat(10_000_00).as_str()), // Fills memtable
-                ("big2", "y".repeat(1000).as_str()),        // Triggers compaction
-                ("bar", "v2"),                             // Goes to new log file
+                ("big2", "y".repeat(1000).as_str()),      // Triggers compaction
+                ("bar", "v2"),                            // Goes to new log file
             ]);
             t.reopen().unwrap();
             t.assert_get("foo", Some("v1"));

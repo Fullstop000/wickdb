@@ -185,7 +185,7 @@ impl Version {
                                     == CmpOrdering::Equal
                                 {
                                     match parsed_key.value_type {
-                                        ValueType::Value =>return Ok((Some(value), seek_stats)),
+                                        ValueType::Value => return Ok((Some(value), seek_stats)),
                                         ValueType::Deletion => return Ok((None, seek_stats)),
                                         _ => {}
                                     }
