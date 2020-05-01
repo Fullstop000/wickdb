@@ -435,7 +435,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
                         }
                         // omit the sync error
                         Err(e) => {
-                            info!("MANIFEST write: {:?}", e);
+                            warn!("MANIFEST persistent error: {:?}", e);
                             self.manifest_writer = None;
                             return self.storage.remove(new_manifest_file.as_str());
                         }
@@ -585,15 +585,15 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
             mem_iter,
             &mut meta,
         );
-        info!(
-            "Level-0 table #{} : try to write {} bytes [{:?}]",
-            meta.number, meta.file_size, &build_result
-        );
         let mut level = 0;
 
         // If `file_size` is zero, the file has been deleted and
         // should not be added to the manifest
         if build_result.is_ok() && meta.file_size > 0 {
+            info!(
+                "Level-0 table #{} : add {} bytes [{:?}] [key range {:?} ... {:?}]",
+                meta.number, meta.file_size, &build_result, &meta.smallest, &meta.largest,
+            );
             let smallest_ukey = meta.smallest.user_key();
             let largest_ukey = meta.largest.user_key();
             level = base.pick_level_for_memtable_output(smallest_ukey, largest_ukey);

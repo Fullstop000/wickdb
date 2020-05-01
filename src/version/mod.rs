@@ -162,6 +162,7 @@ impl Version {
             }
 
             for file in files_to_seek {
+                warn!("Seek file: {:?}", &file);
                 seek_stats.seek_file_level = Some(level);
                 seek_stats.seek_file = Some(file.clone());
                 match table_cache.get(
@@ -185,7 +186,13 @@ impl Version {
                                     == CmpOrdering::Equal
                                 {
                                     match parsed_key.value_type {
-                                        ValueType::Value => return Ok((Some(value), seek_stats)),
+                                        ValueType::Value => {
+                                            if value.size() > 30 {
+                                                info!("v1 {:?}", &value.as_slice()[..30]);
+                                                info!("{:?}: {}", value.as_ptr(), value.size());
+                                            }
+                                            return Ok((Some(value), seek_stats))
+                                        },
                                         ValueType::Deletion => return Ok((None, seek_stats)),
                                         _ => {}
                                     }
