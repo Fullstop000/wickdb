@@ -231,7 +231,7 @@ impl Options {
         let static_logger: &'static dyn Log = Box::leak(Box::new(logger));
         log::set_logger(static_logger);
         log::set_max_level(self.logger_level);
-        info!("Logger initialized");
+        info!("Logger initialized: [level {:?}]", &self.logger_level);
     }
 
     fn clip_range<N: PartialOrd + Eq + Copy>(n: N, min: N, max: N) -> N {

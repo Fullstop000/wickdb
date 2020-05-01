@@ -43,7 +43,6 @@ use crossbeam_utils::sync::ShardedLock;
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::vec_deque::VecDeque;
 use std::mem;
-use std::path::MAIN_SEPARATOR;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, RwLock};
 use std::thread;
@@ -195,7 +194,6 @@ impl<S: Storage + Clone> WickDB<S> {
         if should_save_manifest {
             edit.set_prev_log_number(0);
             edit.set_log_number(versions.log_number());
-            dbg!("log_and_apply in open_db");
             versions.log_and_apply(&mut edit)?;
         }
 
@@ -317,7 +315,7 @@ impl<S: Storage + Clone> WickDB<S> {
                             for signal in signals {
                                 if let Err(e) = signal.send(Ok(())) {
                                     error!(
-                                        "[process batch] Fail sending finshing signal to waiting batch: {}", e
+                                        "[process batch] Fail sending finishing signal to waiting batch: {}", e
                                     )
                                 }
                             }
@@ -403,7 +401,8 @@ pub struct DBImpl<S: Storage + Clone> {
     // all relative methods are using immutable borrowing,
     // we still need to mutate the field `mem` and `im_mem` in few situations.
     mem: ShardedLock<MemTable>,
-    im_mem: ShardedLock<Option<MemTable>>, // There is a compacted immutable table or not
+    // There is a compacted immutable table or not
+    im_mem: ShardedLock<Option<MemTable>>,
     // Have we encountered a background error in paranoid mode
     bg_error: RwLock<Option<Error>>,
     // Whether the db is closing
@@ -411,6 +410,7 @@ pub struct DBImpl<S: Storage + Clone> {
 }
 
 unsafe impl<S: Storage + Clone> Sync for DBImpl<S> {}
+
 unsafe impl<S: Storage + Clone> Send for DBImpl<S> {}
 
 impl<S: Storage + Clone> Drop for DBImpl<S> {
@@ -506,6 +506,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
     // Recover DB from `db_name`.
     // Returns the newest VersionEdit and whether we need to persistent VersionEdit to Manifest
     fn recover(&mut self) -> Result<(VersionEdit, bool)> {
+        info!("Start recovering db : {}", self.db_name);
         // Ignore error from `mkdir_all` since the creation of the DB is
         // committed only when the descriptor is created, and this directory
         // may already exist from a previous failed creation attempt.
@@ -621,11 +622,11 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         let log_file = match self.env.open(file_name.as_str()) {
             Ok(f) => f,
             Err(e) => {
-                if self.options.paranoid_checks {
-                    return Err(e);
+                return if self.options.paranoid_checks {
+                    Err(e)
                 } else {
                     info!("ignore errors when replaying log file : {:?}", e);
-                    return Ok(0);
+                    Ok(0)
                 }
             }
         };
@@ -683,7 +684,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         // See if we should keep reusing the last log file.
         if self.options.reuse_logs && last_log && !have_compacted {
             let log_file = reader.into_file();
-            info!("Reusing old log file : {}", file_name);
+            info!("Reusing old log file {}", file_name);
             versions.record_writer = Some(Writer::new(log_file));
             versions.set_log_number(log_number);
             if let Some(m) = mem {
@@ -702,7 +703,6 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
     }
 
     // Delete any unneeded files and stale in-memory entries.
-    #[allow(unused_must_use)]
     fn delete_obsolete_files(&self, mut versions: MutexGuard<VersionSet<S>>) {
         if self.bg_error.read().is_err() {
             // After a background error, we don't know whether a new version may
@@ -729,11 +729,14 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
                         if file_type == FileType::Table {
                             self.table_cache.evict(number)
                         }
-                        info!("Delete type={:?} #{}", file_type, number);
-                        // ignore the IO error here
-                        self.env.remove(
-                            format!("{}{}{:?}", self.db_name, MAIN_SEPARATOR, file).as_str(),
+                        info!(
+                            "Delete type={:?} #{} [filename {:?}]",
+                            file_type, number, &file
                         );
+                        // ignore the IO error here
+                        if let Err(e) = self.env.remove(&file) {
+                            error!("Delete file failed [filename {:?}]: {:?}", &file, e)
+                        }
                     }
                 }
             }
@@ -876,6 +879,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
 
     // Compact immutable memory table to level0 files
     fn compact_mem_table(&self) {
+        debug!("Compact memtable");
         let mut versions = self.versions.lock().unwrap();
         let mut edit = VersionEdit::new(self.options.max_levels);
         let mut im_mem = self.im_mem.write().unwrap();
@@ -1259,11 +1263,11 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
     fn maybe_schedule_compaction(&self, version: Arc<Version>) {
         if self.background_compaction_scheduled.load(Ordering::Acquire)
             // Already scheduled
-        || self.is_shutting_down.load(Ordering::Acquire)
+            || self.is_shutting_down.load(Ordering::Acquire)
             // DB is being shutting down
-        || self.has_bg_error()
+            || self.has_bg_error()
             // Got err
-        ||  (self.im_mem.read().unwrap().is_none()
+            || (self.im_mem.read().unwrap().is_none()
             && self.manual_compaction_queue.lock().unwrap().is_empty() && !version.needs_compaction())
         {
             // No work needs to be done
@@ -1346,7 +1350,8 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
 
 // A wrapper struct for scheduling `WriteBatch`
 struct BatchTask {
-    stop_process: bool, // flag for shutdown the batch processing thread gracefully
+    // flag for shutdown the batch processing thread gracefully
+    stop_process: bool,
     force_mem_compaction: bool,
     batch: WriteBatch,
     signal: Sender<Result<()>>,
@@ -1495,9 +1500,13 @@ mod tests {
         };
         opt
     }
+
     struct DBTest {
-        store: MemStorage, // Used as the db's inner storage
-        opt: Options,      // Used as the db's options
+        opt_type: TestOption,
+        // Used as the db's inner storage
+        store: MemStorage,
+        // Used as the db's options
+        opt: Options,
         db: WickDB<MemStorage>,
     }
 
@@ -1526,17 +1535,22 @@ mod tests {
         .into_iter()
         .map(|opt| {
             let options = opt_hook(new_test_options(opt));
-            DBTest::new(options)
+            DBTest::new(opt, options)
         })
         .collect()
     }
 
     impl DBTest {
-        fn new(opt: Options) -> Self {
+        fn new(opt_type: TestOption, opt: Options) -> Self {
             let store = MemStorage::default();
             let name = "db_test";
             let db = WickDB::open_db(opt.clone(), name, store.clone()).unwrap();
-            DBTest { store, opt, db }
+            DBTest {
+                opt_type,
+                store,
+                opt,
+                db,
+            }
         }
 
         // Close the inner db without destroy the contents and establish a new WickDB on same db path with same option
@@ -1571,6 +1585,25 @@ mod tests {
             match self.db.get(read_opt, k.as_bytes()) {
                 Ok(v) => v.and_then(|v| Some(v.as_str().to_owned())),
                 Err(_) => None,
+            }
+        }
+        fn assert_get(&self, k: &str, expect: Option<&str>) {
+            match self.db.get(ReadOptions::default(), k.as_bytes()) {
+                Ok(v) => match v {
+                    Some(s) => {
+                        let bytes = s.as_slice();
+                        let expect = expect.map(|s| s.as_bytes());
+                        if bytes.len() > 1000 {
+                            if expect != Some(bytes) {
+                                panic!("expect(len={}), but got(len={}), not equal contents, key: {}, got: {:?}..., expect: {:?}...", expect.map_or(0, |s| s.len()), bytes.len(), k, &bytes[..50], &expect.unwrap()[..50]);
+                            }
+                        } else {
+                            assert_eq!(expect, Some(bytes), "key: {}", k);
+                        }
+                    }
+                    None => assert_eq!(expect, None, "key: {}", k),
+                },
+                Err(e) => panic!("got error {:?}, key: {}", e, k),
             }
         }
 
@@ -1708,7 +1741,12 @@ mod tests {
             let name = "db_test";
             let opt = new_test_options(TestOption::Default);
             let db = WickDB::open_db(opt.clone(), name, store.clone()).unwrap();
-            DBTest { store, opt, db }
+            DBTest {
+                opt_type: TestOption::Default,
+                store,
+                opt,
+                db,
+            }
         }
     }
 
@@ -2136,6 +2174,13 @@ mod tests {
         for mut t in default_cases() {
             t.reopen().unwrap();
             t.reopen().unwrap();
+
+            t.put_entries(vec![("foo", "v1"), ("foo", "v2")]);
+            t.reopen().unwrap();
+            t.reopen().unwrap();
+            t.put("foo", "v3").unwrap();
+            t.reopen().unwrap();
+            assert_eq!(t.get("foo", None).unwrap(), "v3");
         }
     }
 
@@ -2154,6 +2199,30 @@ mod tests {
             assert_eq!(t.get("bar", None).unwrap(), "v2");
             assert_eq!(t.get("foo", None).unwrap(), "v4");
             assert_eq!(t.get("baz", None).unwrap(), "v5");
+        }
+    }
+
+    // Check that writes done during a memtable compaction are recovered
+    // if the database is shutdown during the memtable compaction.
+    #[test]
+    fn test_recover_during_memtable_compaction() {
+        for mut t in cases(|mut opt| {
+            opt.write_buffer_size = 10000;
+            opt.logger_level = crate::LevelFilter::Debug;
+            opt
+        }) {
+            // Trigger a long memtable compaction and reopen the database during it
+            t.put_entries(vec![
+                ("foo", "v1"),                            // Goes to 1st log file
+                ("big1", "x".repeat(10_000_00).as_str()), // Fills memtable
+                ("big2", "y".repeat(1000).as_str()),      // Triggers compaction
+                ("bar", "v2"),                            // Goes to new log file
+            ]);
+            t.reopen().unwrap();
+            t.assert_get("foo", Some("v1"));
+            t.assert_get("bar", Some("v2"));
+            t.assert_get("big1", Some("x".repeat(10_000_00).as_str()));
+            t.assert_get("big2", Some("y".repeat(1000).as_str()));
         }
     }
 }

@@ -160,27 +160,27 @@ mod tests {
 
     #[test]
     fn test_read_exact_at() {
-        let mut f = SysFile::create("test").expect("");
-        f.write_all("hello world".as_bytes()).expect("");
-        f.sync_all().expect("");
-        let mut tests = vec![
+        let mut f = SysFile::create("test").unwrap();
+        f.write_all("hello world".as_bytes()).unwrap();
+        f.sync_all().unwrap();
+        let tests = vec![
             (0, "hello world"),
             (0, ""),
             (1, "ello"),
             (4, "o world"),
             (100, ""),
         ];
-        let rf = SysFile::open("test").expect("");
+        let rf = SysFile::open("test").unwrap();
         let mut buffer = vec![];
-        for (offset, expect) in tests.drain(..) {
+        for (offset, expect) in tests {
             buffer.resize(expect.as_bytes().len(), 0u8);
-            rf.read_exact_at(buffer.as_mut_slice(), offset).expect("");
+            rf.read_exact_at(buffer.as_mut_slice(), offset).unwrap();
             assert_eq!(buffer, Vec::from(String::from(expect)));
         }
         // EOF case
         buffer.resize(100, 0u8);
         rf.read_exact_at(buffer.as_mut_slice(), 2)
             .expect_err("failed to fill whole buffer");
-        remove_file("test").expect("");
+        remove_file("test").unwrap();
     }
 }
