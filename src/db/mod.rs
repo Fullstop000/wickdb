@@ -488,12 +488,6 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         }
         let current = self.versions.lock().unwrap().current();
         let (value, seek_stats) = current.get(options, lookup_key, &self.table_cache)?;
-        if let Some(value) = value.as_ref() {
-            if value.size() > 30 {
-                info!("v2: {:?}", &value.as_slice()[..30]);
-                info!("{:?}: {}", value.as_ptr(), value.size());
-            }
-        }
         if current.update_stats(seek_stats) {
             self.maybe_schedule_compaction(current)
         }
@@ -1598,9 +1592,6 @@ mod tests {
                 Ok(v) => match v {
                     Some(s) => {
                         let bytes = s.as_slice();
-                        if bytes.len() > 50 {
-                            info!("{:?}", &bytes[..50]);
-                        }
                         let expect = expect.map(|s| s.as_bytes());
                         if bytes.len() > 1000 {
                             if expect != Some(bytes) {
@@ -2220,25 +2211,17 @@ mod tests {
             opt.logger_level = crate::LevelFilter::Debug;
             opt
         }) {
-            error!(
-                "==================================== TEST CASE ========================================="
-            );
-            error!("TEST CASE: {:?}", t.opt_type);
             // Trigger a long memtable compaction and reopen the database during it
             t.put_entries(vec![
                 ("foo", "v1"),                             // Goes to 1st log file
-                ("big1", "x".repeat(10_000_000).as_str()), // Fills memtable
+                ("big1", "x".repeat(10_000_00).as_str()), // Fills memtable
                 ("big2", "y".repeat(1000).as_str()),        // Triggers compaction
                 ("bar", "v2"),                             // Goes to new log file
             ]);
-            error!("!!!!!!!! REOPEN");
             t.reopen().unwrap();
-            error!("!!!!!!!! REOPEN FINISH");
             t.assert_get("foo", Some("v1"));
             t.assert_get("bar", Some("v2"));
-            error!("get big1");
-            t.assert_get("big1", Some("x".repeat(10_000_000).as_str()));
-            error!("get big1 OK");
+            t.assert_get("big1", Some("x".repeat(10_000_00).as_str()));
             t.assert_get("big2", Some("y".repeat(1000).as_str()));
         }
     }
