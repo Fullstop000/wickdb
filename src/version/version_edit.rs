@@ -491,14 +491,13 @@ mod tests {
         edit.set_log_number(log_num);
 
         assert_eq!(edit.log_number.unwrap(), log_num);
-
     }
 
     #[test]
     fn test_set_prev_log_number() {
         let mut edit = VersionEdit::new(7);
 
-        let prev_log_num =u64::max_value();
+        let prev_log_num = u64::max_value();
 
         let prev_log_num = u64::max_value();
         edit.set_prev_log_number(prev_log_num);
@@ -519,6 +518,5 @@ mod tests {
         let last_sequence = u64::max_value();
         edit.set_last_sequence(last_sequence);
         assert_eq!(edit.last_sequence.unwrap(), last_sequence);
-
     }
 }

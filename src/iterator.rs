@@ -90,10 +90,7 @@ pub trait DerivedIterFactory {
     fn derive(&self, value: &[u8]) -> Result<Self::Iter>;
 }
 
-
 impl<I: Iterator<Key = Slice, Value = Slice>, F: DerivedIterFactory> ConcatenateIterator<I, F> {
-
-
     pub fn new(origin: I, factory: F) -> Self {
         Self {
             origin,
@@ -190,7 +187,6 @@ impl<I: Iterator<Key = Slice, Value = Slice>, F: DerivedIterFactory> Concatenate
         )
     }
 }
-
 
 impl<I: Iterator<Key = Slice, Value = Slice>, F: DerivedIterFactory> Iterator
     for ConcatenateIterator<I, F>

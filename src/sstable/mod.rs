@@ -661,10 +661,8 @@ mod tests {
     }
 
     impl Iterator for EntryIterator {
-
         type Key = Slice;
         type Value = Slice;
-
 
         fn valid(&self) -> bool {
             self.current < self.data.len()

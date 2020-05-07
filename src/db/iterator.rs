@@ -62,10 +62,7 @@ pub struct DBIterator<I: Iterator, S: Storage + Clone + 'static> {
     saved_value: Slice,
 }
 
-
-
 impl<I: Iterator<Key = Slice, Value = Slice>, S: Storage + Clone> Iterator for DBIterator<I, S> {
-
     type Key = Slice;
     type Value = Slice;
     fn valid(&self) -> bool {
