@@ -496,9 +496,6 @@ mod tests {
     #[test]
     fn test_set_prev_log_number() {
         let mut edit = VersionEdit::new(7);
-
-        let prev_log_num = u64::max_value();
-
         let prev_log_num = u64::max_value();
         edit.set_prev_log_number(prev_log_num);
         assert_eq!(edit.prev_log_number.unwrap(), prev_log_num);
