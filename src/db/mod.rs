@@ -177,7 +177,7 @@ impl<S: Storage + Clone> DB for WickDB<S> {
 impl<S: Storage + Clone> WickDB<S> {
     /// Create a new WickDB
     pub fn open_db(mut options: Options, db_name: &'static str, storage: S) -> Result<Self> {
-        options.initialize(db_name.to_owned(), &storage);
+        options.initialize(db_name, &storage);
         debug!("Open db: '{}'", db_name);
         let mut db = DBImpl::new(options, db_name, storage);
         let (mut edit, should_save_manifest) = db.recover()?;

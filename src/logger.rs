@@ -15,21 +15,23 @@ use crate::db::filename::{generate_filename, FileType};
 use crate::error::Result;
 use crate::storage::{File, Storage};
 
+
 use log::{LevelFilter, Log, Metadata, Record};
 use slog::{o, Drain, Level};
 
 use chrono::prelude::*;
 use std::sync::Mutex;
+
 /// A `slog` based logger which can be used with `log` crate
 ///
 /// See `slog` at https://github.com/slog-rs/slog
 /// See `log` at https://github.com/rust-lang/log
 ///
 
-fn create_file<S: Storage>(storage: &S, dp_path: &str, timestamp: i64) -> Result<S::F> {
-    let new_path = generate_filename(dp_path, FileType::OldInfoLog, timestamp as u64);
-    storage.rename(dp_path, new_path.as_str())?;
-    storage.create(dp_path)
+pub fn create_file<S:Storage>(storage:&S,db_path:&str,timestamp:i64) -> Result<S::F> {
+     let new_path = generate_filename(db_path, FileType::Log, timestamp as u64);
+     storage.create(new_path)
+    
 }
 
 pub struct Logger {
@@ -47,8 +49,8 @@ impl Logger {
     pub fn new<S: Storage + Clone + 'static>(
         inner: Option<slog::Logger>,
         level: LevelFilter,
-        storage: S,
-        db_path: String,
+        storage:S,
+        db_path: &'static str,
     ) -> Self {
         let inner = match inner {
             Some(l) => l,
@@ -61,13 +63,13 @@ impl Logger {
                 } else {
                     // Use a file `Log` to record all logs
                     // TODO: add file rotation
-                    let file =
-                        create_file(&storage, db_path.as_str(), Local::now().timestamp()).unwrap();
-                    let file_fn = move |path: String| {
-                        create_file(&storage, path.as_str(), Local::now().timestamp())
-                    };
-                    let drain = FileBasedDrain::new(file, db_path.clone(), file_fn)
-                        .add_rotator(RotatedFileBySize::new(0));
+                    //db_path 是generate_filename
+                    let file = create_file(&storage, db_path,Local::now().timestamp()).unwrap();
+                    let file_fn =  move |path: String| {create_file(&storage, 
+                        path.as_str(),Local::now().timestamp())};
+                    let drain =FileBasedDrain::new(file,db_path, 
+                                             file_fn)
+                                                .add_rotator(RotatedFileBySize::new(1));
                     let drain = slog_async::Async::new(drain).build().fuse();
                     slog::Logger::root(drain, o!())
                 }
@@ -131,47 +133,53 @@ fn log_to_slog_level(level: log::Level) -> Level {
 struct FileBasedDrain<F: File> {
     inner: Mutex<F>,
     rotators: Vec<Box<dyn Rotator>>,
-    dp_path: String,
-    new_file: Box<dyn Send + Fn(String) -> Result<F>>,
+    db_path:String,
+    new_file:Box<dyn Send+Fn(String)->Result<F>>
 }
 
-impl<F: File> FileBasedDrain<F> {
-    fn new<H>(f: F, path: String, new_file: H) -> Self
-    where
-        H: 'static + Send + Fn(String) -> Result<F>,
-    {
+impl<F: File> FileBasedDrain<F>  {
+    fn new<H>(f:F,path:&str,new_file: H) -> Self
+    where H:'static+Send+Fn(String)->Result<F>
+     {
         FileBasedDrain {
-            dp_path: path.clone(),
+            db_path: path.to_string(),
             inner: Mutex::new(f),
             rotators: vec![],
             new_file: Box::new(new_file),
         }
     }
 
-    fn add_rotator<R: 'static + Rotator>(mut self, rotator: R) -> Self {
+
+    fn add_rotator<R: 'static+Rotator>(mut self, rotator: R) -> Self {
         if rotator.is_enabled() {
             self.rotators.push(Box::new(rotator));
         }
-        for rotator in (&self).rotators.iter() {
+        for rotator in (&self).rotators.iter()  {
             rotator.prepare(&*self.inner.lock().unwrap()).unwrap();
         }
         self
     }
 
-    fn flush(&self) -> Result<()> {
-        self.inner.lock().unwrap().flush()?;
-        let new_file = (self.new_file)(self.dp_path.clone()).unwrap();
-
-        let mut old_file = self.inner.lock().unwrap();
-        std::mem::replace(&mut *old_file, new_file);
+    fn flush(&self) -> Result<()>{
+        // use crate::storage::file::FileStorage;
+        // let storage = FileStorage::default();
         for rotator in self.rotators.iter() {
-            rotator.on_rotate()?;
-        }
-        return Ok(());
+            if rotator.should_rotate() {        
+                // let _ = storage.rename("log/000000.log","log/000000.log");
+                let new_file = (self.new_file)(self.db_path.clone()).unwrap();
+                let mut old_file = self.inner.lock().unwrap();
+                *old_file =new_file;
+                
+                for rotator in self.rotators.iter() {
+                    rotator.on_rotate();
+                }
+                return Ok(());
+                }
+            }
+        self.inner.lock().unwrap().flush()
     }
 }
-
-impl<F: File> Drain for FileBasedDrain<F> {
+impl<F:File> Drain for FileBasedDrain<F> {
     type Ok = ();
     type Err = slog::Never;
 
@@ -186,19 +194,17 @@ impl<F: File> Drain for FileBasedDrain<F> {
             record.msg(),
             values
         );
-        for rotator in self.rotators.iter() {
-            if rotator.should_rotate() {
-                self.flush().unwrap();
-                return Ok(());
-            }
-        }
+       
 
-        for rotator in self.rotators.iter() {
-            rotator.on_write(by.as_bytes()).unwrap();
+        for rotator in self.rotators.iter() {    
+            rotator.on_write(by.as_bytes()).unwrap();    
         }
-        // Ignore errors here
+               
+        let _f = self.flush().unwrap();
+
+        //Ignore errors here
         let _ = self.inner.lock().unwrap().write(by.as_bytes());
-
+        
         Ok(())
     }
 }
@@ -216,7 +222,7 @@ trait Rotator: Send {
 
     fn on_write(&self, buf: &[u8]) -> Result<()>;
     // Call by operator, update rotators' state while the operator execute a rotation.
-    fn on_rotate(&self) -> Result<()>;
+    fn on_rotate(&self) ;
 }
 
 struct RotatedFileBySize {
@@ -250,9 +256,8 @@ impl Rotator for RotatedFileBySize {
         Ok(())
     }
 
-    fn on_rotate(&self) -> Result<()> {
+    fn on_rotate(&self)  {
         *self.file_size.lock().unwrap() = 0;
-        Ok(())
     }
 }
 
@@ -261,21 +266,51 @@ mod tests {
 
     use super::*;
     use crate::storage::mem::MemStorage;
-
+    use crate::storage::file::FileStorage;
+    use slog::info;
+    use std::fs;
     use std::thread;
-    use std::time::Duration;
+    use std::time::Duration; 
+    use std::path::Path;
 
+    fn file_exists(file: impl AsRef<Path>,storage:FileStorage) -> bool {
+        storage.exists(file)
+    }
+    // #[test]
+    // fn test_default_logger() {
+    //     let s =MemStorage::default();
+    //     // let s = &'static s;
+    //     let db_path = "test";
+    //     let logger = Logger::new(None, LevelFilter::Debug, s, db_path);
+    //     // Ignore the error if the logger have been set
+    //     let _ = log::set_logger(Box::leak(Box::new(logger)));
+    //     log::set_max_level(LevelFilter::Debug);
+    //     self::info!(,"Hello World");
+    //     // Wait for the async logger print the result
+    //     thread::sleep(Duration::from_millis(100));
+    // }
+   
     #[test]
-    fn test_default_logger() {
-        let s = MemStorage::default();
-        // let s = &'static s;
-        let db_path = "test";
-        let logger = Logger::new(None, LevelFilter::Debug, s, db_path.to_string());
-        // Ignore the error if the logger have been set
-        let _ = log::set_logger(Box::leak(Box::new(logger)));
-        log::set_max_level(LevelFilter::Debug);
-        info!("Hello World");
-        // Wait for the async logger print the result
-        thread::sleep(Duration::from_millis(100));
+    fn test_rotate_by_size()  {
+        let db_path = "log";
+    
+        let storage = FileStorage::default();
+        let _= storage.mkdir_all(db_path);
+        let storage2 = storage.clone();
+        let file= create_file(&storage,db_path, 0).unwrap();
+        let new_path = generate_filename(db_path, FileType::Log, 1 );
+        
+       
+        
+        let file_fn =  move |path: String| {create_file(&storage, 
+            path.as_str(), 1)};    
+    
+        let drain =FileBasedDrain::new(file,db_path, file_fn)
+                                        .add_rotator(RotatedFileBySize::new(1));
+        let drain = slog_async::Async::new(drain).build().fuse();
+        let _log = slog::Logger::root(drain, o!());
+        self::info!(_log,"Test log file rotated by size");
+       
+        assert!(file_exists(new_path,FileStorage::default()));
     }
 }
