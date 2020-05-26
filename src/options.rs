@@ -208,7 +208,7 @@ impl Options {
     pub(crate) fn initialize<O: File + 'static, S: Storage<F = O> + Clone + 'static>(
         &mut self,
         db_name: &'static str,
-        storage:  &S,
+        storage: &S,
     ) {
         self.max_open_files =
             Self::clip_range(self.max_open_files, 64 + self.non_table_cache_files, 50000);
@@ -225,7 +225,7 @@ impl Options {
     }
 
     #[allow(unused_must_use)]
-    fn apply_logger<S: 'static+Storage+Clone>(&mut self, storage: &S, db_path: &'static str) {
+    fn apply_logger<S: 'static + Storage + Clone>(&mut self, storage: &S, db_path: &'static str) {
         let user_logger = std::mem::replace(&mut self.logger, None);
         let logger = Logger::new(user_logger, self.logger_level, storage.clone(), db_path);
         let static_logger: &'static dyn Log = Box::leak(Box::new(logger));
