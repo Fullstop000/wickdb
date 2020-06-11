@@ -690,6 +690,7 @@ mod tests {
         let store = MemStorage::default();
         // Test `create`
         let mut f = store.create("test1").unwrap();
+
         assert!(store.exists("test1"));
         f.write(b"hello world").unwrap();
 

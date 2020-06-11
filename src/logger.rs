@@ -19,6 +19,7 @@ use log::{LevelFilter, Log, Metadata, Record};
 use slog::{o, Drain, Level};
 
 use chrono::prelude::*;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 /// A `slog` based logger which can be used with `log` crate
@@ -215,21 +216,23 @@ trait Rotator: Send {
     /// Return if the file need to be rotated.
     fn should_rotate(&self) -> bool;
 
+    /// Call by operator, update rotators' state while the operator try to write some data.
     fn on_write(&self, buf: &[u8]) -> Result<()>;
+
     // Call by operator, update rotators' state while the operator execute a rotation.
     fn on_rotate(&self);
 }
 
 struct RotatedFileBySize {
     rotation_size: u64,
-    file_size: Mutex<u64>,
+    file_size: AtomicU64,
 }
 
 impl RotatedFileBySize {
     fn new(rotation_size: u64) -> Self {
         RotatedFileBySize {
             rotation_size,
-            file_size: Mutex::new(0),
+            file_size: AtomicU64::new(0),
         }
     }
 }
@@ -239,20 +242,21 @@ impl Rotator for RotatedFileBySize {
         self.rotation_size != 0
     }
     fn prepare(&self, file: &dyn File) -> Result<()> {
-        *self.file_size.lock().unwrap() = file.len().unwrap();
+        self.file_size.store(file.len().unwrap(), Ordering::Relaxed);
         Ok(())
     }
 
     fn should_rotate(&self) -> bool {
-        *self.file_size.lock().unwrap() > self.rotation_size
+        self.file_size.load(Ordering::Relaxed) > self.rotation_size
     }
     fn on_write(&self, buf: &[u8]) -> Result<()> {
-        *self.file_size.lock().unwrap() += buf.len() as u64;
+        let size = self.file_size.load(Ordering::Relaxed) + buf.len() as u64;
+        self.file_size.store(size, Ordering::Relaxed);
         Ok(())
     }
 
     fn on_rotate(&self) {
-        *self.file_size.lock().unwrap() = 0;
+        self.file_size.store(0, Ordering::Relaxed)
     }
 }
 
@@ -265,10 +269,6 @@ mod tests {
     use std::path::Path;
     use std::thread;
     use std::time::Duration;
-
-    fn file_exists(file: impl AsRef<Path>, storage: impl Storage) -> bool {
-        storage.exists(file)
-    }
 
     #[test]
     fn test_default_logger() {
@@ -288,8 +288,8 @@ mod tests {
     fn test_rotate_by_size() {
         let db_path = "log";
 
-        let storage = FileStorage::default();
-
+        let storage = MemStorage::default();
+        let stor2 = storage.clone();
         let _ = storage.mkdir_all(db_path);
         let file = create_file(&storage, db_path, 0).unwrap();
         let new_path = generate_filename(db_path, FileType::Log, 1);
@@ -303,15 +303,15 @@ mod tests {
             let _log = slog::Logger::root(drain, o!());
             slog::info!(_log, "Test log file rotated by size");
         }
-        assert_eq!(true, file_exists(new_path, FileStorage::default()));
+        assert_eq!(true, stor2.exists(new_path));
     }
 
     #[test]
     fn test_not_rotate_by_size() {
         let db_path = "norotate";
 
-        let storage = FileStorage::default();
-
+        let storage = MemStorage::default();
+        let stor2 = storage.clone();
         let _ = storage.mkdir_all(db_path);
         let file = create_file(&storage, db_path, 0).unwrap();
         let new_path = generate_filename(db_path, FileType::Log, 1);
@@ -325,10 +325,7 @@ mod tests {
             let _log = slog::Logger::root(drain, o!());
             slog::info!(_log, "Test log file rotated by size");
         }
-        assert_eq!(
-            true,
-            file_exists("norotate/000000.log", FileStorage::default())
-        );
-        assert_eq!(false, file_exists(new_path, FileStorage::default()));
+        assert_eq!(true, stor2.exists("norotate/000000.log"));
+        assert_eq!(false, stor2.exists(new_path));
     }
 }
