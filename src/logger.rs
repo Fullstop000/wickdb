@@ -264,9 +264,7 @@ impl Rotator for RotatedFileBySize {
 mod tests {
 
     use super::*;
-    use crate::storage::file::FileStorage;
     use crate::storage::mem::MemStorage;
-    use std::path::Path;
     use std::thread;
     use std::time::Duration;
 
