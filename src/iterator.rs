@@ -19,7 +19,6 @@ use crate::util::comparator::Comparator;
 use crate::util::slice::Slice;
 use crate::{Error, Result};
 use std::cmp::Ordering;
-use std::mem;
 
 /// A common trait for iterating all the key/value entries.
 ///
@@ -105,7 +104,7 @@ impl<I: Iterator<Key = Slice, Value = Slice>, F: DerivedIterFactory> Concatenate
     fn maybe_save_err(old: &mut Option<Error>, new: Result<()>) {
         if old.is_none() {
             if let Err(e) = new {
-                mem::replace::<Option<Error>>(old, Some(e));
+                *old = Some(e);
             }
         }
     }

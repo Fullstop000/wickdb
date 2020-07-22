@@ -183,27 +183,27 @@ impl VersionEdit {
 
     #[inline]
     pub fn set_comparator_name(&mut self, name: String) {
-        mem::replace::<Option<String>>(&mut self.comparator_name, Some(name));
+        self.comparator_name = Some(name);
     }
 
     #[inline]
     pub fn set_log_number(&mut self, log_num: u64) {
-        mem::replace::<Option<u64>>(&mut self.log_number, Some(log_num));
+        self.log_number = Some(log_num);
     }
 
     #[inline]
     pub fn set_prev_log_number(&mut self, num: u64) {
-        mem::replace::<Option<u64>>(&mut self.prev_log_number, Some(num));
+        self.prev_log_number = Some(num);
     }
 
     #[inline]
     pub fn set_next_file(&mut self, file_num: u64) {
-        mem::replace::<Option<u64>>(&mut self.next_file_number, Some(file_num));
+        self.next_file_number = Some(file_num);
     }
 
     #[inline]
     pub fn set_last_sequence(&mut self, seq: u64) {
-        mem::replace::<Option<u64>>(&mut self.last_sequence, Some(seq));
+        self.last_sequence = Some(seq);
     }
 
     /// Convert into bytes and push into given `dst`
