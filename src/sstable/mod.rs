@@ -765,8 +765,69 @@ mod tests {
         inner: WickDB<MemStorage>,
     }
 
+    struct DBIterWrapper {
+        inner: WickDBIterator<MemStorage>,
+        key_buf: Vec<u8>,
+        value_buf: Vec<u8>,
+    }
+    impl DBIterWrapper {
+        // fill the kv buffer from inner key-value
+        fn fill_entry(&mut self) {
+            if self.valid() {
+                self.key_buf = self.inner.key();
+                self.value_buf = self.inner.value();
+            }
+        }
+    }
+
+    impl Iterator for DBIterWrapper {
+        type Key = Slice;
+        type Value = Slice;
+
+        fn valid(&self) -> bool {
+            self.inner.valid()
+        }
+
+        fn seek_to_first(&mut self) {
+            self.inner.seek_to_first();
+            self.fill_entry();
+        }
+
+        fn seek_to_last(&mut self) {
+            self.inner.seek_to_last();
+            self.fill_entry();
+        }
+
+        fn seek(&mut self, target: &[u8]) {
+            self.inner.seek(target);
+            self.fill_entry();
+        }
+
+        fn next(&mut self) {
+            self.inner.next();
+            self.fill_entry();
+        }
+
+        fn prev(&mut self) {
+            self.inner.prev();
+            self.fill_entry();
+        }
+
+        fn key(&self) -> Self::Key {
+            Slice::from(&self.key_buf)
+        }
+
+        fn value(&self) -> Self::Value {
+            Slice::from(&self.value_buf)
+        }
+
+        fn status(&mut self) -> Result<()> {
+            self.inner.status()
+        }
+    }
+
     impl Constructor for DBConstructor {
-        type Iter = WickDBIterator<MemStorage>;
+        type Iter = DBIterWrapper;
 
         fn new(is_reversed: bool) -> Self {
             let mut options = Options::default();
@@ -795,7 +856,11 @@ mod tests {
         }
 
         fn iter(&self) -> Self::Iter {
-            self.inner.iter(ReadOptions::default()).unwrap()
+            DBIterWrapper {
+                inner: self.inner.iter(ReadOptions::default()).unwrap(),
+                key_buf: vec![],
+                value_buf: vec![],
+            }
         }
     }
 
@@ -1058,8 +1123,8 @@ mod tests {
             (TestType::Memtable, false, 16),
             (TestType::Memtable, true, 16),
             // Do not bother with restart interval variations for DB
-            // (TestType::DB, false, 16),
-            // (TestType::DB, true, 16),
+            (TestType::DB, false, 16),
+            (TestType::DB, true, 16),
         ]
     }
 

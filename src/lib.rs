@@ -61,5 +61,4 @@ pub use options::{CompressionType, Options, ReadOptions, WriteOptions};
 pub use sstable::block::Block;
 pub use storage::*;
 pub use util::comparator::{BytewiseComparator, Comparator};
-pub use util::slice::Slice;
 pub use util::varint::*;

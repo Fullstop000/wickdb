@@ -694,7 +694,7 @@ mod tests {
         iter.seek_to_first();
         let mut result_pairs = vec![];
         while iter.valid() {
-            result_pairs.push((iter.key().copy(), iter.value().copy()));
+            result_pairs.push((iter.key().into_vec(), iter.value().into_vec()));
             iter.next();
         }
         assert_eq!(result_pairs.len(), test_pairs.len());

@@ -51,20 +51,15 @@ pub struct DBIterator<I: Iterator, S: Storage + Clone + 'static> {
     // used for randomly picking a yielded key to record read stats
     bytes_util_read_sampling: u64,
 
-    // If we guarantee that the inner iterator's lifetime is not shorter than DBIterator, we
-    // could use Slice instead Vec<u8> for saved_key and saved_value here.
-    // (This seems to be sure because we owns the Arc<DBImpl> and inner iter's lifecycle
-    // is depending on DBImpl)
-
     // Current key when direction is Reverse
-    saved_key: Slice,
+    saved_key: Vec<u8>,
     // Current value when direction is Reverse
-    saved_value: Slice,
+    saved_value: Vec<u8>,
 }
 
 impl<I: Iterator<Key = Slice, Value = Slice>, S: Storage + Clone> Iterator for DBIterator<I, S> {
-    type Key = Slice;
-    type Value = Slice;
+    type Key = Vec<u8>;
+    type Value = Vec<u8>;
     fn valid(&self) -> bool {
         self.valid
     }
@@ -104,7 +99,7 @@ impl<I: Iterator<Key = Slice, Value = Slice>, S: Storage + Clone> Iterator for D
         self.valid_or_panic();
         match self.direction {
             Direction::Forward => {
-                self.saved_key = Slice::from(extract_user_key(self.inner.key().as_slice()));
+                self.saved_key = Vec::from(extract_user_key(self.inner.key().as_slice()));
                 self.inner.next();
                 if !self.inner.valid() {
                     self.valid = false;
@@ -136,7 +131,7 @@ impl<I: Iterator<Key = Slice, Value = Slice>, S: Storage + Clone> Iterator for D
         // inner iter is pointing at the current entry.  Scan backwards until
         // the key changes so we can use the normal reverse scanning code.
         if self.direction == Direction::Forward {
-            self.saved_key = Slice::from(extract_user_key(self.inner.key().as_slice()));
+            self.saved_key = Vec::from(extract_user_key(self.inner.key().as_slice()));
             loop {
                 self.inner.prev();
                 if !self.inner.valid() {
@@ -161,7 +156,7 @@ impl<I: Iterator<Key = Slice, Value = Slice>, S: Storage + Clone> Iterator for D
     fn key(&self) -> Self::Key {
         self.valid_or_panic();
         match self.direction {
-            Direction::Forward => Slice::from(extract_user_key(self.inner.key().as_slice())),
+            Direction::Forward => Vec::from(extract_user_key(self.inner.key().as_slice())),
             Direction::Reverse => self.saved_key.clone(),
         }
     }
@@ -169,7 +164,7 @@ impl<I: Iterator<Key = Slice, Value = Slice>, S: Storage + Clone> Iterator for D
     fn value(&self) -> Self::Value {
         self.valid_or_panic();
         match self.direction {
-            Direction::Forward => self.inner.value(),
+            Direction::Forward => self.inner.value().into_vec(),
             Direction::Reverse => self.saved_value.clone(),
         }
     }
@@ -247,7 +242,7 @@ impl<I: Iterator<Key = Slice, Value = Slice>, S: Storage + Clone> DBIterator<I, 
                         ValueType::Deletion => {
                             // Arrange to skip all upcoming entries for this key since
                             // they are hidden by this deletion.
-                            self.saved_key = Slice::from(pkey.user_key);
+                            self.saved_key = Vec::from(pkey.user_key);
                             skipping = true;
                         }
                         _ => { /* ignore the unknown value type */ }
@@ -294,9 +289,9 @@ impl<I: Iterator<Key = Slice, Value = Slice>, S: Storage + Clone> DBIterator<I, 
                             ValueType::Value => {
                                 // record the current key for later comparing
                                 self.saved_key =
-                                    Slice::from(extract_user_key(self.inner.key().as_slice()));
+                                    Vec::from(extract_user_key(self.inner.key().as_slice()));
                                 // record the current value for later yielding
-                                self.saved_value = self.inner.value();
+                                self.saved_value = self.inner.value().into_vec();
                             }
                             _ => { /* ignore the unknown value type */ }
                         }
