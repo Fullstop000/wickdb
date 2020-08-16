@@ -121,7 +121,7 @@ impl Version {
         options: ReadOptions,
         key: LookupKey,
         table_cache: &TableCache<S>,
-    ) -> Result<(Option<Slice>, SeekStats)> {
+    ) -> Result<(Option<Vec<u8>>, SeekStats)> {
         let ikey = key.internal_key();
         let ukey = key.user_key();
         let ucmp = self.icmp.user_comparator.as_ref();
@@ -185,7 +185,9 @@ impl Version {
                                     == CmpOrdering::Equal
                                 {
                                     match parsed_key.value_type {
-                                        ValueType::Value => return Ok((Some(value), seek_stats)),
+                                        ValueType::Value => {
+                                            return Ok((Some(value.into_vec()), seek_stats))
+                                        }
                                         ValueType::Deletion => return Ok((None, seek_stats)),
                                         _ => {}
                                     }

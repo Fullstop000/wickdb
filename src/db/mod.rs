@@ -61,7 +61,7 @@ pub trait DB {
 
     /// `get` gets the value for the given key. It returns `None` if the DB
     /// does not contain the key.
-    fn get(&self, read_opt: ReadOptions, key: &[u8]) -> Result<Option<Slice>>;
+    fn get(&self, read_opt: ReadOptions, key: &[u8]) -> Result<Option<Vec<u8>>>;
 
     /// Return an iterator over the contents of the database.
     fn iter(&self, read_opt: ReadOptions) -> Result<Self::Iterator>;
@@ -110,7 +110,7 @@ impl<S: Storage + Clone> DB for WickDB<S> {
         self.write(options, batch)
     }
 
-    fn get(&self, options: ReadOptions, key: &[u8]) -> Result<Option<Slice>> {
+    fn get(&self, options: ReadOptions, key: &[u8]) -> Result<Option<Vec<u8>>> {
         self.inner.get(options, key)
     }
 
@@ -460,7 +460,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         self.versions.lock().unwrap().new_snapshot()
     }
 
-    fn get(&self, options: ReadOptions, key: &[u8]) -> Result<Option<Slice>> {
+    fn get(&self, options: ReadOptions, key: &[u8]) -> Result<Option<Vec<u8>>> {
         if self.is_shutting_down.load(Ordering::Acquire) {
             return Err(Error::DBClosed("get request".to_owned()));
         }
@@ -472,7 +472,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         // search the memtable
         if let Some(result) = self.mem.read().unwrap().get(&lookup_key) {
             match result {
-                Ok(value) => return Ok(Some(value)),
+                Ok(value) => return Ok(Some(value.into_vec())),
                 // mem.get only returns Err() when it get a Deletion of the key
                 Err(_) => return Ok(None),
             }
@@ -481,7 +481,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         if let Some(im_mem) = self.im_mem.read().unwrap().as_ref() {
             if let Some(result) = im_mem.get(&lookup_key) {
                 match result {
-                    Ok(value) => return Ok(Some(value)),
+                    Ok(value) => return Ok(Some(value.into_vec())),
                     Err(_) => return Ok(None),
                 }
             }
@@ -1510,7 +1510,7 @@ mod tests {
         db: WickDB<MemStorage>,
     }
 
-    fn iter_to_string(iter: &dyn Iterator<Key = Slice, Value = Slice>) -> String {
+    fn iter_to_string(iter: &dyn Iterator<Key = Vec<u8>, Value = Vec<u8>>) -> String {
         if iter.valid() {
             format!("{:?}->{:?}", iter.key(), iter.value())
         } else {
@@ -1583,7 +1583,7 @@ mod tests {
             let mut read_opt = ReadOptions::default();
             read_opt.snapshot = snapshot;
             match self.db.get(read_opt, k.as_bytes()) {
-                Ok(v) => v.and_then(|v| Some(v.as_str().to_owned())),
+                Ok(v) => v.and_then(|v| Some(unsafe { String::from_utf8_unchecked(v) })),
                 Err(_) => None,
             }
         }
@@ -1665,7 +1665,9 @@ mod tests {
                             }
                             first = false;
                             match pkey.value_type {
-                                ValueType::Value => result.push_str(iter.value().as_str()),
+                                ValueType::Value => {
+                                    result.push_str(&String::from_utf8(iter.value()).unwrap())
+                                }
                                 ValueType::Deletion => result.push_str("DEL"),
                                 ValueType::Unknown => result.push_str("UNKNOWN"),
                             }
@@ -1990,9 +1992,9 @@ mod tests {
         assert!(!iter.valid());
     }
 
-    fn assert_iter_entry(iter: &dyn Iterator<Key = Slice, Value = Slice>, k: &str, v: &str) {
-        assert_eq!(iter.key().as_str(), k);
-        assert_eq!(iter.value().as_str(), v);
+    fn assert_iter_entry(iter: &dyn Iterator<Key = Vec<u8>, Value = Vec<u8>>, k: &str, v: &str) {
+        assert_eq!(String::from_utf8(iter.key()).unwrap(), k);
+        assert_eq!(String::from_utf8(iter.value()).unwrap(), v);
     }
 
     #[test]
@@ -2213,15 +2215,15 @@ mod tests {
         }) {
             // Trigger a long memtable compaction and reopen the database during it
             t.put_entries(vec![
-                ("foo", "v1"),                            // Goes to 1st log file
-                ("big1", "x".repeat(10_000_00).as_str()), // Fills memtable
-                ("big2", "y".repeat(1000).as_str()),      // Triggers compaction
-                ("bar", "v2"),                            // Goes to new log file
+                ("foo", "v1"),                             // Goes to 1st log file
+                ("big1", "x".repeat(10_000_000).as_str()), // Fills memtable
+                ("big2", "y".repeat(1000).as_str()),       // Triggers compaction
+                ("bar", "v2"),                             // Goes to new log file
             ]);
             t.reopen().unwrap();
             t.assert_get("foo", Some("v1"));
             t.assert_get("bar", Some("v2"));
-            t.assert_get("big1", Some("x".repeat(10_000_00).as_str()));
+            t.assert_get("big1", Some("x".repeat(10_000_000).as_str()));
             t.assert_get("big2", Some("y".repeat(1000).as_str()));
         }
     }

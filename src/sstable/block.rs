@@ -115,17 +115,15 @@ pub struct BlockIterator<C: Comparator> {
     current: u32,
 
     /*
-     entry
+     Fields for entries in the Block
     */
     shared: u32,     // shared length
     not_shared: u32, // not shared length
     value_len: u32,  // value length
     key_offset: u32, // the offset of the key in the block
-    // TODO: remmove this buffer
-    //     Removing this buffer might be difficult becasue the key
-    //     could be formed by multiple segments which means we should
-    //     maintain predictable amount of offsets for each key.
-    key: Vec<u8>, // buffer for a completed key
+    // Buffer for a completed key
+    // The key is saperated in multiple segments in `data`.
+    key: Vec<u8>,
 }
 
 impl<C: Comparator> BlockIterator<C> {

@@ -22,7 +22,7 @@ use std::cmp::Ordering;
 
 /// A common trait for iterating all the key/value entries.
 ///
-/// An `Iterator` should be invalid once created
+/// An `Iterator` must be invalid once created
 pub trait Iterator {
     type Key;
     type Value;

@@ -42,6 +42,6 @@ fn main() {
         .expect("could not get key2");
     assert!(val1.is_some());
     assert!(val2.is_some());
-    assert_eq!(val1.unwrap().as_str(), "value1");
-    assert_eq!(val2.unwrap().as_str(), "value2");
+    assert_eq!(String::from_utf8(val1.unwrap()).unwrap(), "value1");
+    assert_eq!(String::from_utf8(val2.unwrap()).unwrap(), "value2");
 }
