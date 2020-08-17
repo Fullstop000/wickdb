@@ -1389,20 +1389,22 @@ pub(crate) fn build_table<S: Storage + Clone>(
             prev_key = Some(key);
             iter.next();
         }
-        if status.is_ok() && prev_key.is_some() {
-            meta.smallest = InternalKey::decoded_from(&smallest_key);
-            meta.largest = InternalKey::decoded_from(&prev_key.unwrap());
-            status = builder.finish(true).and_then(|_| {
-                meta.file_size = builder.file_size();
-                // make sure that the new file is in the cache
-                let mut it = table_cache.new_iter(
-                    icmp,
-                    ReadOptions::default(),
-                    meta.number,
-                    meta.file_size,
-                )?;
-                it.status()
-            })
+        if status.is_ok() {
+            if let Some(prev_key) = prev_key {
+                meta.smallest = InternalKey::decoded_from(&smallest_key);
+                meta.largest = InternalKey::decoded_from(&prev_key);
+                status = builder.finish(true).and_then(|_| {
+                    meta.file_size = builder.file_size();
+                    // make sure that the new file is in the cache
+                    let mut it = table_cache.new_iter(
+                        icmp,
+                        ReadOptions::default(),
+                        meta.number,
+                        meta.file_size,
+                    )?;
+                    it.status()
+                })
+            }
         }
     }
 

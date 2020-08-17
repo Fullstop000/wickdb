@@ -315,8 +315,7 @@ impl<C: Comparator> Iterator for BlockIterator<C> {
     fn value(&self) -> &[u8] {
         self.valid_or_panic();
         let val_offset = self.next_entry_offset() - self.value_len;
-        let val = &self.data[val_offset as usize..(val_offset + self.value_len) as usize];
-        val
+        &self.data[val_offset as usize..(val_offset + self.value_len) as usize]
     }
 
     fn status(&mut self) -> Result<()> {

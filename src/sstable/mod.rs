@@ -1036,13 +1036,7 @@ mod tests {
 
     #[inline]
     fn format_kv(key: Vec<u8>, value: Vec<u8>) -> String {
-        unsafe {
-            format!(
-                "'{}->{}'",
-                String::from_utf8_unchecked(key),
-                String::from_utf8_unchecked(value)
-            )
-        }
+        format!("'{:?}->{:?}'", key, value)
     }
 
     // Return a String represents current entry of the given iterator
@@ -1107,7 +1101,7 @@ mod tests {
             // Restart interval does not matter for memtables
             (TestType::Memtable, false, 16),
             (TestType::Memtable, true, 16),
-            // Do not bother with restart interval variations for DB
+            // // Do not bother with restart interval variations for DB
             (TestType::DB, false, 16),
             (TestType::DB, true, 16),
         ]
