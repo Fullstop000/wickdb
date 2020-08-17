@@ -57,8 +57,7 @@ pub struct DBIterator<I: Iterator, S: Storage + Clone + 'static> {
     saved_value: Vec<u8>,
 }
 
-impl<I: Iterator<Key = Slice, Value = Slice>, S: Storage + Clone> Iterator for DBIterator<I, S> {
-    type Key = Vec<u8>;
+impl<I: Iterator<Value = Slice>, S: Storage + Clone> Iterator for DBIterator<I, S> {
     type Value = Vec<u8>;
     fn valid(&self) -> bool {
         self.valid
@@ -99,7 +98,7 @@ impl<I: Iterator<Key = Slice, Value = Slice>, S: Storage + Clone> Iterator for D
         self.valid_or_panic();
         match self.direction {
             Direction::Forward => {
-                self.saved_key = Vec::from(extract_user_key(self.inner.key().as_slice()));
+                self.saved_key = Vec::from(extract_user_key(self.inner.key()));
                 self.inner.next();
                 if !self.inner.valid() {
                     self.valid = false;
@@ -131,7 +130,7 @@ impl<I: Iterator<Key = Slice, Value = Slice>, S: Storage + Clone> Iterator for D
         // inner iter is pointing at the current entry.  Scan backwards until
         // the key changes so we can use the normal reverse scanning code.
         if self.direction == Direction::Forward {
-            self.saved_key = Vec::from(extract_user_key(self.inner.key().as_slice()));
+            self.saved_key = Vec::from(extract_user_key(self.inner.key()));
             loop {
                 self.inner.prev();
                 if !self.inner.valid() {
@@ -141,7 +140,7 @@ impl<I: Iterator<Key = Slice, Value = Slice>, S: Storage + Clone> Iterator for D
                     return;
                 }
                 if self.ucmp.compare(
-                    extract_user_key(self.inner.key().as_slice()),
+                    extract_user_key(self.inner.key()),
                     self.saved_key.as_slice(),
                 ) == Ordering::Less
                 {
@@ -153,11 +152,11 @@ impl<I: Iterator<Key = Slice, Value = Slice>, S: Storage + Clone> Iterator for D
         self.find_prev_user_key();
     }
 
-    fn key(&self) -> Self::Key {
+    fn key(&self) -> &[u8] {
         self.valid_or_panic();
         match self.direction {
-            Direction::Forward => Vec::from(extract_user_key(self.inner.key().as_slice())),
-            Direction::Reverse => self.saved_key.clone(),
+            Direction::Forward => extract_user_key(self.inner.key()),
+            Direction::Reverse => &self.saved_key,
         }
     }
 
@@ -178,7 +177,7 @@ impl<I: Iterator<Key = Slice, Value = Slice>, S: Storage + Clone> Iterator for D
     }
 }
 
-impl<I: Iterator<Key = Slice, Value = Slice>, S: Storage + Clone> DBIterator<I, S> {
+impl<I: Iterator<Value = Slice>, S: Storage + Clone> DBIterator<I, S> {
     pub fn new(iter: I, db: Arc<DBImpl<S>>, sequence: u64, ucmp: Arc<dyn Comparator>) -> Self {
         Self {
             valid: false,
@@ -203,14 +202,14 @@ impl<I: Iterator<Key = Slice, Value = Slice>, S: Storage + Clone> DBIterator<I, 
     // otherwise records a corruption error
     fn parse_key(&mut self) -> InternalKey {
         let k = self.inner.key();
-        let bytes_read = k.size() + self.inner.value().size();
+        let bytes_read = k.len() + self.inner.value().size();
         while self.bytes_util_read_sampling < bytes_read as u64 {
             self.bytes_util_read_sampling +=
                 random_compaction_period(self.db.options.read_bytes_period);
-            self.db.record_read_sample(k.as_slice());
+            self.db.record_read_sample(k);
         }
         self.bytes_util_read_sampling -= bytes_read as u64;
-        InternalKey::decoded_from(k.as_slice())
+        InternalKey::decoded_from(k)
     }
 
     // Try to point the inner iter to yield a internal key whose user key is greater than previous
@@ -288,8 +287,7 @@ impl<I: Iterator<Key = Slice, Value = Slice>, S: Storage + Clone> DBIterator<I, 
                             }
                             ValueType::Value => {
                                 // record the current key for later comparing
-                                self.saved_key =
-                                    Vec::from(extract_user_key(self.inner.key().as_slice()));
+                                self.saved_key = Vec::from(extract_user_key(self.inner.key()));
                                 // record the current value for later yielding
                                 self.saved_value = self.inner.value().into_vec();
                             }
@@ -337,11 +335,8 @@ impl<C: Comparator, M: Iterator, T: Iterator> DBIteratorCore<C, M, T> {
     }
 }
 
-impl<
-        C: Comparator,
-        M: Iterator<Key = Slice, Value = Slice>,
-        T: Iterator<Key = Slice, Value = Slice>,
-    > KMergeCore for DBIteratorCore<C, M, T>
+impl<C: Comparator, M: Iterator<Value = Slice>, T: Iterator<Value = Slice>> KMergeCore
+    for DBIteratorCore<C, M, T>
 {
     fn cmp(&self) -> &dyn Comparator {
         &self.cmp
@@ -353,7 +348,7 @@ impl<
 
     // Find the iterator with the smallest 'key' and set it as current
     fn find_smallest(&mut self) -> usize {
-        let mut smallest: Option<Slice> = None;
+        let mut smallest: Option<&[u8]> = None;
         let mut index = self.iters_len();
         for (i, child) in self.mem_iters.iter().enumerate() {
             if self.smaller(&mut smallest, child) {
@@ -371,7 +366,7 @@ impl<
 
     // Find the iterator with the largest 'key' and set it as current
     fn find_largest(&mut self) -> usize {
-        let mut largest: Option<Slice> = None;
+        let mut largest: Option<&[u8]> = None;
         let mut index = self.iters_len();
         for (i, child) in self.mem_iters.iter().enumerate() {
             if self.larger(&mut largest, child) {
@@ -387,58 +382,51 @@ impl<
         index
     }
 
-    fn get_child(&self, i: usize) -> &dyn Iterator<Key = Slice, Value = Slice> {
+    fn get_child(&self, i: usize) -> &dyn Iterator<Value = Slice> {
         if i < self.mem_iters.len() {
-            self.mem_iters.get(i).unwrap() as &dyn Iterator<Key = Slice, Value = Slice>
+            self.mem_iters.get(i).unwrap() as &dyn Iterator<Value = Slice>
         } else {
             let current = i - self.mem_iters.len();
-            self.table_iters.get(current).unwrap() as &dyn Iterator<Key = Slice, Value = Slice>
+            self.table_iters.get(current).unwrap() as &dyn Iterator<Value = Slice>
         }
     }
 
-    fn get_child_mut(&mut self, i: usize) -> &mut dyn Iterator<Key = Slice, Value = Slice> {
+    fn get_child_mut(&mut self, i: usize) -> &mut dyn Iterator<Value = Slice> {
         if i < self.mem_iters.len() {
-            self.mem_iters.get_mut(i).unwrap() as &mut dyn Iterator<Key = Slice, Value = Slice>
+            self.mem_iters.get_mut(i).unwrap() as &mut dyn Iterator<Value = Slice>
         } else {
             let current = i - self.mem_iters.len();
-            self.table_iters.get_mut(current).unwrap()
-                as &mut dyn Iterator<Key = Slice, Value = Slice>
+            self.table_iters.get_mut(current).unwrap() as &mut dyn Iterator<Value = Slice>
         }
     }
 
     fn for_each_child<F>(&mut self, mut f: F)
     where
-        F: FnMut(&mut dyn Iterator<Key = Slice, Value = Slice>),
+        F: FnMut(&mut dyn Iterator<Value = Slice>),
     {
         self.mem_iters
             .iter_mut()
-            .for_each(|i| f(i as &mut dyn Iterator<Key = Slice, Value = Slice>));
+            .for_each(|i| f(i as &mut dyn Iterator<Value = Slice>));
         self.table_iters
             .iter_mut()
-            .for_each(|i| f(i as &mut dyn Iterator<Key = Slice, Value = Slice>));
+            .for_each(|i| f(i as &mut dyn Iterator<Value = Slice>));
     }
 
     fn for_not_ith<F>(&mut self, n: usize, mut f: F)
     where
-        F: FnMut(&mut dyn Iterator<Key = Slice, Value = Slice>, &dyn Comparator),
+        F: FnMut(&mut dyn Iterator<Value = Slice>, &dyn Comparator),
     {
         if n < self.mem_iters.len() {
             for (i, child) in self.mem_iters.iter_mut().enumerate() {
                 if i != n {
-                    f(
-                        child as &mut dyn Iterator<Key = Slice, Value = Slice>,
-                        &self.cmp,
-                    )
+                    f(child as &mut dyn Iterator<Value = Slice>, &self.cmp)
                 }
             }
         } else {
             let current = n - self.mem_iters.len();
             for (i, child) in self.table_iters.iter_mut().enumerate() {
                 if i != current {
-                    f(
-                        child as &mut dyn Iterator<Key = Slice, Value = Slice>,
-                        &self.cmp,
-                    )
+                    f(child as &mut dyn Iterator<Value = Slice>, &self.cmp)
                 }
             }
         }

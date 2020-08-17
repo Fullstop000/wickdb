@@ -569,7 +569,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         &mut self,
         db_name: &str,
         table_cache: TableCache<S>,
-        mem_iter: &mut dyn Iterator<Key = Slice, Value = Slice>,
+        mem_iter: &mut dyn Iterator<Value = Slice>,
         edit: &mut VersionEdit,
     ) -> Result<()> {
         let base = self.current();
@@ -1079,7 +1079,7 @@ impl<S: Storage + Clone> KMergeCore for SSTableIters<S> {
 
     // Find the iterator with the smallest 'key' and set it as current
     fn find_smallest(&mut self) -> usize {
-        let mut smallest: Option<Slice> = None;
+        let mut smallest: Option<&[u8]> = None;
         let mut index = self.iters_len();
         for (i, child) in self.level0.iter().enumerate() {
             if self.smaller(&mut smallest, child) {
@@ -1097,7 +1097,7 @@ impl<S: Storage + Clone> KMergeCore for SSTableIters<S> {
 
     // Find the iterator with the largest 'key' and set it as current
     fn find_largest(&mut self) -> usize {
-        let mut largest: Option<Slice> = None;
+        let mut largest: Option<&[u8]> = None;
         let mut index = self.iters_len();
         for (i, child) in self.level0.iter().enumerate() {
             if self.larger(&mut largest, child) {
@@ -1113,57 +1113,51 @@ impl<S: Storage + Clone> KMergeCore for SSTableIters<S> {
         index
     }
 
-    fn get_child(&self, i: usize) -> &dyn Iterator<Key = Slice, Value = Slice> {
+    fn get_child(&self, i: usize) -> &dyn Iterator<Value = Slice> {
         if i < self.level0.len() {
-            self.leveln.get(i).unwrap() as &dyn Iterator<Key = Slice, Value = Slice>
+            self.leveln.get(i).unwrap() as &dyn Iterator<Value = Slice>
         } else {
             let current = i - self.level0.len();
-            self.leveln.get(current).unwrap() as &dyn Iterator<Key = Slice, Value = Slice>
+            self.leveln.get(current).unwrap() as &dyn Iterator<Value = Slice>
         }
     }
 
-    fn get_child_mut(&mut self, i: usize) -> &mut dyn Iterator<Key = Slice, Value = Slice> {
+    fn get_child_mut(&mut self, i: usize) -> &mut dyn Iterator<Value = Slice> {
         if i < self.level0.len() {
-            self.leveln.get_mut(i).unwrap() as &mut dyn Iterator<Key = Slice, Value = Slice>
+            self.leveln.get_mut(i).unwrap() as &mut dyn Iterator<Value = Slice>
         } else {
             let current = i - self.level0.len();
-            self.leveln.get_mut(current).unwrap() as &mut dyn Iterator<Key = Slice, Value = Slice>
+            self.leveln.get_mut(current).unwrap() as &mut dyn Iterator<Value = Slice>
         }
     }
 
     fn for_each_child<F>(&mut self, mut f: F)
     where
-        F: FnMut(&mut dyn Iterator<Key = Slice, Value = Slice>),
+        F: FnMut(&mut dyn Iterator<Value = Slice>),
     {
         self.level0
             .iter_mut()
-            .for_each(|i| f(i as &mut dyn Iterator<Key = Slice, Value = Slice>));
+            .for_each(|i| f(i as &mut dyn Iterator<Value = Slice>));
         self.leveln
             .iter_mut()
-            .for_each(|i| f(i as &mut dyn Iterator<Key = Slice, Value = Slice>));
+            .for_each(|i| f(i as &mut dyn Iterator<Value = Slice>));
     }
 
     fn for_not_ith<F>(&mut self, n: usize, mut f: F)
     where
-        F: FnMut(&mut dyn Iterator<Key = Slice, Value = Slice>, &dyn Comparator),
+        F: FnMut(&mut dyn Iterator<Value = Slice>, &dyn Comparator),
     {
         if n < self.level0.len() {
             for (i, child) in self.level0.iter_mut().enumerate() {
                 if i != n {
-                    f(
-                        child as &mut dyn Iterator<Key = Slice, Value = Slice>,
-                        &self.cmp,
-                    )
+                    f(child as &mut dyn Iterator<Value = Slice>, &self.cmp)
                 }
             }
         } else {
             let current = n - self.level0.len();
             for (i, child) in self.leveln.iter_mut().enumerate() {
                 if i != current {
-                    f(
-                        child as &mut dyn Iterator<Key = Slice, Value = Slice>,
-                        &self.cmp,
-                    )
+                    f(child as &mut dyn Iterator<Value = Slice>, &self.cmp)
                 }
             }
         }

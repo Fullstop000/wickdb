@@ -216,7 +216,6 @@ impl<C: Comparator> BlockIterator<C> {
 }
 
 impl<C: Comparator> Iterator for BlockIterator<C> {
-    type Key = Slice;
     type Value = Slice;
     #[inline]
     fn valid(&self) -> bool {
@@ -310,9 +309,9 @@ impl<C: Comparator> Iterator for BlockIterator<C> {
 
     // NOTICE: All the slices return by `key()` point to the same memory so be careful
     // when call this in the loop
-    fn key(&self) -> Self::Key {
+    fn key(&self) -> &[u8] {
         self.valid_or_panic();
-        Slice::from(&self.key)
+        &self.key
     }
 
     fn value(&self) -> Self::Value {
@@ -472,6 +471,7 @@ mod tests {
     use crate::util::coding::{decode_fixed_32, put_fixed_32};
     use crate::util::comparator::BytewiseComparator;
     use crate::util::varint::VarintU32;
+    use std::str;
 
     fn new_test_block() -> Vec<u8> {
         let mut samples = vec!["1", "12", "123", "abc", "abd", "acd", "bbb"];
@@ -538,7 +538,7 @@ mod tests {
         assert!(iter.valid());
         let k = iter.key();
         let v = iter.value();
-        assert_eq!(k.as_str(), "");
+        assert_eq!(str::from_utf8(k).unwrap(), "");
         assert_eq!(v.as_str(), "test");
         iter.next();
         assert!(!iter.valid());
@@ -645,32 +645,32 @@ mod tests {
         assert!(!iter.valid());
         iter.seek_to_first();
         assert_eq!(iter.current, 0);
-        assert_eq!(iter.key().as_str(), "1");
+        assert_eq!(str::from_utf8(iter.key()).unwrap(), "1");
         assert_eq!(iter.value().as_str(), "1");
         iter.next();
         assert_eq!(iter.current, 5); // shared 1 + non_shared 1 + value_len 1 + key 1 + value + 1
         assert_eq!(iter.key_offset, 8);
-        assert_eq!(iter.key().as_str(), "12");
+        assert_eq!(str::from_utf8(iter.key()).unwrap(), "12");
         assert_eq!(iter.value().as_str(), "12");
         iter.prev();
         assert_eq!(iter.current, 0);
-        assert_eq!(iter.key().as_str(), "1");
+        assert_eq!(str::from_utf8(iter.key()).unwrap(), "1");
         assert_eq!(iter.value().as_str(), "1");
         iter.seek_to_last();
-        assert_eq!(iter.key().as_str(), "bbb");
+        assert_eq!(str::from_utf8(iter.key()).unwrap(), "bbb");
         assert_eq!(iter.value().as_str(), "bbb");
         // Seek
         iter.seek("1".as_bytes());
-        assert_eq!(iter.key().as_str(), "1");
+        assert_eq!(str::from_utf8(iter.key()).unwrap(), "1");
         assert_eq!(iter.value().as_str(), "1");
         iter.seek("".as_bytes());
-        assert_eq!(iter.key().as_str(), "1");
+        assert_eq!(str::from_utf8(iter.key()).unwrap(), "1");
         assert_eq!(iter.value().as_str(), "1");
         iter.seek("abd".as_bytes());
-        assert_eq!(iter.key().as_str(), "abd");
+        assert_eq!(str::from_utf8(iter.key()).unwrap(), "abd");
         assert_eq!(iter.value().as_str(), "abd");
         iter.seek("bbb".as_bytes());
-        assert_eq!(iter.key().as_str(), "bbb");
+        assert_eq!(str::from_utf8(iter.key()).unwrap(), "bbb");
         assert_eq!(iter.value().as_str(), "bbb");
         iter.seek("zzzzzzzzzzzzzzz".as_bytes());
         assert!(!iter.valid());
@@ -698,7 +698,7 @@ mod tests {
         iter.seek_to_first();
         for (key, val) in tests {
             assert!(iter.valid());
-            assert_eq!(iter.key().as_str(), key);
+            assert_eq!(str::from_utf8(iter.key()).unwrap(), key);
             assert_eq!(iter.value().as_str(), val);
             iter.next();
         }

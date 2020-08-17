@@ -477,7 +477,7 @@ mod tests {
     // Helper class for tests to unify the interface between
     // BlockBuilder/TableBuilder and Block/Table
     trait Constructor {
-        type Iter: Iterator<Key = Slice, Value = Slice>;
+        type Iter: Iterator<Value = Slice>;
 
         fn new(is_reversed: bool) -> Self;
 
@@ -588,8 +588,7 @@ mod tests {
         }
     }
 
-    impl<I: Iterator<Key = Slice, Value = Slice>> Iterator for KeyConvertingIterator<I> {
-        type Key = Slice;
+    impl<I: Iterator<Value = Slice>> Iterator for KeyConvertingIterator<I> {
         type Value = Slice;
         fn valid(&self) -> bool {
             self.inner.valid()
@@ -616,13 +615,13 @@ mod tests {
             self.inner.prev()
         }
 
-        fn key(&self) -> Self::Key {
-            match ParsedInternalKey::decode_from(self.inner.key().as_slice()) {
-                Some(parsed_ikey) => Slice::from(parsed_ikey.user_key),
+        fn key(&self) -> &[u8] {
+            match ParsedInternalKey::decode_from(self.inner.key()) {
+                Some(parsed_ikey) => parsed_ikey.user_key,
                 None => {
                     self.err
                         .set(Some(Error::Corruption("malformed internal key".to_owned())));
-                    Slice::from("corrupted key")
+                    "corrupted key".as_bytes()
                 }
             }
         }
@@ -661,7 +660,6 @@ mod tests {
     }
 
     impl Iterator for EntryIterator {
-        type Key = Slice;
         type Value = Slice;
 
         fn valid(&self) -> bool {
@@ -704,12 +702,9 @@ mod tests {
             }
         }
 
-        fn key(&self) -> Self::Key {
-            if self.valid() {
-                Slice::from(self.data[self.current].0.as_slice())
-            } else {
-                Slice::default()
-            }
+        fn key(&self) -> &[u8] {
+            assert!(self.valid());
+            self.data[self.current].0.as_slice()
         }
 
         fn value(&self) -> Self::Value {
@@ -774,14 +769,13 @@ mod tests {
         // fill the kv buffer from inner key-value
         fn fill_entry(&mut self) {
             if self.valid() {
-                self.key_buf = self.inner.key();
+                self.key_buf = self.inner.key().to_vec();
                 self.value_buf = self.inner.value();
             }
         }
     }
 
     impl Iterator for DBIterWrapper {
-        type Key = Slice;
         type Value = Slice;
 
         fn valid(&self) -> bool {
@@ -813,8 +807,8 @@ mod tests {
             self.fill_entry();
         }
 
-        fn key(&self) -> Self::Key {
-            Slice::from(&self.key_buf)
+        fn key(&self) -> &[u8] {
+            &self.key_buf
         }
 
         fn value(&self) -> Self::Value {
@@ -1062,7 +1056,7 @@ mod tests {
 
     // Return a String represents current entry of the given iterator
     #[inline]
-    fn format_entry(iter: &dyn Iterator<Key = Slice, Value = Slice>) -> String {
+    fn format_entry(iter: &dyn Iterator<Value = Slice>) -> String {
         format!("'{:?}->{:?}'", iter.key(), iter.value())
     }
 

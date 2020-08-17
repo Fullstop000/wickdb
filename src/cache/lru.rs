@@ -190,11 +190,11 @@ impl<K: Hash + Eq, V> Cache<K, V> for LRUCache<K, V> {
     fn look_up<'a>(&'a self, key: &K) -> Option<&'a V> {
         let k = Key { k: key as *const K };
         let l = self.mutex.lock().unwrap();
-        l.table.get(&k).and_then(|h| {
+        l.table.get(&k).map(|h| {
             let p = h.as_ref() as *const LRUHandle<K, V> as *mut LRUHandle<K, V>;
             Self::lru_remove(p);
             Self::lru_append(l.lru, p);
-            unsafe { Some(&(*p).value) }
+            unsafe { &(*p).value }
         })
     }
 

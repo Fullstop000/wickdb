@@ -141,8 +141,7 @@ impl MemTable {
         let mut iter = SkiplistIterator::new(self.table.clone());
         iter.seek(mk);
         if iter.valid() {
-            let encoded_entry = iter.key();
-            let mut e = encoded_entry.as_slice();
+            let mut e = iter.key();
             let ikey = extract_varint32_encoded_slice(&mut e);
             let key_size = ikey.len();
             // only check the user key here
@@ -183,7 +182,6 @@ impl MemTableIterator {
 }
 
 impl Iterator for MemTableIterator {
-    type Key = Slice;
     type Value = Slice;
     fn valid(&self) -> bool {
         self.iter.valid()
@@ -213,18 +211,16 @@ impl Iterator for MemTableIterator {
     }
 
     // Returns the internal key
-    fn key(&self) -> Self::Key {
-        let key = self.iter.key();
-        let mut s = key.as_slice();
-        extract_varint32_encoded_slice(&mut s).into()
+    fn key(&self) -> &[u8] {
+        let mut key = self.iter.key();
+        extract_varint32_encoded_slice(&mut key)
     }
 
     // Returns the Slice represents the value
     fn value(&self) -> Self::Value {
-        let key = self.iter.key();
-        let mut src = key.as_slice();
-        extract_varint32_encoded_slice(&mut src);
-        extract_varint32_encoded_slice(&mut src).into()
+        let mut key = self.iter.key();
+        extract_varint32_encoded_slice(&mut key);
+        extract_varint32_encoded_slice(&mut key).into()
     }
 
     fn status(&mut self) -> Result<()> {
@@ -303,7 +299,7 @@ mod tests {
         assert!(iter.valid());
         for (key, value) in entries.iter() {
             let k = iter.key();
-            let pkey = ParsedInternalKey::decode_from(k.as_slice()).unwrap();
+            let pkey = ParsedInternalKey::decode_from(k).unwrap();
             assert_eq!(
                 pkey.as_str(),
                 *key,
@@ -327,7 +323,7 @@ mod tests {
         assert!(iter.valid());
         for (key, value) in entries.iter().rev() {
             let k = iter.key();
-            let pkey = ParsedInternalKey::decode_from(k.as_slice()).unwrap();
+            let pkey = ParsedInternalKey::decode_from(k).unwrap();
             assert_eq!(
                 pkey.as_str(),
                 *key,

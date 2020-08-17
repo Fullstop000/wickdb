@@ -175,7 +175,7 @@ impl Version {
                     Some(block_iter) => {
                         let encoded_key = block_iter.key();
                         let value = block_iter.value();
-                        match ParsedInternalKey::decode_from(encoded_key.as_slice()) {
+                        match ParsedInternalKey::decode_from(encoded_key) {
                             None => return Err(Error::Corruption("bad internal key".to_owned())),
                             Some(parsed_key) => {
                                 if self
@@ -641,7 +641,6 @@ impl LevelFileNumIterator {
 }
 
 impl Iterator for LevelFileNumIterator {
-    type Key = Slice;
     type Value = Slice;
     fn valid(&self) -> bool {
         self.index < self.files.len()
@@ -685,9 +684,9 @@ impl Iterator for LevelFileNumIterator {
     }
 
     // make sure the underlying data's lifetime is longer than returning Slice
-    fn key(&self) -> Self::Key {
+    fn key(&self) -> &[u8] {
         self.valid_or_panic();
-        Slice::from(self.files[self.index].largest.data())
+        self.files[self.index].largest.data()
     }
 
     // make sure the iterator's lifetime is longer than returning Slice

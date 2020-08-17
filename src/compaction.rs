@@ -170,7 +170,7 @@ impl<O: File> Compaction<O> {
             if self.level == 0 {
                 level0.push(table_cache.new_iter(
                     icmp.clone(),
-                    read_options.clone(),
+                    read_options,
                     file.number,
                     file.file_size,
                 )?);

@@ -27,6 +27,7 @@ use crate::util::crc32::{extend, mask, unmask, value};
 use crate::{Error, Result};
 use snap::raw::max_compress_len;
 use std::cmp::Ordering;
+use std::str;
 use std::sync::Arc;
 
 /// A `Table` is a sorted map from strings to strings, which must be immutable and persistent.
@@ -97,7 +98,8 @@ impl<F: File> Table<F> {
                     };
                     // Read filter block
                     iter.seek(filter_key.as_bytes());
-                    if iter.valid() && iter.key().as_str() == filter_key.as_str() {
+                    // TODO: return error here?
+                    if iter.valid() && str::from_utf8(iter.key()) == Ok(filter_key.as_str()) {
                         if let Ok((filter_handle, _)) =
                             BlockHandle::decode_from(iter.value().as_slice())
                         {
@@ -694,7 +696,7 @@ mod tests {
         iter.seek_to_first();
         let mut result_pairs = vec![];
         while iter.valid() {
-            result_pairs.push((iter.key().into_vec(), iter.value().into_vec()));
+            result_pairs.push((iter.key().to_vec(), iter.value().into_vec()));
             iter.next();
         }
         assert_eq!(result_pairs.len(), test_pairs.len());
