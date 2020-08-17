@@ -49,7 +49,7 @@ impl Slice {
 
     // Returns a `Vec<u8>` copyed from inner
     #[inline]
-    pub fn into_vec(&self) -> Vec<u8> {
+    pub fn into_vec(self) -> Vec<u8> {
         Vec::from(self.as_slice())
     }
 

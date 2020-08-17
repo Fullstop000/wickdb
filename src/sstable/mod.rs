@@ -385,7 +385,6 @@ mod tests {
     use crate::storage::{File, Storage};
     use crate::util::collection::HashSet;
     use crate::util::comparator::{BytewiseComparator, Comparator};
-    use crate::util::slice::Slice;
     use crate::{Error, Result};
     use crate::{WriteBatch, WriteOptions};
     use rand::prelude::ThreadRng;
@@ -477,7 +476,7 @@ mod tests {
     // Helper class for tests to unify the interface between
     // BlockBuilder/TableBuilder and Block/Table
     trait Constructor {
-        type Iter: Iterator<Key = Slice, Value = Slice>;
+        type Iter: Iterator;
 
         fn new(is_reversed: bool) -> Self;
 
@@ -588,9 +587,7 @@ mod tests {
         }
     }
 
-    impl<I: Iterator<Key = Slice, Value = Slice>> Iterator for KeyConvertingIterator<I> {
-        type Key = Slice;
-        type Value = Slice;
+    impl<I: Iterator> Iterator for KeyConvertingIterator<I> {
         fn valid(&self) -> bool {
             self.inner.valid()
         }
@@ -616,18 +613,18 @@ mod tests {
             self.inner.prev()
         }
 
-        fn key(&self) -> Self::Key {
-            match ParsedInternalKey::decode_from(self.inner.key().as_slice()) {
-                Some(parsed_ikey) => Slice::from(parsed_ikey.user_key),
+        fn key(&self) -> &[u8] {
+            match ParsedInternalKey::decode_from(self.inner.key()) {
+                Some(parsed_ikey) => parsed_ikey.user_key,
                 None => {
                     self.err
                         .set(Some(Error::Corruption("malformed internal key".to_owned())));
-                    Slice::from("corrupted key")
+                    "corrupted key".as_bytes()
                 }
             }
         }
 
-        fn value(&self) -> Self::Value {
+        fn value(&self) -> &[u8] {
             self.inner.value()
         }
 
@@ -661,9 +658,6 @@ mod tests {
     }
 
     impl Iterator for EntryIterator {
-        type Key = Slice;
-        type Value = Slice;
-
         fn valid(&self) -> bool {
             self.current < self.data.len()
         }
@@ -704,20 +698,14 @@ mod tests {
             }
         }
 
-        fn key(&self) -> Self::Key {
-            if self.valid() {
-                Slice::from(self.data[self.current].0.as_slice())
-            } else {
-                Slice::default()
-            }
+        fn key(&self) -> &[u8] {
+            assert!(self.valid());
+            self.data[self.current].0.as_slice()
         }
 
-        fn value(&self) -> Self::Value {
-            if self.valid() {
-                Slice::from(self.data[self.current].1.as_slice())
-            } else {
-                Slice::default()
-            }
+        fn value(&self) -> &[u8] {
+            assert!(self.valid());
+            self.data[self.current].1.as_slice()
         }
 
         fn status(&mut self) -> Result<()> {
@@ -774,16 +762,13 @@ mod tests {
         // fill the kv buffer from inner key-value
         fn fill_entry(&mut self) {
             if self.valid() {
-                self.key_buf = self.inner.key();
-                self.value_buf = self.inner.value();
+                self.key_buf = self.inner.key().to_vec();
+                self.value_buf = self.inner.value().to_vec();
             }
         }
     }
 
     impl Iterator for DBIterWrapper {
-        type Key = Slice;
-        type Value = Slice;
-
         fn valid(&self) -> bool {
             self.inner.valid()
         }
@@ -813,12 +798,12 @@ mod tests {
             self.fill_entry();
         }
 
-        fn key(&self) -> Self::Key {
-            Slice::from(&self.key_buf)
+        fn key(&self) -> &[u8] {
+            &self.key_buf
         }
 
-        fn value(&self) -> Self::Value {
-            Slice::from(&self.value_buf)
+        fn value(&self) -> &[u8] {
+            &self.value_buf
         }
 
         fn status(&mut self) -> Result<()> {
@@ -1051,18 +1036,12 @@ mod tests {
 
     #[inline]
     fn format_kv(key: Vec<u8>, value: Vec<u8>) -> String {
-        unsafe {
-            format!(
-                "'{}->{}'",
-                String::from_utf8_unchecked(key),
-                String::from_utf8_unchecked(value)
-            )
-        }
+        format!("'{:?}->{:?}'", key, value)
     }
 
     // Return a String represents current entry of the given iterator
     #[inline]
-    fn format_entry(iter: &dyn Iterator<Key = Slice, Value = Slice>) -> String {
+    fn format_entry(iter: &dyn Iterator) -> String {
         format!("'{:?}->{:?}'", iter.key(), iter.value())
     }
 
@@ -1122,7 +1101,7 @@ mod tests {
             // Restart interval does not matter for memtables
             (TestType::Memtable, false, 16),
             (TestType::Memtable, true, 16),
-            // Do not bother with restart interval variations for DB
+            // // Do not bother with restart interval variations for DB
             (TestType::DB, false, 16),
             (TestType::DB, true, 16),
         ]

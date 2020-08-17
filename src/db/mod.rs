@@ -1111,16 +1111,17 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
                 self.compact_mem_table();
                 mem_compaction_duration = imm_start.elapsed().unwrap().as_micros() as u64;
             }
+            let iter_status = input_iter.status();
             let ikey = input_iter.key();
             // Checkout whether we need rotate a new output file
-            if c.should_stop_before(ikey.as_slice(), icmp.clone()) && c.builder.is_some() {
-                status = self.finish_output_file(c, input_iter.status());
+            if c.should_stop_before(ikey, icmp.clone()) && c.builder.is_some() {
+                status = self.finish_output_file(c, iter_status);
                 if status.is_err() {
                     break;
                 }
             }
             let mut drop = false;
-            match ParsedInternalKey::decode_from(ikey.as_slice()) {
+            match ParsedInternalKey::decode_from(ikey) {
                 Some(key) => {
                     if !has_current_ukey
                         || ucmp.compare(&key.user_key, current_ukey.as_slice())
@@ -1160,15 +1161,11 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
                         // TODO: InternalKey::decoded_from adds extra cost of copying
                         if c.builder.as_ref().unwrap().num_entries() == 0 {
                             // We have a brand new builder so use current key as smallest
-                            c.outputs[last].smallest = InternalKey::decoded_from(ikey.as_slice());
+                            c.outputs[last].smallest = InternalKey::decoded_from(ikey);
                         }
                         // Keep updating the largest
-                        c.outputs[last].largest = InternalKey::decoded_from(ikey.as_slice());
-                        let _ = c
-                            .builder
-                            .as_mut()
-                            .unwrap()
-                            .add(ikey.as_slice(), input_iter.value().as_slice());
+                        c.outputs[last].largest = InternalKey::decoded_from(ikey);
+                        let _ = c.builder.as_mut().unwrap().add(ikey, input_iter.value());
                         let builder = c.builder.as_ref().unwrap();
                         // Rotate a new output file if the current one is big enough
                         if builder.file_size() >= self.options.max_file_size {
@@ -1368,7 +1365,7 @@ pub(crate) fn build_table<S: Storage + Clone>(
     storage: &S,
     db_name: &str,
     table_cache: &TableCache<S>,
-    iter: &mut dyn Iterator<Key = Slice, Value = Slice>,
+    iter: &mut dyn Iterator,
     meta: &mut FileMetaData,
 ) -> Result<()> {
     meta.file_size = 0;
@@ -1379,33 +1376,35 @@ pub(crate) fn build_table<S: Storage + Clone>(
         let file = storage.create(file_name.as_str())?;
         let icmp = InternalKeyComparator::new(options.comparator.clone());
         let mut builder = TableBuilder::new(file, icmp.clone(), options);
-        let mut prev_key = Slice::default();
-        let smallest_key = iter.key();
+        let mut prev_key = None;
+        let smallest_key = iter.key().to_vec();
         while iter.valid() {
-            let key = iter.key();
+            let key = iter.key().to_vec();
             let value = iter.value();
-            let s = builder.add(key.as_slice(), value.as_slice());
+            let s = builder.add(&key, value);
             if s.is_err() {
                 status = s;
                 break;
             }
-            prev_key = key;
+            prev_key = Some(key);
             iter.next();
         }
         if status.is_ok() {
-            meta.smallest = InternalKey::decoded_from(smallest_key.as_slice());
-            meta.largest = InternalKey::decoded_from(prev_key.as_slice());
-            status = builder.finish(true).and_then(|_| {
-                meta.file_size = builder.file_size();
-                // make sure that the new file is in the cache
-                let mut it = table_cache.new_iter(
-                    icmp,
-                    ReadOptions::default(),
-                    meta.number,
-                    meta.file_size,
-                )?;
-                it.status()
-            })
+            if let Some(prev_key) = prev_key {
+                meta.smallest = InternalKey::decoded_from(&smallest_key);
+                meta.largest = InternalKey::decoded_from(&prev_key);
+                status = builder.finish(true).and_then(|_| {
+                    meta.file_size = builder.file_size();
+                    // make sure that the new file is in the cache
+                    let mut it = table_cache.new_iter(
+                        icmp,
+                        ReadOptions::default(),
+                        meta.number,
+                        meta.file_size,
+                    )?;
+                    it.status()
+                })
+            }
         }
     }
 
@@ -1430,6 +1429,7 @@ mod tests {
     use crate::{BloomFilter, CompressionType};
     use std::ops::Deref;
     use std::rc::Rc;
+    use std::str;
 
     impl<S: Storage + Clone> WickDB<S> {
         fn options(&self) -> Arc<Options> {
@@ -1510,7 +1510,7 @@ mod tests {
         db: WickDB<MemStorage>,
     }
 
-    fn iter_to_string(iter: &dyn Iterator<Key = Vec<u8>, Value = Vec<u8>>) -> String {
+    fn iter_to_string(iter: &dyn Iterator) -> String {
         if iter.valid() {
             format!("{:?}->{:?}", iter.key(), iter.value())
         } else {
@@ -1648,7 +1648,7 @@ mod tests {
                 result.push_str("[ ");
                 let mut first = true;
                 while iter.valid() {
-                    match ParsedInternalKey::decode_from(iter.key().as_slice()) {
+                    match ParsedInternalKey::decode_from(iter.key()) {
                         None => result.push_str("CORRUPTED"),
                         Some(pkey) => {
                             if self
@@ -1666,7 +1666,7 @@ mod tests {
                             first = false;
                             match pkey.value_type {
                                 ValueType::Value => {
-                                    result.push_str(&String::from_utf8(iter.value()).unwrap())
+                                    result.push_str(str::from_utf8(iter.value()).unwrap())
                                 }
                                 ValueType::Deletion => result.push_str("DEL"),
                                 ValueType::Unknown => result.push_str("UNKNOWN"),
@@ -1992,9 +1992,9 @@ mod tests {
         assert!(!iter.valid());
     }
 
-    fn assert_iter_entry(iter: &dyn Iterator<Key = Vec<u8>, Value = Vec<u8>>, k: &str, v: &str) {
-        assert_eq!(String::from_utf8(iter.key()).unwrap(), k);
-        assert_eq!(String::from_utf8(iter.value()).unwrap(), v);
+    fn assert_iter_entry(iter: &dyn Iterator, k: &str, v: &str) {
+        assert_eq!(str::from_utf8(iter.key()).unwrap(), k);
+        assert_eq!(str::from_utf8(iter.value()).unwrap(), v);
     }
 
     #[test]

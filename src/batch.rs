@@ -218,10 +218,14 @@ mod tests {
         let mut s = String::new();
         let mut count = 0;
         while iter.valid() {
-            if let Some(ikey) = ParsedInternalKey::decode_from(iter.key().as_slice()) {
+            if let Some(ikey) = ParsedInternalKey::decode_from(iter.key()) {
                 match ikey.value_type {
                     ValueType::Value => {
-                        let tmp = format!("Put({}, {})", ikey.as_str(), iter.value().as_str());
+                        let tmp = format!(
+                            "Put({}, {})",
+                            ikey.as_str(),
+                            std::str::from_utf8(iter.value()).unwrap()
+                        );
                         s.push_str(tmp.as_str());
                         count += 1
                     }

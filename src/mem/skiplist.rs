@@ -266,8 +266,6 @@ pub struct SkiplistIterator<C: Comparator, A: Arena> {
 }
 
 impl<C: Comparator, A: Arena> Iterator for SkiplistIterator<C, A> {
-    type Key = Slice;
-    type Value = Slice;
     /// Returns true whether the iterator is positioned at a valid node
     #[inline]
     fn valid(&self) -> bool {
@@ -314,7 +312,7 @@ impl<C: Comparator, A: Arena> Iterator for SkiplistIterator<C, A> {
     fn prev(&mut self) {
         self.panic_valid();
         let key = self.key();
-        self.node = self.skl.find_less_than(key.as_slice());
+        self.node = self.skl.find_less_than(key);
         if self.node == self.skl.head {
             self.node = ptr::null_mut();
         }
@@ -322,13 +320,13 @@ impl<C: Comparator, A: Arena> Iterator for SkiplistIterator<C, A> {
 
     /// Return the key of node in current position
     #[inline]
-    fn key(&self) -> Self::Key {
+    fn key(&self) -> &[u8] {
         self.panic_valid();
-        unsafe { (*(self.node)).key().into() }
+        unsafe { (*(self.node)).key() }
     }
     /// Should not be used
     #[inline]
-    fn value(&self) -> Self::Value {
+    fn value(&self) -> &[u8] {
         unimplemented!()
     }
 
@@ -376,6 +374,7 @@ mod tests {
     use rand::Rng;
     use rand::RngCore;
     use std::cmp::Ordering as CmpOrdering;
+    use std::str;
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Condvar, Mutex};
     use std::{ptr, thread};
@@ -578,12 +577,12 @@ mod tests {
         assert_eq!(ptr::null(), iter.node);
 
         iter.seek_to_first();
-        assert_eq!("key1", iter.key().as_str());
+        assert_eq!("key1", str::from_utf8(iter.key()).unwrap());
         for key in inputs.clone() {
             if !iter.valid() {
                 break;
             }
-            assert_eq!(key, iter.key().as_str());
+            assert_eq!(key, str::from_utf8(iter.key()).unwrap());
             iter.next();
         }
         assert!(!iter.valid());
@@ -591,23 +590,23 @@ mod tests {
         iter.seek_to_first();
         iter.next();
         iter.prev();
-        assert_eq!(inputs[0], iter.key().as_str());
+        assert_eq!(inputs[0], str::from_utf8(iter.key()).unwrap());
         iter.seek_to_first();
         iter.seek_to_last();
         for key in inputs.into_iter().rev() {
             if !iter.valid() {
                 break;
             }
-            assert_eq!(key, iter.key().as_str());
+            assert_eq!(key, str::from_utf8(iter.key()).unwrap());
             iter.prev();
         }
         assert!(!iter.valid());
         iter.seek("key7".as_bytes());
-        assert_eq!("key7", iter.key().as_str());
+        assert_eq!("key7", str::from_utf8(iter.key()).unwrap());
         iter.seek("key4".as_bytes());
-        assert_eq!("key5", iter.key().as_str());
+        assert_eq!("key5", str::from_utf8(iter.key()).unwrap());
         iter.seek("".as_bytes());
-        assert_eq!("key1", iter.key().as_str());
+        assert_eq!("key1", str::from_utf8(iter.key()).unwrap());
         iter.seek("llllllllllllllll".as_bytes());
         assert!(!iter.valid());
     }
@@ -758,7 +757,7 @@ mod tests {
                     make_key(K as u64, 0)
                 } else {
                     let s = iter.key();
-                    let k = decode_fixed_64(s.as_slice());
+                    let k = decode_fixed_64(s);
                     assert!(is_valid_key(k));
                     k
                 };

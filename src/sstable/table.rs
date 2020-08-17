@@ -97,10 +97,8 @@ impl<F: File> Table<F> {
                     };
                     // Read filter block
                     iter.seek(filter_key.as_bytes());
-                    if iter.valid() && iter.key().as_str() == filter_key.as_str() {
-                        if let Ok((filter_handle, _)) =
-                            BlockHandle::decode_from(iter.value().as_slice())
-                        {
+                    if iter.valid() && iter.key() == filter_key.as_bytes() {
+                        if let Ok((filter_handle, _)) = BlockHandle::decode_from(iter.value()) {
                             if let Ok(filter_block) =
                                 read_block(&t.file, &filter_handle, options.paranoid_checks)
                             {
@@ -174,14 +172,14 @@ impl<F: File> Table<F> {
             let handle_val = index_iter.value();
             // check the filter block
             if let Some(filter) = &self.filter_reader {
-                if let Ok((handle, _)) = BlockHandle::decode_from(handle_val.as_slice()) {
+                if let Ok((handle, _)) = BlockHandle::decode_from(handle_val) {
                     if !filter.key_may_match(handle.offset, key) {
                         maybe_contained = false;
                     }
                 }
             }
             if maybe_contained {
-                let (data_block_handle, _) = BlockHandle::decode_from(handle_val.as_slice())?;
+                let (data_block_handle, _) = BlockHandle::decode_from(handle_val)?;
                 let mut block_iter = self.block_reader(cmp, data_block_handle, options)?;
                 block_iter.seek(key);
                 if block_iter.valid() {
@@ -211,7 +209,7 @@ impl<F: File> Table<F> {
         index_iter.seek(key);
         if index_iter.valid() {
             let val = index_iter.value();
-            if let Ok((h, _)) = BlockHandle::decode_from(val.as_slice()) {
+            if let Ok((h, _)) = BlockHandle::decode_from(val) {
                 return h.offset;
             }
         }
@@ -694,7 +692,7 @@ mod tests {
         iter.seek_to_first();
         let mut result_pairs = vec![];
         while iter.valid() {
-            result_pairs.push((iter.key().into_vec(), iter.value().into_vec()));
+            result_pairs.push((iter.key().to_vec(), iter.value().to_vec()));
             iter.next();
         }
         assert_eq!(result_pairs.len(), test_pairs.len());
@@ -726,13 +724,12 @@ mod tests {
         };
         for (key, val) in tests.clone().drain(..) {
             assert_eq!(
-                val,
+                val.as_bytes(),
                 table
                     .internal_get(read_opt, cmp, key.as_bytes())
                     .unwrap()
                     .unwrap()
                     .value()
-                    .as_str()
             );
         }
     }
