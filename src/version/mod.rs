@@ -186,7 +186,7 @@ impl Version {
                                 {
                                     match parsed_key.value_type {
                                         ValueType::Value => {
-                                            return Ok((Some(value.into_vec()), seek_stats))
+                                            return Ok((Some(value.to_vec()), seek_stats))
                                         }
                                         ValueType::Deletion => return Ok((None, seek_stats)),
                                         _ => {}
@@ -641,7 +641,6 @@ impl LevelFileNumIterator {
 }
 
 impl Iterator for LevelFileNumIterator {
-    type Value = Slice;
     fn valid(&self) -> bool {
         self.index < self.files.len()
     }
@@ -690,9 +689,9 @@ impl Iterator for LevelFileNumIterator {
     }
 
     // make sure the iterator's lifetime is longer than returning Slice
-    fn value(&self) -> Self::Value {
+    fn value(&self) -> &[u8] {
         self.valid_or_panic();
-        Slice::from(&self.value_buf)
+        &self.value_buf
     }
 
     fn status(&mut self) -> Result<()> {

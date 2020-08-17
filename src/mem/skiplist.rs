@@ -266,7 +266,6 @@ pub struct SkiplistIterator<C: Comparator, A: Arena> {
 }
 
 impl<C: Comparator, A: Arena> Iterator for SkiplistIterator<C, A> {
-    type Value = Slice;
     /// Returns true whether the iterator is positioned at a valid node
     #[inline]
     fn valid(&self) -> bool {
@@ -327,7 +326,7 @@ impl<C: Comparator, A: Arena> Iterator for SkiplistIterator<C, A> {
     }
     /// Should not be used
     #[inline]
-    fn value(&self) -> Self::Value {
+    fn value(&self) -> &[u8] {
         unimplemented!()
     }
 

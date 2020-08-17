@@ -32,7 +32,6 @@ use crate::util::coding::decode_fixed_64;
 use crate::util::collection::HashSet;
 use crate::util::comparator::Comparator;
 use crate::util::reporter::LogReporter;
-use crate::util::slice::Slice;
 use crate::version::version_edit::{FileDelta, FileMetaData, VersionEdit};
 use crate::version::{LevelFileNumIterator, Version, FILE_META_LENGTH};
 use crate::ReadOptions;
@@ -569,7 +568,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         &mut self,
         db_name: &str,
         table_cache: TableCache<S>,
-        mem_iter: &mut dyn Iterator<Value = Slice>,
+        mem_iter: &mut dyn Iterator,
         edit: &mut VersionEdit,
     ) -> Result<()> {
         let base = self.current();
@@ -1113,51 +1112,51 @@ impl<S: Storage + Clone> KMergeCore for SSTableIters<S> {
         index
     }
 
-    fn get_child(&self, i: usize) -> &dyn Iterator<Value = Slice> {
+    fn get_child(&self, i: usize) -> &dyn Iterator {
         if i < self.level0.len() {
-            self.leveln.get(i).unwrap() as &dyn Iterator<Value = Slice>
+            self.leveln.get(i).unwrap() as &dyn Iterator
         } else {
             let current = i - self.level0.len();
-            self.leveln.get(current).unwrap() as &dyn Iterator<Value = Slice>
+            self.leveln.get(current).unwrap() as &dyn Iterator
         }
     }
 
-    fn get_child_mut(&mut self, i: usize) -> &mut dyn Iterator<Value = Slice> {
+    fn get_child_mut(&mut self, i: usize) -> &mut dyn Iterator {
         if i < self.level0.len() {
-            self.leveln.get_mut(i).unwrap() as &mut dyn Iterator<Value = Slice>
+            self.leveln.get_mut(i).unwrap() as &mut dyn Iterator
         } else {
             let current = i - self.level0.len();
-            self.leveln.get_mut(current).unwrap() as &mut dyn Iterator<Value = Slice>
+            self.leveln.get_mut(current).unwrap() as &mut dyn Iterator
         }
     }
 
     fn for_each_child<F>(&mut self, mut f: F)
     where
-        F: FnMut(&mut dyn Iterator<Value = Slice>),
+        F: FnMut(&mut dyn Iterator),
     {
         self.level0
             .iter_mut()
-            .for_each(|i| f(i as &mut dyn Iterator<Value = Slice>));
+            .for_each(|i| f(i as &mut dyn Iterator));
         self.leveln
             .iter_mut()
-            .for_each(|i| f(i as &mut dyn Iterator<Value = Slice>));
+            .for_each(|i| f(i as &mut dyn Iterator));
     }
 
     fn for_not_ith<F>(&mut self, n: usize, mut f: F)
     where
-        F: FnMut(&mut dyn Iterator<Value = Slice>, &dyn Comparator),
+        F: FnMut(&mut dyn Iterator, &dyn Comparator),
     {
         if n < self.level0.len() {
             for (i, child) in self.level0.iter_mut().enumerate() {
                 if i != n {
-                    f(child as &mut dyn Iterator<Value = Slice>, &self.cmp)
+                    f(child as &mut dyn Iterator, &self.cmp)
                 }
             }
         } else {
             let current = n - self.level0.len();
             for (i, child) in self.leveln.iter_mut().enumerate() {
                 if i != current {
-                    f(child as &mut dyn Iterator<Value = Slice>, &self.cmp)
+                    f(child as &mut dyn Iterator, &self.cmp)
                 }
             }
         }

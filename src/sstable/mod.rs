@@ -385,7 +385,6 @@ mod tests {
     use crate::storage::{File, Storage};
     use crate::util::collection::HashSet;
     use crate::util::comparator::{BytewiseComparator, Comparator};
-    use crate::util::slice::Slice;
     use crate::{Error, Result};
     use crate::{WriteBatch, WriteOptions};
     use rand::prelude::ThreadRng;
@@ -477,7 +476,7 @@ mod tests {
     // Helper class for tests to unify the interface between
     // BlockBuilder/TableBuilder and Block/Table
     trait Constructor {
-        type Iter: Iterator<Value = Slice>;
+        type Iter: Iterator;
 
         fn new(is_reversed: bool) -> Self;
 
@@ -588,8 +587,7 @@ mod tests {
         }
     }
 
-    impl<I: Iterator<Value = Slice>> Iterator for KeyConvertingIterator<I> {
-        type Value = Slice;
+    impl<I: Iterator> Iterator for KeyConvertingIterator<I> {
         fn valid(&self) -> bool {
             self.inner.valid()
         }
@@ -626,7 +624,7 @@ mod tests {
             }
         }
 
-        fn value(&self) -> Self::Value {
+        fn value(&self) -> &[u8] {
             self.inner.value()
         }
 
@@ -660,8 +658,6 @@ mod tests {
     }
 
     impl Iterator for EntryIterator {
-        type Value = Slice;
-
         fn valid(&self) -> bool {
             self.current < self.data.len()
         }
@@ -707,12 +703,9 @@ mod tests {
             self.data[self.current].0.as_slice()
         }
 
-        fn value(&self) -> Self::Value {
-            if self.valid() {
-                Slice::from(self.data[self.current].1.as_slice())
-            } else {
-                Slice::default()
-            }
+        fn value(&self) -> &[u8] {
+            assert!(self.valid());
+            self.data[self.current].1.as_slice()
         }
 
         fn status(&mut self) -> Result<()> {
@@ -770,14 +763,12 @@ mod tests {
         fn fill_entry(&mut self) {
             if self.valid() {
                 self.key_buf = self.inner.key().to_vec();
-                self.value_buf = self.inner.value();
+                self.value_buf = self.inner.value().to_vec();
             }
         }
     }
 
     impl Iterator for DBIterWrapper {
-        type Value = Slice;
-
         fn valid(&self) -> bool {
             self.inner.valid()
         }
@@ -811,8 +802,8 @@ mod tests {
             &self.key_buf
         }
 
-        fn value(&self) -> Self::Value {
-            Slice::from(&self.value_buf)
+        fn value(&self) -> &[u8] {
+            &self.value_buf
         }
 
         fn status(&mut self) -> Result<()> {
@@ -1056,7 +1047,7 @@ mod tests {
 
     // Return a String represents current entry of the given iterator
     #[inline]
-    fn format_entry(iter: &dyn Iterator<Value = Slice>) -> String {
+    fn format_entry(iter: &dyn Iterator) -> String {
         format!("'{:?}->{:?}'", iter.key(), iter.value())
     }
 

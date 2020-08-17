@@ -182,7 +182,6 @@ impl MemTableIterator {
 }
 
 impl Iterator for MemTableIterator {
-    type Value = Slice;
     fn valid(&self) -> bool {
         self.iter.valid()
     }
@@ -217,10 +216,10 @@ impl Iterator for MemTableIterator {
     }
 
     // Returns the Slice represents the value
-    fn value(&self) -> Self::Value {
+    fn value(&self) -> &[u8] {
         let mut key = self.iter.key();
         extract_varint32_encoded_slice(&mut key);
-        extract_varint32_encoded_slice(&mut key).into()
+        extract_varint32_encoded_slice(&mut key)
     }
 
     fn status(&mut self) -> Result<()> {
@@ -242,6 +241,7 @@ mod tests {
     use crate::iterator::Iterator;
     use crate::mem::MemTable;
     use crate::util::comparator::BytewiseComparator;
+    use std::str;
     use std::sync::Arc;
 
     fn new_mem_table() -> MemTable {
@@ -308,11 +308,11 @@ mod tests {
                 pkey.as_str()
             );
             assert_eq!(
-                iter.value().as_str(),
+                str::from_utf8(iter.value()).unwrap(),
                 *value,
                 "expected value: {:?}, but got {:?}",
                 *value,
-                iter.value().as_str()
+                str::from_utf8(iter.value()).unwrap()
             );
             iter.next();
         }
@@ -332,11 +332,11 @@ mod tests {
                 pkey.as_str()
             );
             assert_eq!(
-                iter.value().as_str(),
+                str::from_utf8(iter.value()).unwrap(),
                 *value,
                 "expected value: {:?}, but got {:?}",
                 *value,
-                iter.value().as_str()
+                str::from_utf8(iter.value()).unwrap()
             );
             iter.prev();
         }

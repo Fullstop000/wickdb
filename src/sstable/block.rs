@@ -18,7 +18,6 @@
 use crate::iterator::Iterator;
 use crate::util::coding::{decode_fixed_32, put_fixed_32};
 use crate::util::comparator::Comparator;
-use crate::util::slice::Slice;
 use crate::util::varint::VarintU32;
 use crate::{Error, Result};
 use std::cmp::{min, Ordering};
@@ -216,7 +215,6 @@ impl<C: Comparator> BlockIterator<C> {
 }
 
 impl<C: Comparator> Iterator for BlockIterator<C> {
-    type Value = Slice;
     #[inline]
     fn valid(&self) -> bool {
         self.current < self.restarts
@@ -314,11 +312,11 @@ impl<C: Comparator> Iterator for BlockIterator<C> {
         &self.key
     }
 
-    fn value(&self) -> Self::Value {
+    fn value(&self) -> &[u8] {
         self.valid_or_panic();
         let val_offset = self.next_entry_offset() - self.value_len;
         let val = &self.data[val_offset as usize..(val_offset + self.value_len) as usize];
-        Slice::from(val)
+        val
     }
 
     fn status(&mut self) -> Result<()> {
@@ -539,7 +537,7 @@ mod tests {
         let k = iter.key();
         let v = iter.value();
         assert_eq!(str::from_utf8(k).unwrap(), "");
-        assert_eq!(v.as_str(), "test");
+        assert_eq!(str::from_utf8(v).unwrap(), "test");
         iter.next();
         assert!(!iter.valid());
     }
@@ -645,33 +643,33 @@ mod tests {
         assert!(!iter.valid());
         iter.seek_to_first();
         assert_eq!(iter.current, 0);
-        assert_eq!(str::from_utf8(iter.key()).unwrap(), "1");
-        assert_eq!(iter.value().as_str(), "1");
+        assert_eq!(iter.key(), "1".as_bytes());
+        assert_eq!(iter.value(), "1".as_bytes());
         iter.next();
         assert_eq!(iter.current, 5); // shared 1 + non_shared 1 + value_len 1 + key 1 + value + 1
         assert_eq!(iter.key_offset, 8);
-        assert_eq!(str::from_utf8(iter.key()).unwrap(), "12");
-        assert_eq!(iter.value().as_str(), "12");
+        assert_eq!(iter.key(), "12".as_bytes());
+        assert_eq!(iter.value(), "12".as_bytes());
         iter.prev();
         assert_eq!(iter.current, 0);
-        assert_eq!(str::from_utf8(iter.key()).unwrap(), "1");
-        assert_eq!(iter.value().as_str(), "1");
+        assert_eq!(iter.key(), "1".as_bytes());
+        assert_eq!(iter.value(), "1".as_bytes());
         iter.seek_to_last();
-        assert_eq!(str::from_utf8(iter.key()).unwrap(), "bbb");
-        assert_eq!(iter.value().as_str(), "bbb");
+        assert_eq!(iter.key(), "bbb".as_bytes());
+        assert_eq!(iter.value(), "bbb".as_bytes());
         // Seek
         iter.seek("1".as_bytes());
-        assert_eq!(str::from_utf8(iter.key()).unwrap(), "1");
-        assert_eq!(iter.value().as_str(), "1");
+        assert_eq!(iter.key(), "1".as_bytes());
+        assert_eq!(iter.value(), "1".as_bytes());
         iter.seek("".as_bytes());
-        assert_eq!(str::from_utf8(iter.key()).unwrap(), "1");
-        assert_eq!(iter.value().as_str(), "1");
+        assert_eq!(iter.key(), "1".as_bytes());
+        assert_eq!(iter.value(), "1".as_bytes());
         iter.seek("abd".as_bytes());
-        assert_eq!(str::from_utf8(iter.key()).unwrap(), "abd");
-        assert_eq!(iter.value().as_str(), "abd");
+        assert_eq!(iter.key(), "abd".as_bytes());
+        assert_eq!(iter.value(), "abd".as_bytes());
         iter.seek("bbb".as_bytes());
-        assert_eq!(str::from_utf8(iter.key()).unwrap(), "bbb");
-        assert_eq!(iter.value().as_str(), "bbb");
+        assert_eq!(iter.key(), "bbb".as_bytes());
+        assert_eq!(iter.value(), "bbb".as_bytes());
         iter.seek("zzzzzzzzzzzzzzz".as_bytes());
         assert!(!iter.valid());
     }
@@ -698,8 +696,8 @@ mod tests {
         iter.seek_to_first();
         for (key, val) in tests {
             assert!(iter.valid());
-            assert_eq!(str::from_utf8(iter.key()).unwrap(), key);
-            assert_eq!(iter.value().as_str(), val);
+            assert_eq!(iter.key(), key.as_bytes());
+            assert_eq!(iter.value(), val.as_bytes());
             iter.next();
         }
         assert!(!iter.valid());

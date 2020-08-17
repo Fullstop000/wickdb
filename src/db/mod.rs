@@ -1165,11 +1165,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
                         }
                         // Keep updating the largest
                         c.outputs[last].largest = InternalKey::decoded_from(ikey);
-                        let _ = c
-                            .builder
-                            .as_mut()
-                            .unwrap()
-                            .add(ikey, input_iter.value().as_slice());
+                        let _ = c.builder.as_mut().unwrap().add(ikey, input_iter.value());
                         let builder = c.builder.as_ref().unwrap();
                         // Rotate a new output file if the current one is big enough
                         if builder.file_size() >= self.options.max_file_size {
@@ -1369,7 +1365,7 @@ pub(crate) fn build_table<S: Storage + Clone>(
     storage: &S,
     db_name: &str,
     table_cache: &TableCache<S>,
-    iter: &mut dyn Iterator<Value = Slice>,
+    iter: &mut dyn Iterator,
     meta: &mut FileMetaData,
 ) -> Result<()> {
     meta.file_size = 0;
@@ -1385,7 +1381,7 @@ pub(crate) fn build_table<S: Storage + Clone>(
         while iter.valid() {
             let key = iter.key().to_vec();
             let value = iter.value();
-            let s = builder.add(&key, value.as_slice());
+            let s = builder.add(&key, value);
             if s.is_err() {
                 status = s;
                 break;
@@ -1431,6 +1427,7 @@ mod tests {
     use crate::{BloomFilter, CompressionType};
     use std::ops::Deref;
     use std::rc::Rc;
+    use std::str;
 
     impl<S: Storage + Clone> WickDB<S> {
         fn options(&self) -> Arc<Options> {
@@ -1511,7 +1508,7 @@ mod tests {
         db: WickDB<MemStorage>,
     }
 
-    fn iter_to_string(iter: &dyn Iterator<Value = Vec<u8>>) -> String {
+    fn iter_to_string(iter: &dyn Iterator) -> String {
         if iter.valid() {
             format!("{:?}->{:?}", iter.key(), iter.value())
         } else {
@@ -1667,7 +1664,7 @@ mod tests {
                             first = false;
                             match pkey.value_type {
                                 ValueType::Value => {
-                                    result.push_str(&String::from_utf8(iter.value()).unwrap())
+                                    result.push_str(str::from_utf8(iter.value()).unwrap())
                                 }
                                 ValueType::Deletion => result.push_str("DEL"),
                                 ValueType::Unknown => result.push_str("UNKNOWN"),
@@ -1993,9 +1990,9 @@ mod tests {
         assert!(!iter.valid());
     }
 
-    fn assert_iter_entry(iter: &dyn Iterator<Value = Vec<u8>>, k: &str, v: &str) {
-        assert_eq!(String::from_utf8(iter.key().to_owned()).unwrap(), k);
-        assert_eq!(String::from_utf8(iter.value()).unwrap(), v);
+    fn assert_iter_entry(iter: &dyn Iterator, k: &str, v: &str) {
+        assert_eq!(str::from_utf8(iter.key()).unwrap(), k);
+        assert_eq!(str::from_utf8(iter.value()).unwrap(), v);
     }
 
     #[test]
