@@ -32,6 +32,10 @@ before_script:
 
 script:
   - echo $TRAVIS_RUST_VERSION
+  - if [[ $TRAVIS_RUST_VERSION == "stable" ]]; then cargo fmt -- --check; fi 
+  - if [[ $TRAVIS_RUST_VERSION == "stable" ]]; then cargo clippy --all; fi
+  - cargo build --verbose --all
+  - cargo clean
   - |
     if [[ $TRAVIS_RUST_VERSION == "nightly" ]] && [ $TRAVIS_OS_NAME == "linux" ]; then
       export CARGO_INCREMENTAL=0;
@@ -39,9 +43,6 @@ script:
       export RUSTDOCFLAGS="-Cpanic=abort";
       sed -i s/stable/nightly/g rust-toolchain
     fi
-  - if [[ $TRAVIS_RUST_VERSION == "stable" ]]; then cargo fmt -- --check; fi 
-  - if [[ $TRAVIS_RUST_VERSION == "stable" ]]; then cargo clippy --all; fi
-  - cargo build --verbose --all
   - cargo test --verbose --all
   - |
     if [ $TRAVIS_OS_NAME == "linux" ] && [ $TRAVIS_RUST_VERSION == "nightly" ]; then
