@@ -25,7 +25,6 @@ use crate::storage::Storage;
 use crate::table_cache::TableCache;
 use crate::util::coding::put_fixed_64;
 use crate::util::comparator::Comparator;
-use crate::util::slice::Slice;
 use crate::version::version_edit::FileMetaData;
 use crate::version::version_set::total_file_size;
 use crate::{Error, Result};
@@ -556,20 +555,20 @@ impl Version {
         //       Consider separate this into two single functions: one for level 0, one for level > 0
         let mut result = vec![];
         let cmp = &self.icmp.user_comparator;
-        let mut user_begin = begin.map_or(Slice::default(), |ik| Slice::from(ik.user_key()));
-        let mut user_end = end.map_or(Slice::default(), |ik| Slice::from(ik.user_key()));
+        let mut user_begin = begin.map(|ik| ik.user_key());
+        let mut user_end = end.map(|ik| ik.user_key());
         'outer: loop {
             for file in self.files[level].iter() {
                 let file_begin = file.smallest.user_key();
                 let file_end = file.largest.user_key();
-                if !user_begin.is_empty()
-                    && cmp.compare(file_end, user_begin.as_slice()) == CmpOrdering::Less
+                if user_begin.is_some()
+                    && cmp.compare(file_end, user_begin.unwrap()) == CmpOrdering::Less
                 {
                     // 'file' is completely before the specified range; skip it
                     continue;
                 }
-                if !user_end.is_empty()
-                    && cmp.compare(file_begin, user_end.as_slice()) == CmpOrdering::Greater
+                if user_end.is_some()
+                    && cmp.compare(file_begin, user_end.unwrap()) == CmpOrdering::Greater
                 {
                     // 'file' is completely after the specified range; skip it
                     continue;
@@ -579,17 +578,17 @@ impl Version {
                     // Level-0 files may overlap each other.  So check if the newly
                     // added file has expanded the range.  If so, restart search to make sure that
                     // we includes all the overlapping level 0 files
-                    if !user_begin.is_empty()
-                        && cmp.compare(file_begin, user_begin.as_slice()) == CmpOrdering::Less
+                    if user_begin.is_some()
+                        && cmp.compare(file_begin, user_begin.unwrap()) == CmpOrdering::Less
                     {
-                        user_begin = Slice::from(file_begin);
+                        user_begin = Some(file_begin);
                         result.clear();
                         continue 'outer;
                     }
-                    if !user_end.is_empty()
-                        && cmp.compare(file_end, user_end.as_slice()) == CmpOrdering::Greater
+                    if user_end.is_some()
+                        && cmp.compare(file_end, user_end.unwrap()) == CmpOrdering::Greater
                     {
-                        user_end = Slice::from(file_end);
+                        user_end = Some(file_end);
                         result.clear();
                         continue 'outer;
                     }
@@ -703,7 +702,6 @@ mod tests {
     use super::*;
     use crate::db::format::{InternalKey, InternalKeyComparator, ValueType};
     use crate::util::comparator::BytewiseComparator;
-    use crate::util::slice::Slice;
 
     struct FindFileTests {
         pub files: Vec<Arc<FileMetaData>>,
@@ -718,34 +716,28 @@ mod tests {
             Self { files, cmp }
         }
 
-        fn generate(&mut self, smallest: &Slice, largest: &Slice) {
+        fn generate(&mut self, smallest: &str, largest: &str) {
             let mut file = FileMetaData::default();
             file.number = self.files.len() as u64 + 1;
-            file.smallest = InternalKey::new(smallest.as_slice(), 100, ValueType::Value);
-            file.largest = InternalKey::new(largest.as_slice(), 100, ValueType::Value);
+            file.smallest = InternalKey::new(smallest.as_bytes(), 100, ValueType::Value);
+            file.largest = InternalKey::new(largest.as_bytes(), 100, ValueType::Value);
             self.files.push(Arc::new(file));
         }
 
-        fn find(&self, key: &Slice) -> usize {
-            let ikey = InternalKey::new(key.as_slice(), 100, ValueType::Value);
-            let target = Slice::from(ikey.data());
-            Version::find_file(self.cmp.clone(), &self.files, &target.as_slice())
+        fn find(&self, key: &str) -> usize {
+            let ikey = InternalKey::new(key.as_bytes(), 100, ValueType::Value);
+            Version::find_file(self.cmp.clone(), &self.files, ikey.data())
         }
     }
 
     #[test]
     fn test_find_file_with_single_file() {
         let mut test_suites = FindFileTests::new();
-        assert_eq!(0, test_suites.find(&Slice::from("Foo")));
-        test_suites.generate(&Slice::from("p"), &Slice::from("q"));
+        assert_eq!(0, test_suites.find("Foo"));
+        test_suites.generate("p", "q");
         let test_cases = vec![(0, "a"), (0, "p"), (0, "q"), (1, "q1"), (1, "z")];
         for (expected, input) in test_cases {
-            assert_eq!(
-                expected,
-                test_suites.find(&Slice::from(input)),
-                "input {}",
-                input
-            );
+            assert_eq!(expected, test_suites.find(input), "input {}", input);
         }
     }
 
@@ -759,7 +751,7 @@ mod tests {
             ("400", "450"),
         ];
         for (start, end) in files {
-            test_suites.generate(&Slice::from(start), &Slice::from(end));
+            test_suites.generate(start, end);
         }
         let test_cases = vec![
             (0, "100"),
@@ -772,12 +764,7 @@ mod tests {
             (4, "451"),
         ];
         for (expected, input) in test_cases {
-            assert_eq!(
-                expected,
-                test_suites.find(&Slice::from(input)),
-                "input {}",
-                input
-            );
+            assert_eq!(expected, test_suites.find(input), "input {}", input);
         }
     }
 }

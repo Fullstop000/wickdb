@@ -384,7 +384,7 @@ mod tests {
     }
 
     fn construct_skl_from_nodes(
-        mut nodes: Vec<(Slice, usize)>,
+        nodes: Vec<(Slice, usize)>,
     ) -> Skiplist<BytewiseComparator, BlockArena> {
         if nodes.is_empty() {
             return new_test_skl();
@@ -393,7 +393,7 @@ mod tests {
         // just use MAX_HEIGHT as capacity because it's the largest value that node.height can have
         let mut prev_nodes = vec![skl.head; MAX_HEIGHT];
         let mut max_height = 1;
-        for (key, height) in nodes.drain(..) {
+        for (key, height) in nodes {
             let n = Node::new(key, height, &mut skl.arena);
             for (h, prev_node) in prev_nodes[0..height].iter().enumerate() {
                 unsafe {

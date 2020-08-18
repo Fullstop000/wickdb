@@ -472,7 +472,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         // search the memtable
         if let Some(result) = self.mem.read().unwrap().get(&lookup_key) {
             match result {
-                Ok(value) => return Ok(Some(value.into_vec())),
+                Ok(value) => return Ok(Some(value.to_vec())),
                 // mem.get only returns Err() when it get a Deletion of the key
                 Err(_) => return Ok(None),
             }
@@ -481,7 +481,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         if let Some(im_mem) = self.im_mem.read().unwrap().as_ref() {
             if let Some(result) = im_mem.get(&lookup_key) {
                 match result {
-                    Ok(value) => return Ok(Some(value.into_vec())),
+                    Ok(value) => return Ok(Some(value.to_vec())),
                     Err(_) => return Ok(None),
                 }
             }
