@@ -24,7 +24,6 @@ use crate::mem::arena::{Arena, BlockArena};
 use crate::mem::skiplist::{Skiplist, SkiplistIterator};
 use crate::util::coding::{decode_fixed_64, put_fixed_64};
 use crate::util::comparator::Comparator;
-use crate::util::slice::Slice;
 use crate::util::varint::VarintU32;
 use crate::{Error, Result};
 use std::cmp::Ordering;
@@ -136,7 +135,7 @@ impl MemTable {
     /// If memtable contains a value for key, returns it in `Some(Ok())`.
     /// If memtable contains a deletion for key, returns `Some(Err(Status::NotFound))` .
     /// If memtable does not contain the key, return `None`
-    pub fn get(&self, key: &LookupKey) -> Option<Result<Slice>> {
+    pub fn get(&self, key: &LookupKey) -> Option<Result<Vec<u8>>> {
         let mk = key.mem_key();
         let mut iter = SkiplistIterator::new(self.table.clone());
         iter.seek(mk);
@@ -155,7 +154,7 @@ impl MemTable {
                     let tag = decode_fixed_64(&ikey[key_size - INTERNAL_KEY_TAIL..]);
                     match ValueType::from(tag & 0xff as u64) {
                         ValueType::Value => {
-                            return Some(Ok(extract_varint32_encoded_slice(&mut e).into()))
+                            return Some(Ok(extract_varint32_encoded_slice(&mut e).to_vec()))
                         }
                         ValueType::Deletion => return Some(Err(Error::NotFound(None))),
                         ValueType::Unknown => { /* fallback to None*/ }

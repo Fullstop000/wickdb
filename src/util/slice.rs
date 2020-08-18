@@ -47,49 +47,14 @@ impl Slice {
         }
     }
 
-    // Returns a `Vec<u8>` copyed from inner
-    #[inline]
-    pub fn into_vec(self) -> Vec<u8> {
-        Vec::from(self.as_slice())
-    }
-
-    #[inline]
-    pub fn size(&self) -> usize {
-        self.size
-    }
-
-    #[inline]
-    pub fn remove_prefix(&mut self, n: usize) {
-        if n >= self.size {
-            self.data = ptr::null();
-            self.size = 0;
-        } else {
-            unsafe {
-                self.data = self.data.add(n);
-            }
-            self.size -= n;
-        }
-    }
-
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.data.is_null() || self.size == 0
     }
 
     #[inline]
-    pub fn as_ptr(&self) -> *const u8 {
-        self.data
-    }
-
-    #[inline]
     pub fn compare(&self, other: &Slice) -> Ordering {
         self.as_slice().cmp(other.as_slice())
-    }
-
-    #[inline]
-    pub fn clear(&mut self) {
-        self.data = ptr::null();
-        self.size = 0;
     }
 
     #[inline]
