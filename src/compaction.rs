@@ -63,11 +63,11 @@ impl CompactionInputs {
 }
 
 /// A Compaction encapsulates information about a compaction
-pub struct Compaction<F: File> {
-    options: Arc<Options>,
+pub struct Compaction<F: File, C: Comparator> {
+    options: Arc<Options<C>>,
     // Target level to be compacted
     pub level: usize,
-    pub input_version: Option<Arc<Version>>,
+    pub input_version: Option<Arc<Version<C>>>,
     // Summary of the compaction result
     pub edit: VersionEdit,
     // level n and level n + 1
@@ -103,14 +103,14 @@ pub struct Compaction<F: File> {
     // current table builder for output sst file
     // we rotate a new builder when the inputs hit
     // the `should_stop_before`
-    pub builder: Option<TableBuilder<InternalKeyComparator, F>>,
+    pub builder: Option<TableBuilder<C, InternalKeyComparator<C>, F>>,
 
     // total bytes has been written
     pub total_bytes: u64,
 }
 
-impl<O: File> Compaction<O> {
-    pub fn new(options: Arc<Options>, level: usize) -> Self {
+impl<O: File, C: Comparator + 'static> Compaction<O, C> {
+    pub fn new(options: Arc<Options<C>>, level: usize) -> Self {
         let max_levels = options.max_levels as usize;
         let mut level_ptrs = Vec::with_capacity(max_levels);
         for _ in 0..max_levels {
@@ -154,9 +154,9 @@ impl<O: File> Compaction<O> {
     ///     value: value of user key
     pub fn new_input_iterator<S: Storage + Clone + 'static>(
         &self,
-        icmp: InternalKeyComparator,
-        table_cache: TableCache<S>,
-    ) -> Result<KMergeIter<SSTableIters<S>>> {
+        icmp: InternalKeyComparator<C>,
+        table_cache: TableCache<S, C>,
+    ) -> Result<KMergeIter<SSTableIters<S, C>>> {
         let read_options = ReadOptions {
             verify_checksums: self.options.paranoid_checks,
             fill_cache: false,
@@ -190,7 +190,7 @@ impl<O: File> Compaction<O> {
 
     /// Returns true iff we should stop building the current output
     /// before processing `ikey` for too much overlapping with grand parents
-    pub fn should_stop_before(&mut self, ikey: &[u8], icmp: InternalKeyComparator) -> bool {
+    pub fn should_stop_before(&mut self, ikey: &[u8], icmp: InternalKeyComparator<C>) -> bool {
         // `seen_key` guarantees that we should continue checking for next `ikey`
         // no matter whether the first `ikey` overlaps with grand parents
         while self.grand_parent_index < self.grand_parents.len()
@@ -219,7 +219,7 @@ impl<O: File> Compaction<O> {
     pub fn key_exist_in_deeper_level(&mut self, ukey: &[u8]) -> bool {
         let v = self.input_version.as_ref().unwrap().clone();
         let icmp = v.comparator();
-        let ucmp = icmp.user_comparator.as_ref();
+        let ucmp = &icmp.user_comparator;
         let max_levels = self.options.max_levels as usize;
         if self.level + 2 < max_levels {
             for level in self.level + 2..max_levels {
@@ -269,10 +269,10 @@ impl<O: File> Compaction<O> {
 }
 
 /// Returns the minimal range that covers all entries in `files`
-pub fn base_range<'a>(
+pub fn base_range<'a, C: Comparator>(
     files: &'a [Arc<FileMetaData>],
     level: usize,
-    icmp: &InternalKeyComparator,
+    icmp: &InternalKeyComparator<C>,
 ) -> (&'a InternalKey, &'a InternalKey) {
     assert!(
         !files.is_empty(),
@@ -303,11 +303,11 @@ pub fn base_range<'a>(
 /// Returns the minimal range that covers all key ranges in `current_l_files` and `next_l_files`
 /// `current_l_files` means current level files to be compacted
 /// `next_l_files` means next level files to be compacted
-pub fn total_range<'a>(
+pub fn total_range<'a, C: Comparator>(
     current_l_files: &'a [Arc<FileMetaData>],
     next_l_files: &'a [Arc<FileMetaData>],
     level: usize,
-    icmp: &InternalKeyComparator,
+    icmp: &InternalKeyComparator<C>,
 ) -> (&'a InternalKey, &'a InternalKey) {
     let (mut smallest, mut largest) = base_range(current_l_files, level, icmp);
     if !next_l_files.is_empty() {

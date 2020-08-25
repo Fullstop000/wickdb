@@ -683,6 +683,7 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy, Default)]
     struct U64Comparator {}
     impl Comparator for U64Comparator {
         fn compare(&self, a: &[u8], b: &[u8]) -> CmpOrdering {

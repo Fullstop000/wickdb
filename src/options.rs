@@ -24,7 +24,7 @@ use crate::logger::Logger;
 use crate::snapshot::Snapshot;
 use crate::sstable::block::Block;
 use crate::storage::{File, Storage};
-use crate::util::comparator::{BytewiseComparator, Comparator};
+use crate::util::comparator::Comparator;
 use crate::LevelFilter;
 use crate::Log;
 use std::rc::Rc;
@@ -45,7 +45,7 @@ impl From<u8> for CompressionType {
 
 /// Options to control the behavior of a database (passed to `DB::Open`)
 #[derive(Clone)]
-pub struct Options {
+pub struct Options<C: Comparator> {
     // -------------------
     // Parameters that affect behavior:
     /// Comparator used to define the order of keys in the table.
@@ -54,7 +54,7 @@ pub struct Options {
     /// REQUIRES: The client must ensure that the comparator supplied
     /// here has the same name and orders keys *exactly* the same as the
     /// comparator provided to previous open calls on the same DB.
-    pub comparator: Arc<dyn Comparator>,
+    pub comparator: C,
 
     /// If true, the database will be created if it is missing.
     pub create_if_missing: bool,
@@ -171,7 +171,7 @@ pub struct Options {
     pub logger_level: LevelFilter,
 }
 
-impl Options {
+impl<C: Comparator> Options<C> {
     /// Maximum number of bytes in all compacted files.  We avoid expanding
     /// the lower level file set of a compaction if it would make the
     /// total compaction cover more than this many bytes.
@@ -182,7 +182,7 @@ impl Options {
     /// Maximum bytes of overlaps in grandparent (i.e., level+2) before we
     /// stop building a single file in a level-> level+1 compaction.
     pub(crate) fn max_grandparent_overlap_bytes(&self) -> u64 {
-        10 * self.max_file_size as u64
+        10 * self.max_file_size
     }
 
     /// Maximum bytes of total files in a given level
@@ -246,10 +246,10 @@ impl Options {
     }
 }
 
-impl Default for Options {
+impl<C: Comparator> Default for Options<C> {
     fn default() -> Self {
         Options {
-            comparator: Arc::new(BytewiseComparator::default()),
+            comparator: C::default(),
             create_if_missing: true,
             error_if_exists: false,
             paranoid_checks: false,

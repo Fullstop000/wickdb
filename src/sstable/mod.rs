@@ -442,6 +442,11 @@ mod tests {
             }
         }
     }
+    impl Default for TestComparator {
+        fn default() -> Self {
+            TestComparator::Normal(BytewiseComparator::default())
+        }
+    }
 
     impl Comparator for TestComparator {
         fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
@@ -483,7 +488,7 @@ mod tests {
         // Write key/value pairs in `data` into inner data structure
         fn finish(
             &mut self,
-            options: Arc<Options>,
+            options: Arc<Options<TestComparator>>,
             storage: &MemStorage,
             data: &[(Vec<u8>, Vec<u8>)],
         ) -> Result<()>;
@@ -509,7 +514,7 @@ mod tests {
 
         fn finish(
             &mut self,
-            options: Arc<Options>,
+            options: Arc<Options<TestComparator>>,
             _storage: &MemStorage,
             data: &[(Vec<u8>, Vec<u8>)],
         ) -> Result<()> {
@@ -532,12 +537,12 @@ mod tests {
     }
 
     struct TableConstructor {
-        table: Option<Arc<Table<FileNode>>>,
+        table: Option<Arc<Table<FileNode, TestComparator>>>,
         cmp: TestComparator,
     }
 
     impl Constructor for TableConstructor {
-        type Iter = TableIterator<TestComparator, FileNode>;
+        type Iter = TableIterator<TestComparator, TestComparator, FileNode>;
 
         fn new(is_reversed: bool) -> Self {
             Self {
@@ -548,7 +553,7 @@ mod tests {
 
         fn finish(
             &mut self,
-            options: Arc<Options>,
+            options: Arc<Options<TestComparator>>,
             storage: &MemStorage,
             data: &[(Vec<u8>, Vec<u8>)],
         ) -> Result<()> {
@@ -714,14 +719,14 @@ mod tests {
     }
 
     struct MemTableConstructor {
-        inner: MemTable,
+        inner: MemTable<TestComparator>,
     }
 
     impl Constructor for MemTableConstructor {
-        type Iter = KeyConvertingIterator<MemTableIterator>;
+        type Iter = KeyConvertingIterator<MemTableIterator<TestComparator>>;
 
         fn new(is_reversed: bool) -> Self {
-            let icmp = InternalKeyComparator::new(Arc::new(TestComparator::new(is_reversed)));
+            let icmp = InternalKeyComparator::new(TestComparator::new(is_reversed));
             Self {
                 inner: MemTable::new(icmp),
             }
@@ -729,7 +734,7 @@ mod tests {
 
         fn finish(
             &mut self,
-            _options: Arc<Options>,
+            _options: Arc<Options<TestComparator>>,
             _storage: &MemStorage,
             data: &[(Vec<u8>, Vec<u8>)],
         ) -> Result<()> {
@@ -750,11 +755,11 @@ mod tests {
     }
 
     struct DBConstructor {
-        inner: WickDB<MemStorage>,
+        inner: WickDB<MemStorage, TestComparator>,
     }
 
     struct DBIterWrapper {
-        inner: WickDBIterator<MemStorage>,
+        inner: WickDBIterator<MemStorage, TestComparator>,
         key_buf: Vec<u8>,
         value_buf: Vec<u8>,
     }
@@ -815,18 +820,18 @@ mod tests {
         type Iter = DBIterWrapper;
 
         fn new(is_reversed: bool) -> Self {
-            let mut options = Options::default();
+            let mut options = Options::<TestComparator>::default();
             let env = MemStorage::default();
-            options.comparator = Arc::new(TestComparator::new(is_reversed));
             options.write_buffer_size = 10000; // Something small to force merging
             options.error_if_exists = true;
+            options.comparator = TestComparator::new(is_reversed);
             let db = WickDB::open_db(options, "table_testdb", env).expect("could not open db");
             Self { inner: db }
         }
 
         fn finish(
             &mut self,
-            _options: Arc<Options>,
+            _options: Arc<Options<TestComparator>>,
             _storage: &MemStorage,
             data: &[(Vec<u8>, Vec<u8>)],
         ) -> Result<()> {
@@ -876,7 +881,7 @@ mod tests {
         // Finish constructing the data structure with all the keys that have
         // been added so far.  Returns the keys in sorted order and stores the
         // key/value pairs in `data`
-        fn finish(&mut self, options: Arc<Options>) -> Vec<Vec<u8>> {
+        fn finish(&mut self, options: Arc<Options<TestComparator>>) -> Vec<Vec<u8>> {
             let cmp = options.comparator.clone();
             // Sort the data
             self.data.sort_by(|(a, _), (b, _)| cmp.compare(&a, &b));
@@ -892,7 +897,7 @@ mod tests {
     }
 
     struct TestHarness<C: Constructor> {
-        options: Arc<Options>,
+        options: Arc<Options<TestComparator>>,
         reverse_cmp: bool,
         inner: CommonConstructor<C>,
         rand: ThreadRng,
@@ -900,13 +905,13 @@ mod tests {
 
     impl<C: Constructor> TestHarness<C> {
         fn new(reverse_cmp: bool, restart_interval: usize) -> Self {
-            let mut options = Options::default();
+            let mut options = Options::<TestComparator>::default();
             options.block_restart_interval = restart_interval;
             // Use shorter block size for tests to exercise block boundary
             // conditions more
             options.block_size = 256;
             options.paranoid_checks = true;
-            options.comparator = Arc::new(TestComparator::new(reverse_cmp));
+            options.comparator = TestComparator::new(reverse_cmp);
             let constructor = C::new(reverse_cmp);
             let storage = MemStorage::default();
             TestHarness {

@@ -21,7 +21,7 @@ use std::cmp::{min, Ordering};
 /// used as keys in an sstable or a database.  A Comparator implementation
 /// must be thread-safe since we may invoke its methods concurrently
 /// from multiple threads.
-pub trait Comparator: Send + Sync {
+pub trait Comparator: Send + Sync + Clone + Default {
     /// Three-way comparison. Returns value:
     ///   `Ordering::Less`    iff `a` < `b`
     ///   `Ordering::Equal`   iff `a` = `b`

@@ -37,10 +37,10 @@ enum Direction {
 /// `DBIterator` combines multiple entries for the same userkey found in the DB
 /// representation into a single entry while accounting for sequence
 /// numbers, deletion markers, overwrites, etc
-pub struct DBIterator<I: Iterator, S: Storage + Clone + 'static> {
+pub struct DBIterator<I: Iterator, S: Storage + Clone + 'static, C: Comparator> {
     valid: bool,
-    db: Arc<DBImpl<S>>,
-    ucmp: Arc<dyn Comparator>,
+    db: Arc<DBImpl<S, C>>,
+    ucmp: C,
     // The newest sequence acquired.
     // Any key newer than this will be ignored
     sequence: u64,
@@ -56,7 +56,7 @@ pub struct DBIterator<I: Iterator, S: Storage + Clone + 'static> {
     saved_value: Vec<u8>,
 }
 
-impl<I: Iterator, S: Storage + Clone> Iterator for DBIterator<I, S> {
+impl<I: Iterator, S: Storage + Clone, C: Comparator + 'static> Iterator for DBIterator<I, S, C> {
     fn valid(&self) -> bool {
         self.valid
     }
@@ -175,8 +175,8 @@ impl<I: Iterator, S: Storage + Clone> Iterator for DBIterator<I, S> {
     }
 }
 
-impl<I: Iterator, S: Storage + Clone> DBIterator<I, S> {
-    pub fn new(iter: I, db: Arc<DBImpl<S>>, sequence: u64, ucmp: Arc<dyn Comparator>) -> Self {
+impl<I: Iterator, S: Storage + Clone, C: Comparator + 'static> DBIterator<I, S, C> {
+    pub fn new(iter: I, db: Arc<DBImpl<S, C>>, sequence: u64, ucmp: C) -> Self {
         Self {
             valid: false,
             db: db.clone(),
@@ -334,7 +334,8 @@ impl<C: Comparator, M: Iterator, T: Iterator> DBIteratorCore<C, M, T> {
 }
 
 impl<C: Comparator, M: Iterator, T: Iterator> KMergeCore for DBIteratorCore<C, M, T> {
-    fn cmp(&self) -> &dyn Comparator {
+    type Cmp = C;
+    fn cmp(&self) -> &Self::Cmp {
         &self.cmp
     }
 
@@ -410,7 +411,7 @@ impl<C: Comparator, M: Iterator, T: Iterator> KMergeCore for DBIteratorCore<C, M
 
     fn for_not_ith<F>(&mut self, n: usize, mut f: F)
     where
-        F: FnMut(&mut dyn Iterator, &dyn Comparator),
+        F: FnMut(&mut dyn Iterator, &Self::Cmp),
     {
         if n < self.mem_iters.len() {
             for (i, child) in self.mem_iters.iter_mut().enumerate() {

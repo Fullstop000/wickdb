@@ -32,8 +32,8 @@ use std::sync::Arc;
 /// A `Table` is a sorted map from strings to strings, which must be immutable and persistent.
 /// A `Table` may be safely accessed from multiple threads
 /// without external synchronization.
-pub struct Table<F: File> {
-    options: Arc<Options>,
+pub struct Table<F: File, UC: Comparator> {
+    options: Arc<Options<UC>>,
     file: F,
     cache_id: u64,
     filter_reader: Option<FilterBlockReader>,
@@ -42,15 +42,15 @@ pub struct Table<F: File> {
     index_block: Block,
 }
 
-impl<F: File> Table<F> {
+impl<F: File, UC: Comparator> Table<F, UC> {
     /// Attempt to open the table that is stored in bytes `[0..size)`
     /// of `file`, and read the metadata entries necessary to allow
     /// retrieving data from the table.
-    pub fn open<C: Comparator + Clone>(
+    pub fn open<TC: Comparator>(
         file: F,
         size: u64,
-        options: Arc<Options>,
-        cmp: C,
+        options: Arc<Options<UC>>,
+        cmp: TC,
     ) -> Result<Self> {
         if size < FOOTER_ENCODED_LENGTH as u64 {
             return Err(Error::Corruption(
@@ -116,12 +116,12 @@ impl<F: File> Table<F> {
     }
 
     /// Converts an BlockHandle into an iterator over the contents of the corresponding block.
-    pub fn block_reader<C: Comparator + Clone>(
+    pub fn block_reader<CC: Comparator>(
         &self,
-        cmp: C,
+        cmp: CC,
         data_block_handle: BlockHandle,
         options: ReadOptions,
-    ) -> Result<BlockIterator<C>> {
+    ) -> Result<BlockIterator<CC>> {
         let iter = if let Some(cache) = &self.options.block_cache {
             let mut cache_key_buffer = vec![0; 16];
             put_fixed_64(&mut cache_key_buffer, self.cache_id);
@@ -134,9 +134,6 @@ impl<F: File> Table<F> {
                 let new_block = Block::new(data)?;
                 let b = Arc::new(new_block);
                 let iter = b.iter(cmp);
-                // FIXME:
-                // If we don't add block into the cache and use `b.iter`
-                // the `Slice` returns by `iter.key()` may cause UB
                 if options.fill_cache {
                     cache.insert(cache_key_buffer, b, charge);
                 }
@@ -152,14 +149,15 @@ impl<F: File> Table<F> {
 
     /// Finds the first entry with the key equal or greater than target and
     /// returns the block iterator direclty
-    /// The given `key` is an internal key
     ///
-    pub fn internal_get<C: Comparator + Clone>(
+    /// The given `key` is an internal key so the `cmp` must be a InternalKeyComparator
+    ///
+    pub fn internal_get<TC: Comparator>(
         &self,
         options: ReadOptions,
-        cmp: C,
+        cmp: TC,
         key: &[u8],
-    ) -> Result<Option<BlockIterator<C>>> {
+    ) -> Result<Option<BlockIterator<TC>>> {
         let mut index_iter = self.index_block.iter(cmp.clone());
         // seek to the first 'last key' bigger than 'key'
         index_iter.seek(key);
@@ -204,7 +202,7 @@ impl<F: File> Table<F> {
     /// be close to the file length.
     /// Temporary only used in tests.
     #[allow(dead_code)]
-    pub(crate) fn approximate_offset_of<C: Comparator + Clone>(&self, cmp: C, key: &[u8]) -> u64 {
+    pub(crate) fn approximate_offset_of<TC: Comparator>(&self, cmp: TC, key: &[u8]) -> u64 {
         let mut index_iter = self.index_block.iter(cmp);
         index_iter.seek(key);
         if index_iter.valid() {
@@ -220,14 +218,14 @@ impl<F: File> Table<F> {
     }
 }
 
-pub struct TableIterFactory<C: Comparator + Clone, F: File> {
+pub struct TableIterFactory<UC: Comparator, TC: Comparator, F: File> {
     options: ReadOptions,
-    table: Arc<Table<F>>,
-    cmp: C,
+    table: Arc<Table<F, UC>>,
+    cmp: TC,
 }
 
-impl<C: Comparator + Clone, F: File> DerivedIterFactory for TableIterFactory<C, F> {
-    type Iter = BlockIterator<C>;
+impl<C: Comparator, TC: Comparator, F: File> DerivedIterFactory for TableIterFactory<C, TC, F> {
+    type Iter = BlockIterator<TC>;
     fn derive(&self, value: &[u8]) -> Result<Self::Iter> {
         BlockHandle::decode_from(value).and_then(|(handle, _)| {
             self.table
@@ -236,7 +234,8 @@ impl<C: Comparator + Clone, F: File> DerivedIterFactory for TableIterFactory<C, 
     }
 }
 
-pub type TableIterator<C, F> = ConcatenateIterator<BlockIterator<C>, TableIterFactory<C, F>>;
+pub type TableIterator<C, TC, F> =
+    ConcatenateIterator<BlockIterator<TC>, TableIterFactory<C, TC, F>>;
 
 /// Create a new `ConcatenateIterator` as table iterator.
 /// This iterator is able to yield all the key/values in the given `table` file
@@ -244,11 +243,11 @@ pub type TableIterator<C, F> = ConcatenateIterator<BlockIterator<C>, TableIterFa
 /// Entry format:
 ///     key: internal key
 ///     value: value of user key
-pub fn new_table_iterator<C: Comparator + Clone, F: File>(
-    cmp: C,
-    table: Arc<Table<F>>,
+pub fn new_table_iterator<C: Comparator, TC: Comparator, F: File>(
+    cmp: TC,
+    table: Arc<Table<F, C>>,
     options: ReadOptions,
-) -> TableIterator<C, F> {
+) -> TableIterator<C, TC, F> {
     let index_iter = table.index_block.iter(cmp.clone());
     let factory = TableIterFactory {
         options,
@@ -261,16 +260,16 @@ pub fn new_table_iterator<C: Comparator + Clone, F: File>(
 /// Temporarily stores the contents of the table it is
 /// building in .sst file but does not close the file. It is up to the
 /// caller to close the file after calling `Finish()`.
-pub struct TableBuilder<C: Comparator + Clone, F: File> {
-    options: Arc<Options>,
-    cmp: C,
+pub struct TableBuilder<UC: Comparator, TC: Comparator, F: File> {
+    options: Arc<Options<UC>>,
+    cmp: TC,
     // underlying sst file
     file: F,
     // the written data length
     // updated only after the pending_handle is stored in the index block
     offset: u64,
-    data_block: BlockBuilder<C>,
-    index_block: BlockBuilder<C>,
+    data_block: BlockBuilder<TC>,
+    index_block: BlockBuilder<TC>,
     // the last added key
     // can be used when adding a new entry into index block
     last_key: Vec<u8>,
@@ -288,8 +287,8 @@ pub struct TableBuilder<C: Comparator + Clone, F: File> {
     pending_handle: BlockHandle,
 }
 
-impl<C: Comparator + Clone, F: File> TableBuilder<C, F> {
-    pub fn new(file: F, cmp: C, options: Arc<Options>) -> Self {
+impl<UC: Comparator, TC: Comparator, F: File> TableBuilder<UC, TC, F> {
+    pub fn new(file: F, cmp: TC, options: Arc<Options<UC>>) -> Self {
         let opt = options.clone();
         let db_builder = BlockBuilder::new(options.block_restart_interval, cmp.clone());
         let ib_builder = BlockBuilder::new(options.block_restart_interval, cmp.clone());
@@ -625,7 +624,7 @@ mod tests {
     #[test]
     fn test_build_empty_table_with_meta_block() {
         let s = MemStorage::default();
-        let mut o = Options::default();
+        let mut o = Options::<BytewiseComparator>::default();
         let bf = BloomFilter::new(16);
         o.filter_policy = Some(Rc::new(bf));
         let opt = Arc::new(o);
@@ -644,7 +643,7 @@ mod tests {
     fn test_build_empty_table_without_meta_block() {
         let s = MemStorage::default();
         let new_file = s.create("test").unwrap();
-        let opt = Arc::new(Options::default()); // no filter block on default
+        let opt = Arc::new(Options::<BytewiseComparator>::default()); // no filter block on default
         let cmp = BytewiseComparator::default();
         let mut tb = TableBuilder::new(new_file, cmp, opt.clone());
         tb.finish(false).unwrap();
@@ -664,7 +663,7 @@ mod tests {
     fn test_table_add_consistency() {
         let s = MemStorage::default();
         let new_file = s.create("test").expect("file create should work");
-        let opt = Arc::new(Options::default());
+        let opt = Arc::new(Options::<BytewiseComparator>::default());
         let mut tb = TableBuilder::new(new_file, BytewiseComparator::default(), opt.clone());
         tb.add(b"222", b"").unwrap();
         tb.add(b"1", b"").unwrap();
@@ -674,7 +673,7 @@ mod tests {
     fn test_block_write_and_read() {
         let s = MemStorage::default();
         let new_file = s.create("test").expect("file create should work");
-        let opt = Arc::new(Options::default());
+        let opt = Arc::new(Options::<BytewiseComparator>::default());
         let cmp = BytewiseComparator::default();
         let mut tb = TableBuilder::new(new_file, cmp, opt.clone());
         let test_pairs = vec![("", "test"), ("aaa", "123"), ("bbb", "456"), ("ccc", "789")];
@@ -706,7 +705,7 @@ mod tests {
     fn test_table_write_and_read() {
         let s = MemStorage::default();
         let new_file = s.create("test").unwrap();
-        let opt = Arc::new(Options::default());
+        let opt = Arc::new(Options::<BytewiseComparator>::default());
         let cmp = BytewiseComparator::default();
         let mut tb = TableBuilder::new(new_file, cmp, opt.clone());
         let tests = vec![("", "test"), ("a", "aa"), ("b", "bb")];

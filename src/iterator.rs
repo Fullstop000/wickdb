@@ -281,8 +281,9 @@ impl<T: KMergeCore> KMergeIter<T> {
 
 /// An trait defines the operation in k merge sort
 pub trait KMergeCore {
+    type Cmp: Comparator;
     /// Returns current comparator
-    fn cmp(&self) -> &dyn Comparator;
+    fn cmp(&self) -> &Self::Cmp;
 
     /// The inner child iterators size
     fn iters_len(&self) -> usize;
@@ -335,7 +336,7 @@ pub trait KMergeCore {
     /// Iterate each child iterator except the ith iterator and call `f`
     fn for_not_ith<F>(&mut self, i: usize, f: F)
     where
-        F: FnMut(&mut dyn Iterator, &dyn Comparator);
+        F: FnMut(&mut dyn Iterator, &Self::Cmp);
 
     /// Returns `Err` if inner children has errors.
     fn take_err(&mut self) -> Result<()>;
@@ -431,7 +432,8 @@ mod tests {
     }
 
     impl<I: Iterator, C: Comparator> KMergeCore for SimpleKMerger<I, C> {
-        fn cmp(&self) -> &dyn Comparator {
+        type Cmp = C;
+        fn cmp(&self) -> &Self::Cmp {
             &self.cmp
         }
 
@@ -480,7 +482,7 @@ mod tests {
 
         fn for_not_ith<F>(&mut self, n: usize, mut f: F)
         where
-            F: FnMut(&mut dyn Iterator, &dyn Comparator),
+            F: FnMut(&mut dyn Iterator, &Self::Cmp),
         {
             for (i, child) in self.children.iter_mut().enumerate() {
                 if i != n {
