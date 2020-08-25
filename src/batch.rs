@@ -19,7 +19,7 @@ use crate::db::format::ValueType;
 use crate::mem::MemTable;
 use crate::util::coding::{decode_fixed_32, decode_fixed_64, encode_fixed_32, encode_fixed_64};
 use crate::util::varint::VarintU32;
-use crate::{Error, Result};
+use crate::{Comparator, Error, Result};
 
 pub const HEADER_SIZE: usize = 12;
 
@@ -115,7 +115,7 @@ impl WriteBatch {
     }
 
     /// Insert all the records in the batch into the given `MemTable`
-    pub fn insert_into(&self, mem: &MemTable) -> Result<()> {
+    pub fn insert_into<C: Comparator>(&self, mem: &MemTable<C>) -> Result<()> {
         if self.contents.len() < HEADER_SIZE {
             return Err(Error::Corruption(
                 "[batch] malformed WriteBatch (too small)".to_owned(),
@@ -206,12 +206,9 @@ mod tests {
     use crate::iterator::Iterator;
     use crate::mem::MemTable;
     use crate::util::comparator::BytewiseComparator;
-    use std::sync::Arc;
 
     fn print_contents(batch: &WriteBatch) -> String {
-        let mem = MemTable::new(InternalKeyComparator::new(Arc::new(
-            BytewiseComparator::default(),
-        )));
+        let mem = MemTable::new(InternalKeyComparator::new(BytewiseComparator::default()));
         let result = batch.insert_into(&mem);
         let mut iter = mem.iter();
         iter.seek_to_first();

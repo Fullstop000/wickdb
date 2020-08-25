@@ -37,6 +37,7 @@ use crate::util::slice::Slice;
 use crate::version::version_edit::{FileMetaData, VersionEdit};
 use crate::version::version_set::{SSTableIters, VersionSet};
 use crate::version::Version;
+use crate::Comparator;
 use crate::{Error, Result};
 use crossbeam_channel::{Receiver, Sender};
 use crossbeam_utils::sync::ShardedLock;
@@ -88,21 +89,26 @@ pub trait DB {
 /// The wrapper of `DBImpl` for concurrency control.
 /// `WickDB` is thread safe and is able to be shared by `clone()` in different threads.
 #[derive(Clone)]
-pub struct WickDB<S: Storage + Clone + 'static> {
-    inner: Arc<DBImpl<S>>,
+pub struct WickDB<S: Storage + Clone + 'static, C: Comparator> {
+    inner: Arc<DBImpl<S, C>>,
     shutdown_batch_processing_thread: (Sender<()>, Receiver<()>),
     shutdown_compaction_thread: (Sender<()>, Receiver<()>),
 }
 
-pub type WickDBIterator<S> = DBIterator<
+pub type WickDBIterator<S, C> = DBIterator<
     KMergeIter<
-        DBIteratorCore<InternalKeyComparator, MemTableIterator, KMergeIter<SSTableIters<S>>>,
+        DBIteratorCore<
+            InternalKeyComparator<C>,
+            MemTableIterator<C>,
+            KMergeIter<SSTableIters<S, C>>,
+        >,
     >,
     S,
+    C,
 >;
 
-impl<S: Storage + Clone> DB for WickDB<S> {
-    type Iterator = WickDBIterator<S>;
+impl<S: Storage + Clone, C: Comparator + 'static> DB for WickDB<S, C> {
+    type Iterator = WickDBIterator<S, C>;
 
     fn put(&self, options: WriteOptions, key: &[u8], value: &[u8]) -> Result<()> {
         let mut batch = WriteBatch::default();
@@ -174,9 +180,9 @@ impl<S: Storage + Clone> DB for WickDB<S> {
     }
 }
 
-impl<S: Storage + Clone> WickDB<S> {
+impl<S: Storage + Clone, C: Comparator + 'static> WickDB<S, C> {
     /// Create a new WickDB
-    pub fn open_db(mut options: Options, db_name: &'static str, storage: S) -> Result<Self> {
+    pub fn open_db(mut options: Options<C>, db_name: &'static str, storage: S) -> Result<Self> {
         options.initialize(db_name.to_owned(), &storage);
         debug!("Open db: '{}'", db_name);
         let mut db = DBImpl::new(options, db_name, storage);
@@ -367,10 +373,10 @@ impl<S: Storage + Clone> WickDB<S> {
     }
 }
 
-pub struct DBImpl<S: Storage + Clone> {
+pub struct DBImpl<S: Storage + Clone, C: Comparator> {
     env: S,
-    internal_comparator: InternalKeyComparator,
-    options: Arc<Options>,
+    internal_comparator: InternalKeyComparator<C>,
+    options: Arc<Options<C>>,
     // The physical path of wickdb
     db_name: &'static str,
     db_lock: Option<S::F>,
@@ -382,10 +388,10 @@ pub struct DBImpl<S: Storage + Clone> {
     process_batch_sem: Condvar,
 
     // the table cache
-    table_cache: TableCache<S>,
+    table_cache: TableCache<S, C>,
 
     // The version set
-    versions: Mutex<VersionSet<S>>,
+    versions: Mutex<VersionSet<S, C>>,
 
     // The queue for ManualCompaction
     // All the compaction will be executed one by one once compaction is triggered
@@ -400,20 +406,20 @@ pub struct DBImpl<S: Storage + Clone> {
     // Though Memtable is thread safe with multiple readers and single writers and
     // all relative methods are using immutable borrowing,
     // we still need to mutate the field `mem` and `im_mem` in few situations.
-    mem: ShardedLock<MemTable>,
+    mem: ShardedLock<MemTable<C>>,
     // There is a compacted immutable table or not
-    im_mem: ShardedLock<Option<MemTable>>,
+    im_mem: ShardedLock<Option<MemTable<C>>>,
     // Have we encountered a background error in paranoid mode
     bg_error: RwLock<Option<Error>>,
     // Whether the db is closing
     is_shutting_down: AtomicBool,
 }
 
-unsafe impl<S: Storage + Clone> Sync for DBImpl<S> {}
+unsafe impl<S: Storage + Clone, C: Comparator> Sync for DBImpl<S, C> {}
 
-unsafe impl<S: Storage + Clone> Send for DBImpl<S> {}
+unsafe impl<S: Storage + Clone, C: Comparator> Send for DBImpl<S, C> {}
 
-impl<S: Storage + Clone> Drop for DBImpl<S> {
+impl<S: Storage + Clone, C: Comparator> Drop for DBImpl<S, C> {
     #[allow(unused_must_use)]
     fn drop(&mut self) {
         if !self.is_shutting_down.load(Ordering::Acquire) {
@@ -422,7 +428,7 @@ impl<S: Storage + Clone> Drop for DBImpl<S> {
     }
 }
 
-impl<S: Storage + Clone> DBImpl<S> {
+impl<S: Storage + Clone, C: Comparator> DBImpl<S, C> {
     fn close(&self) -> Result<()> {
         self.is_shutting_down.store(true, Ordering::Release);
         match &self.db_lock {
@@ -432,8 +438,8 @@ impl<S: Storage + Clone> DBImpl<S> {
     }
 }
 
-impl<S: Storage + Clone + 'static> DBImpl<S> {
-    fn new(options: Options, db_name: &'static str, storage: S) -> Self {
+impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
+    fn new(options: Options<C>, db_name: &'static str, storage: S) -> Self {
         let o = Arc::new(options);
         let icmp = InternalKeyComparator::new(o.comparator.clone());
         Self {
@@ -610,7 +616,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
     // Replays the edits in the named log file and returns the last sequence of insertions
     fn replay_log_file(
         &self,
-        versions: &mut MutexGuard<VersionSet<S>>,
+        versions: &mut MutexGuard<VersionSet<S, C>>,
         log_number: u64,
         last_log: bool,
         save_manifest: &mut bool,
@@ -703,7 +709,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
     }
 
     // Delete any unneeded files and stale in-memory entries.
-    fn delete_obsolete_files(&self, mut versions: MutexGuard<VersionSet<S>>) {
+    fn delete_obsolete_files(&self, mut versions: MutexGuard<VersionSet<S, C>>) {
         if self.bg_error.read().is_err() {
             // After a background error, we don't know whether a new version may
             // or may not have been committed, so we cannot safely garbage collect
@@ -825,7 +831,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
     // This method acquires the mutex of `VersionSet` and deliver it to the caller.
     // The `force` flag is used for forcing to compact current memtable into level 0
     // sst files
-    fn make_room_for_write(&self, mut force: bool) -> Result<MutexGuard<VersionSet<S>>> {
+    fn make_room_for_write(&self, mut force: bool) -> Result<MutexGuard<VersionSet<S, C>>> {
         let mut allow_delay = !force;
         let mut versions = self.versions.lock().unwrap();
         loop {
@@ -1080,7 +1086,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
 
     // Merging files in level n into file in level n + 1 and
     // keep the still-in-use files
-    fn do_compaction(&self, c: &mut Compaction<S::F>) -> MutexGuard<VersionSet<S>> {
+    fn do_compaction(&self, c: &mut Compaction<S::F, C>) -> MutexGuard<VersionSet<S, C>> {
         let now = SystemTime::now();
         let mut input_iter = match c
             .new_input_iterator(self.internal_comparator.clone(), self.table_cache.clone())
@@ -1101,7 +1107,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
         let mut last_sequence_for_key = u64::max_value();
 
         let icmp = self.internal_comparator.clone();
-        let ucmp = icmp.user_comparator.as_ref();
+        let ucmp = icmp.user_comparator.clone();
         let mut status = Ok(());
         // Iterate every key
         while input_iter.valid() && !self.is_shutting_down.load(Ordering::Acquire) {
@@ -1257,7 +1263,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
     // 2. DB is not shutting down
     // 3. no error has been encountered
     // 4. there is an immutable table or a manual compaction request or current version needs to be compacted
-    fn maybe_schedule_compaction(&self, version: Arc<Version>) {
+    fn maybe_schedule_compaction(&self, version: Arc<Version<C>>) {
         if self.background_compaction_scheduled.load(Ordering::Acquire)
             // Already scheduled
             || self.is_shutting_down.load(Ordering::Acquire)
@@ -1283,7 +1289,7 @@ impl<S: Storage + Clone + 'static> DBImpl<S> {
     // Finish the current output file by calling `builder.finish` and insert it into the table cache
     fn finish_output_file(
         &self,
-        c: &mut Compaction<S::F>,
+        c: &mut Compaction<S::F, C>,
         input_iter_status: Result<()>,
     ) -> Result<()> {
         assert!(!c.outputs.is_empty());
@@ -1360,11 +1366,11 @@ struct BatchTask {
 // meta will be filled with metadata about the generated table.
 // If no data is present in iter, `meta.file_size` will be set to
 // zero, and no Table file will be produced.
-pub(crate) fn build_table<S: Storage + Clone>(
-    options: Arc<Options>,
+pub(crate) fn build_table<S: Storage + Clone, C: Comparator + 'static>(
+    options: Arc<Options<C>>,
     storage: &S,
     db_name: &str,
-    table_cache: &TableCache<S>,
+    table_cache: &TableCache<S, C>,
     iter: &mut dyn Iterator,
     meta: &mut FileMetaData,
 ) -> Result<()> {
@@ -1426,13 +1432,13 @@ pub(crate) fn build_table<S: Storage + Clone>(
 mod tests {
     use super::*;
     use crate::storage::mem::MemStorage;
-    use crate::{BloomFilter, CompressionType};
+    use crate::{BloomFilter, BytewiseComparator, CompressionType};
     use std::ops::Deref;
     use std::rc::Rc;
     use std::str;
 
-    impl<S: Storage + Clone> WickDB<S> {
-        fn options(&self) -> Arc<Options> {
+    impl<S: Storage + Clone, C: Comparator + 'static> WickDB<S, C> {
+        fn options(&self) -> Arc<Options<C>> {
             self.inner.options.clone()
         }
 
@@ -1478,7 +1484,7 @@ mod tests {
         }
     }
 
-    fn new_test_options(o: TestOption) -> Options {
+    fn new_test_options(o: TestOption) -> Options<BytewiseComparator> {
         let opt = match o {
             TestOption::Default => Options::default(),
             TestOption::Reuse => {
@@ -1506,8 +1512,8 @@ mod tests {
         // Used as the db's inner storage
         store: MemStorage,
         // Used as the db's options
-        opt: Options,
-        db: WickDB<MemStorage>,
+        opt: Options<BytewiseComparator>,
+        db: WickDB<MemStorage, BytewiseComparator>,
     }
 
     fn iter_to_string(iter: &dyn Iterator) -> String {
@@ -1524,7 +1530,7 @@ mod tests {
 
     fn cases<F>(mut opt_hook: F) -> Vec<DBTest>
     where
-        F: FnMut(Options) -> Options,
+        F: FnMut(Options<BytewiseComparator>) -> Options<BytewiseComparator>,
     {
         vec![
             TestOption::Default,
@@ -1541,7 +1547,7 @@ mod tests {
     }
 
     impl DBTest {
-        fn new(opt_type: TestOption, opt: Options) -> Self {
+        fn new(opt_type: TestOption, opt: Options<BytewiseComparator>) -> Self {
             let store = MemStorage::default();
             let name = "db_test";
             let db = WickDB::open_db(opt.clone(), name, store.clone()).unwrap();
@@ -1753,7 +1759,7 @@ mod tests {
     }
 
     impl Deref for DBTest {
-        type Target = WickDB<MemStorage>;
+        type Target = WickDB<MemStorage, BytewiseComparator>;
         fn deref(&self) -> &Self::Target {
             &self.db
         }

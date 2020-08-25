@@ -23,7 +23,6 @@ use std::cmp::Ordering;
 use std::fmt::{Debug, Error, Formatter};
 use std::rc::Rc;
 use std::str;
-use std::sync::Arc;
 
 /// The max key sequence number. The value is 2^56 - 1 because the seq number
 /// only takes 56 bits when is serialized to `InternalKey`
@@ -261,23 +260,21 @@ impl LookupKey {
 ///    increasing user key (according to user-supplied comparator)
 ///    decreasing sequence number
 ///    decreasing type (though sequence# should be enough to disambiguate)
-#[derive(Clone)]
-// TODO: Make this impl Copy
-pub struct InternalKeyComparator {
+#[derive(Clone, Default)]
+pub struct InternalKeyComparator<C: Comparator> {
     /// The comparator defined in `Options`
-    // TODO: Remove this Arc
-    pub user_comparator: Arc<dyn Comparator>,
+    pub user_comparator: C,
 }
 
-impl InternalKeyComparator {
-    pub fn new(ucmp: Arc<dyn Comparator>) -> Self {
+impl<C: Comparator> InternalKeyComparator<C> {
+    pub fn new(ucmp: C) -> Self {
         InternalKeyComparator {
             user_comparator: ucmp,
         }
     }
 }
 
-impl Comparator for InternalKeyComparator {
+impl<C: Comparator> Comparator for InternalKeyComparator<C> {
     fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
         let ua = extract_user_key(a);
         let ub = extract_user_key(b);
@@ -473,7 +470,7 @@ mod tests {
 
     #[test]
     fn test_icmp_cmp() {
-        let icmp = InternalKeyComparator::new(Arc::new(BytewiseComparator::default()));
+        let icmp = InternalKeyComparator::new(BytewiseComparator::default());
         let tests = vec![
             (
                 ("", 100, ValueType::Value),
@@ -547,7 +544,7 @@ mod tests {
                 ("foobar", 100, ValueType::Value),
             ),
         ];
-        let icmp = InternalKeyComparator::new(Arc::new(BytewiseComparator::default()));
+        let icmp = InternalKeyComparator::new(BytewiseComparator::default());
         for (a, b, expected) in tests {
             let ka = InternalKey::new(a.0.as_bytes(), a.1, a.2);
             let kb = InternalKey::new(b.0.as_bytes(), b.1, b.2);
@@ -574,7 +571,7 @@ mod tests {
                 (vec![255u8, 255u8], 100, ValueType::Value),
             ),
         ];
-        let icmp = InternalKeyComparator::new(Arc::new(BytewiseComparator::default()));
+        let icmp = InternalKeyComparator::new(BytewiseComparator::default());
         for (k, expected) in tests {
             assert_eq!(
                 icmp.successor(InternalKey::new(k.0.as_slice(), k.1, k.2).data()),

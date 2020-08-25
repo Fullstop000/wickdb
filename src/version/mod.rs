@@ -58,9 +58,9 @@ pub mod version_set;
 /// Finally, for every internal key in a table at level X, there is no internal
 /// key in a higher level table that has both the same user key and a higher
 /// sequence number.
-pub struct Version {
-    options: Arc<Options>,
-    icmp: InternalKeyComparator,
+pub struct Version<C: Comparator> {
+    options: Arc<Options<C>>,
+    icmp: InternalKeyComparator<C>,
     // files per level in this version
     // sorted by the smallest key in FileMetaData
     // TODO: is this `Arc` necessary ?
@@ -96,8 +96,8 @@ impl SeekStats {
     }
 }
 
-impl Version {
-    pub fn new(options: Arc<Options>, icmp: InternalKeyComparator) -> Self {
+impl<C: Comparator + 'static> Version<C> {
+    pub fn new(options: Arc<Options<C>>, icmp: InternalKeyComparator<C>) -> Self {
         let max_levels = options.max_levels as usize;
         let mut files = Vec::with_capacity(max_levels);
         for _ in 0..max_levels {
@@ -119,11 +119,11 @@ impl Version {
         &self,
         options: ReadOptions,
         key: LookupKey,
-        table_cache: &TableCache<S>,
+        table_cache: &TableCache<S, C>,
     ) -> Result<(Option<Vec<u8>>, SeekStats)> {
         let ikey = key.internal_key();
         let ukey = key.user_key();
-        let ucmp = self.icmp.user_comparator.as_ref();
+        let ucmp = self.icmp.user_comparator.clone();
         let mut seek_stats = SeekStats::new();
         for (level, files) in self.files.iter().enumerate() {
             let mut files_to_seek = vec![];
@@ -236,7 +236,7 @@ impl Version {
     /// Binary search given files to find earliest index of index whose largest ikey >= given ikey.
     /// If not found, returns the length of files.
     pub fn find_file(
-        icmp: InternalKeyComparator,
+        icmp: InternalKeyComparator<C>,
         files: &[Arc<FileMetaData>],
         ikey: &[u8],
     ) -> usize {
@@ -331,7 +331,7 @@ impl Version {
 
     /// Returns `icmp`
     #[inline]
-    pub fn comparator(&self) -> InternalKeyComparator {
+    pub fn comparator(&self) -> InternalKeyComparator<C> {
         self.icmp.clone()
     }
 
@@ -487,7 +487,7 @@ impl Version {
     pub fn approximate_offset_of<S: Storage + Clone>(
         &self,
         ikey: &InternalKey,
-        table_cache: &TableCache<S>,
+        table_cache: &TableCache<S, C>,
     ) -> u64 {
         let mut result = 0;
         for (level, files) in self.files.iter().enumerate() {
@@ -607,15 +607,15 @@ pub const FILE_META_LENGTH: usize = 2 * mem::size_of::<u64>();
 /// is the largest key that occurs in the file, and value() is an
 /// 16-byte value containing the file number and file size, both
 /// encoded using `encode_fixed_u64`
-pub struct LevelFileNumIterator {
+pub struct LevelFileNumIterator<C: Comparator> {
     files: Vec<Arc<FileMetaData>>,
-    icmp: InternalKeyComparator,
+    icmp: InternalKeyComparator<C>,
     index: usize,
     value_buf: Vec<u8>,
 }
 
-impl LevelFileNumIterator {
-    pub fn new(icmp: InternalKeyComparator, files: Vec<Arc<FileMetaData>>) -> Self {
+impl<C: Comparator + 'static> LevelFileNumIterator<C> {
+    pub fn new(icmp: InternalKeyComparator<C>, files: Vec<Arc<FileMetaData>>) -> Self {
         let index = files.len();
         Self {
             files,
@@ -639,7 +639,7 @@ impl LevelFileNumIterator {
     }
 }
 
-impl Iterator for LevelFileNumIterator {
+impl<C: Comparator + 'static> Iterator for LevelFileNumIterator<C> {
     fn valid(&self) -> bool {
         self.index < self.files.len()
     }
@@ -705,13 +705,13 @@ mod tests {
 
     struct FindFileTests {
         pub files: Vec<Arc<FileMetaData>>,
-        cmp: InternalKeyComparator,
+        cmp: InternalKeyComparator<BytewiseComparator>,
     }
 
     impl FindFileTests {
         fn new() -> Self {
             let files: Vec<Arc<FileMetaData>> = Vec::new();
-            let cmp = InternalKeyComparator::new(Arc::new(BytewiseComparator::default()));
+            let cmp = InternalKeyComparator::new(BytewiseComparator::default());
 
             Self { files, cmp }
         }

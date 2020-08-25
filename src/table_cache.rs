@@ -28,17 +28,17 @@ use crate::Result;
 use std::sync::Arc;
 
 /// A `TableCache` is the cache for the sst files and the sstable in them
-pub struct TableCache<S: Storage + Clone> {
+pub struct TableCache<S: Storage + Clone, C: Comparator> {
     storage: S,
     db_name: &'static str,
-    options: Arc<Options>,
+    options: Arc<Options<C>>,
     // the key of cache is the file number
-    cache: Arc<dyn Cache<Vec<u8>, Arc<Table<S::F>>>>,
+    cache: Arc<dyn Cache<Vec<u8>, Arc<Table<S::F, C>>>>,
 }
 
-impl<S: Storage + Clone> TableCache<S> {
-    pub fn new(db_name: &'static str, options: Arc<Options>, size: usize, storage: S) -> Self {
-        let cache = Arc::new(LRUCache::<Vec<u8>, Arc<Table<S::F>>>::new(size, None));
+impl<S: Storage + Clone, C: Comparator + 'static> TableCache<S, C> {
+    pub fn new(db_name: &'static str, options: Arc<Options<C>>, size: usize, storage: S) -> Self {
+        let cache = Arc::new(LRUCache::<Vec<u8>, Arc<Table<S::F, C>>>::new(size, None));
         Self {
             storage,
             db_name,
@@ -48,12 +48,12 @@ impl<S: Storage + Clone> TableCache<S> {
     }
 
     /// Try to find the sst file from cache. If not found, try to find the file from storage and insert it into the cache
-    pub fn find_table<C: Comparator + Clone>(
+    pub fn find_table<TC: Comparator>(
         &self,
-        cmp: C,
+        cmp: TC,
         file_number: u64,
         file_size: u64,
-    ) -> Result<Arc<Table<S::F>>> {
+    ) -> Result<Arc<Table<S::F, C>>> {
         let mut key = vec![];
         VarintU64::put_varint(&mut key, file_number);
         match self.cache.look_up(&key) {
@@ -77,14 +77,14 @@ impl<S: Storage + Clone> TableCache<S> {
     }
 
     /// Returns the result of a seek to internal key `key` in specified file
-    pub fn get<C: Comparator + Clone>(
+    pub fn get<TC: Comparator>(
         &self,
-        cmp: C,
+        cmp: TC,
         options: ReadOptions,
         key: &[u8],
         file_number: u64,
         file_size: u64,
-    ) -> Result<Option<BlockIterator<C>>> {
+    ) -> Result<Option<BlockIterator<TC>>> {
         let table = self.find_table(cmp.clone(), file_number, file_size)?;
         table.internal_get(options, cmp, key)
     }
@@ -96,20 +96,20 @@ impl<S: Storage + Clone> TableCache<S> {
     /// Entry format:
     ///     key: internal key
     ///     value: value of user key
-    pub fn new_iter<C: Comparator + Clone>(
+    pub fn new_iter<TC: Comparator>(
         &self,
-        cmp: C,
+        cmp: TC,
         options: ReadOptions,
         file_number: u64,
         file_size: u64,
-    ) -> Result<TableIterator<C, S::F>> {
+    ) -> Result<TableIterator<C, TC, S::F>> {
         let t = self.find_table(cmp.clone(), file_number, file_size)?;
         let iter = new_table_iterator(cmp, t, options);
         Ok(iter)
     }
 }
 
-impl<S: Storage + Clone> Clone for TableCache<S> {
+impl<S: Storage + Clone, C: Comparator> Clone for TableCache<S, C> {
     fn clone(&self) -> Self {
         TableCache {
             storage: self.storage.clone(),

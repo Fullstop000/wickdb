@@ -12,36 +12,18 @@
 // limitations under the License.
 
 use wickdb::file::FileStorage;
-use wickdb::Options;
-use wickdb::ReadOptions;
-use wickdb::WickDB;
-use wickdb::WriteOptions;
-use wickdb::DB;
+use wickdb::{BytewiseComparator, Options, ReadOptions, WickDB, WriteOptions, DB};
 
 fn main() {
-    let options = Options::default();
+    let options = Options::<BytewiseComparator>::default();
     let storage = FileStorage::default();
-    let db = WickDB::open_db(options, "./test_db", storage).expect("could not open db");
-    db.put(
-        WriteOptions::default(),
-        "key1".as_bytes(),
-        "value1".as_bytes(),
-    )
-    .expect("could not success putting");
-    db.put(
-        WriteOptions::default(),
-        "key2".as_bytes(),
-        "value2".as_bytes(),
-    )
-    .expect("could not success putting");
-    let val1 = db
-        .get(ReadOptions::default(), "key1".as_bytes())
-        .expect("could not get key1");
-    let val2 = db
-        .get(ReadOptions::default(), "key2".as_bytes())
-        .expect("could not get key2");
+    let db = WickDB::open_db(options, "./test_db", storage).unwrap();
+    db.put(WriteOptions::default(), b"key1", b"value1").unwrap();
+    db.put(WriteOptions::default(), b"key2", b"value2").unwrap();
+    let val1 = db.get(ReadOptions::default(), b"key1").unwrap();
+    let val2 = db.get(ReadOptions::default(), b"key2").unwrap();
     assert!(val1.is_some());
     assert!(val2.is_some());
-    assert_eq!(String::from_utf8(val1.unwrap()).unwrap(), "value1");
-    assert_eq!(String::from_utf8(val2.unwrap()).unwrap(), "value2");
+    assert_eq!(val1.unwrap(), b"value1");
+    assert_eq!(val2.unwrap(), b"value2");
 }

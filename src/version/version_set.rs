@@ -52,14 +52,14 @@ struct LevelState {
 }
 
 /// Summarizes the files added and deleted from a set of version edits.
-pub struct VersionBuilder<'a> {
+pub struct VersionBuilder<'a, C: Comparator> {
     // file changes for every level
     levels: Vec<LevelState>,
-    base: &'a Version,
+    base: &'a Version<C>,
 }
 
-impl<'a> VersionBuilder<'a> {
-    pub fn new(max_levels: usize, base: &'a Version) -> Self {
+impl<'a, C: Comparator + 'static> VersionBuilder<'a, C> {
+    pub fn new(max_levels: usize, base: &'a Version<C>) -> Self {
         // let max_levels = base.options.max_levels as usize;
         let mut levels = Vec::with_capacity(max_levels);
         for _ in 0..max_levels {
@@ -74,7 +74,11 @@ impl<'a> VersionBuilder<'a> {
     /// Add the given `FileDelta` for later applying
     /// 'vset.compaction_pointers' will be updated
     /// same as `apply` in C++ implementation
-    pub fn accumulate<S: Storage + Clone>(&mut self, delta: FileDelta, vset: &mut VersionSet<S>) {
+    pub fn accumulate<S: Storage + Clone>(
+        &mut self,
+        delta: FileDelta,
+        vset: &mut VersionSet<S, C>,
+    ) {
         // update compcation pointers
         for (level, key) in delta.compaction_pointers {
             vset.compaction_pointer[level] = key;
@@ -112,7 +116,7 @@ impl<'a> VersionBuilder<'a> {
 
     /// Apply all the changes on the base Version and produce a new Version based on it
     /// same as `SaveTo` in C++ implementation
-    pub fn apply_to_new(self, icmp: &InternalKeyComparator) -> Version {
+    pub fn apply_to_new(self, icmp: &InternalKeyComparator<C>) -> Version<C> {
         // TODO: config this to the option
         let mut v = Version::new(self.base.options.clone(), icmp.clone());
         for (level, (base_files, delta)) in self
@@ -156,7 +160,7 @@ impl<'a> VersionBuilder<'a> {
 
     // Returns true if the given collection of files has overlapping with each other.
     // Only used for files in level > 0
-    fn has_overlapping(icmp: &InternalKeyComparator, files: &[Arc<FileMetaData>]) -> bool {
+    fn has_overlapping(icmp: &InternalKeyComparator<C>, files: &[Arc<FileMetaData>]) -> bool {
         for fs in files.windows(2) {
             if icmp.compare(fs[0].largest.data(), fs[1].smallest.data()) != CmpOrdering::Less {
                 return true;
@@ -167,7 +171,7 @@ impl<'a> VersionBuilder<'a> {
 }
 
 /// The collection of all the Versions produced
-pub struct VersionSet<S: Storage + Clone> {
+pub struct VersionSet<S: Storage + Clone, C: Comparator> {
     // Snapshots that clients might be acquiring
     pub snapshots: SnapshotList,
     // The compaction stats for every level
@@ -180,8 +184,8 @@ pub struct VersionSet<S: Storage + Clone> {
     // db path
     db_name: &'static str,
     storage: S,
-    options: Arc<Options>,
-    icmp: InternalKeyComparator,
+    options: Arc<Options<C>>,
+    icmp: InternalKeyComparator<C>,
 
     // the next available file number
     next_file_number: u64,
@@ -195,16 +199,16 @@ pub struct VersionSet<S: Storage + Clone> {
     manifest_file_number: u64,
     manifest_writer: Option<Writer<S::F>>,
 
-    versions: VecDeque<Arc<Version>>,
+    versions: VecDeque<Arc<Version<C>>>,
 
     // Indicates that every level's compaction progress of last compaction.
     compaction_pointer: Vec<InternalKey>,
 }
 
-unsafe impl<S: Storage + Clone> Send for VersionSet<S> {}
+unsafe impl<S: Storage + Clone, C: Comparator> Send for VersionSet<S, C> {}
 
-impl<S: Storage + Clone + 'static> VersionSet<S> {
-    pub fn new(db_name: &'static str, options: Arc<Options>, storage: S) -> Self {
+impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
+    pub fn new(db_name: &'static str, options: Arc<Options<C>>, storage: S) -> Self {
         let max_level = options.max_levels as usize;
         let mut compaction_stats = Vec::with_capacity(max_level);
         let mut compaction_pointer = Vec::with_capacity(max_level);
@@ -302,7 +306,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
 
     /// Get the current newest version.
     #[inline]
-    pub fn current(&self) -> Arc<Version> {
+    pub fn current(&self) -> Arc<Version<C>> {
         // In `VersionSet::new()`, we always create a empty version as the first one so
         // that the `unwrap()` here is safe
         self.versions.front().unwrap().clone()
@@ -318,8 +322,8 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
     pub fn current_sst_iter(
         &self,
         read_opt: ReadOptions,
-        table_cache: TableCache<S>,
-    ) -> Result<KMergeIter<SSTableIters<S>>> {
+        table_cache: TableCache<S, C>,
+    ) -> Result<KMergeIter<SSTableIters<S, C>>> {
         let version = self.current();
         let mut level0 = vec![];
         // Merge all level zero files together since they may overlap
@@ -457,7 +461,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
         level: usize,
         begin: Option<&InternalKey>,
         end: Option<&InternalKey>,
-    ) -> Option<Compaction<S::F>> {
+    ) -> Option<Compaction<S::F, C>> {
         let version = self.current();
         let mut overlapping_inputs = version.get_overlapping_inputs(level, begin, end);
         if overlapping_inputs.is_empty() {
@@ -488,7 +492,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
     /// Returns `None` if no compaction needs to be done.
     /// Otherwise returns a `Compaction` that
     /// describes the compaction.
-    pub fn pick_compaction(&mut self) -> Option<Compaction<S::F>> {
+    pub fn pick_compaction(&mut self) -> Option<Compaction<S::F, C>> {
         let current = self.current();
         let size_compaction = current.compaction_score >= 1.0;
         let mut file_to_compact = Arc::new(FileMetaData::default());
@@ -567,7 +571,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
     pub fn write_level0_files(
         &mut self,
         db_name: &str,
-        table_cache: TableCache<S>,
+        table_cache: TableCache<S, C>,
         mem_iter: &mut dyn Iterator,
         edit: &mut VersionEdit,
     ) -> Result<()> {
@@ -626,7 +630,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
     }
 
     /// Create new table builder and physical file for current output in Compaction
-    pub fn open_compaction_output_file(&mut self, c: &mut Compaction<S::F>) -> Result<()> {
+    pub fn open_compaction_output_file(&mut self, c: &mut Compaction<S::F, C>) -> Result<()> {
         assert!(c.builder.is_none());
         let file_number = self.inc_next_file_number();
         self.pending_outputs.insert(file_number);
@@ -804,7 +808,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
     // Pick up files to compact in `c.level+1` based on given compaction
     // The input files in `c.level` might expand because of getting a large key range from newly picked files
     // in `c.level + 1`. And the final key range in `c.level + 1` should be a subset of `c.level`
-    fn setup_other_inputs(&mut self, c: Compaction<S::F>) -> Compaction<S::F> {
+    fn setup_other_inputs(&mut self, c: Compaction<S::F, C>) -> Compaction<S::F, C> {
         let mut c = self.add_boundary_inputs(c);
         let current = &self.current();
         let inputs = std::mem::take(&mut c.inputs);
@@ -900,7 +904,7 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
     }
 
     // A helper of 'add_boundary_input_for_compact_files' for files in `c.level`
-    fn add_boundary_inputs(&self, mut c: Compaction<S::F>) -> Compaction<S::F> {
+    fn add_boundary_inputs(&self, mut c: Compaction<S::F, C>) -> Compaction<S::F, C> {
         self.add_boundary_inputs_for_compact_files(c.level, &mut c.inputs.base);
         c
     }
@@ -999,17 +1003,17 @@ impl<S: Storage + Clone + 'static> VersionSet<S> {
 }
 
 ///
-pub struct FileIterFactory<S: Storage + Clone> {
+pub struct FileIterFactory<S: Storage + Clone, C: Comparator> {
     options: ReadOptions,
-    table_cache: TableCache<S>,
-    icmp: InternalKeyComparator,
+    table_cache: TableCache<S, C>,
+    icmp: InternalKeyComparator<C>,
 }
 
-impl<S: Storage + Clone> FileIterFactory<S> {
+impl<S: Storage + Clone, C: Comparator> FileIterFactory<S, C> {
     pub fn new(
-        icmp: InternalKeyComparator,
+        icmp: InternalKeyComparator<C>,
         options: ReadOptions,
-        table_cache: TableCache<S>,
+        table_cache: TableCache<S, C>,
     ) -> Self {
         Self {
             options,
@@ -1019,8 +1023,8 @@ impl<S: Storage + Clone> FileIterFactory<S> {
     }
 }
 
-impl<S: Storage + Clone> DerivedIterFactory for FileIterFactory<S> {
-    type Iter = TableIterator<InternalKeyComparator, S::F>;
+impl<S: Storage + Clone, C: Comparator + 'static> DerivedIterFactory for FileIterFactory<S, C> {
+    type Iter = TableIterator<C, InternalKeyComparator<C>, S::F>;
 
     // The value is a bytes with fixed encoded file number and fixed encoded file size
     fn derive(&self, value: &[u8]) -> Result<Self::Iter> {
@@ -1045,19 +1049,19 @@ pub fn total_file_size(files: &[Arc<FileMetaData>]) -> u64 {
 
 /// An iterator that yields all the entries stored in SST files.
 /// The inner implementation is mostly like a merging iterator.
-pub struct SSTableIters<S: Storage + Clone> {
-    cmp: InternalKeyComparator,
+pub struct SSTableIters<S: Storage + Clone, C: Comparator + 'static> {
+    cmp: InternalKeyComparator<C>,
     // Level0 table iterators. An iterator represents a table
-    level0: Vec<TableIterator<InternalKeyComparator, S::F>>,
+    level0: Vec<TableIterator<C, InternalKeyComparator<C>, S::F>>,
     // ConcatenateIterators for opening SST in level n>1 lazily. An iterator represents a level
-    leveln: Vec<ConcatenateIterator<LevelFileNumIterator, FileIterFactory<S>>>,
+    leveln: Vec<ConcatenateIterator<LevelFileNumIterator<C>, FileIterFactory<S, C>>>,
 }
 
-impl<S: Storage + Clone> SSTableIters<S> {
+impl<S: Storage + Clone, C: Comparator> SSTableIters<S, C> {
     pub fn new(
-        cmp: InternalKeyComparator,
-        level0: Vec<TableIterator<InternalKeyComparator, S::F>>,
-        leveln: Vec<ConcatenateIterator<LevelFileNumIterator, FileIterFactory<S>>>,
+        cmp: InternalKeyComparator<C>,
+        level0: Vec<TableIterator<C, InternalKeyComparator<C>, S::F>>,
+        leveln: Vec<ConcatenateIterator<LevelFileNumIterator<C>, FileIterFactory<S, C>>>,
     ) -> Self {
         Self {
             cmp,
@@ -1067,8 +1071,9 @@ impl<S: Storage + Clone> SSTableIters<S> {
     }
 }
 
-impl<S: Storage + Clone> KMergeCore for SSTableIters<S> {
-    fn cmp(&self) -> &dyn Comparator {
+impl<S: Storage + Clone, C: Comparator> KMergeCore for SSTableIters<S, C> {
+    type Cmp = InternalKeyComparator<C>;
+    fn cmp(&self) -> &Self::Cmp {
         &self.cmp
     }
 
@@ -1144,7 +1149,7 @@ impl<S: Storage + Clone> KMergeCore for SSTableIters<S> {
 
     fn for_not_ith<F>(&mut self, n: usize, mut f: F)
     where
-        F: FnMut(&mut dyn Iterator, &dyn Comparator),
+        F: FnMut(&mut dyn Iterator, &Self::Cmp),
     {
         if n < self.level0.len() {
             for (i, child) in self.level0.iter_mut().enumerate() {

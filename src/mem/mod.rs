@@ -31,12 +31,12 @@ use std::rc::Rc;
 
 // KeyComparator is a wrapper for InternalKeyComparator. It will convert the input mem key
 // to the internal key before comparing.
-#[derive(Clone)]
-pub struct KeyComparator {
-    icmp: InternalKeyComparator,
+#[derive(Clone, Default)]
+pub struct KeyComparator<C: Comparator> {
+    icmp: InternalKeyComparator<C>,
 }
 
-impl Comparator for KeyComparator {
+impl<C: Comparator> Comparator for KeyComparator<C> {
     // `a` and `b` should be a `LookupKey` each
     fn compare(&self, mut a: &[u8], mut b: &[u8]) -> Ordering {
         let ia = extract_varint32_encoded_slice(&mut a);
@@ -66,14 +66,14 @@ impl Comparator for KeyComparator {
 }
 
 /// In-memory write buffer
-pub struct MemTable {
-    cmp: KeyComparator,
-    table: Rc<Skiplist<KeyComparator, BlockArena>>,
+pub struct MemTable<C: Comparator> {
+    cmp: KeyComparator<C>,
+    table: Rc<Skiplist<KeyComparator<C>, BlockArena>>,
 }
 
-impl MemTable {
+impl<C: Comparator> MemTable<C> {
     /// Creates a new memory table
-    pub fn new(icmp: InternalKeyComparator) -> Self {
+    pub fn new(icmp: InternalKeyComparator<C>) -> Self {
         let arena = BlockArena::default();
         let kcmp = KeyComparator { icmp };
         let table = Rc::new(Skiplist::new(kcmp.clone(), arena));
@@ -87,7 +87,7 @@ impl MemTable {
     }
 
     /// Creates a new `MemTableIterator`
-    pub fn iter(&self) -> MemTableIterator {
+    pub fn iter(&self) -> MemTableIterator<C> {
         MemTableIterator::new(self.table.clone())
     }
 
@@ -167,20 +167,20 @@ impl MemTable {
     }
 }
 
-pub struct MemTableIterator {
-    iter: SkiplistIterator<KeyComparator, BlockArena>,
+pub struct MemTableIterator<C: Comparator> {
+    iter: SkiplistIterator<KeyComparator<C>, BlockArena>,
     // Tmp buffer for encoding `InternalKey` to `LookupKey` when call `seek`
     tmp: Vec<u8>,
 }
 
-impl MemTableIterator {
-    pub fn new(table: Rc<Skiplist<KeyComparator, BlockArena>>) -> Self {
+impl<C: Comparator> MemTableIterator<C> {
+    pub fn new(table: Rc<Skiplist<KeyComparator<C>, BlockArena>>) -> Self {
         let iter = SkiplistIterator::new(table);
         Self { iter, tmp: vec![] }
     }
 }
 
-impl Iterator for MemTableIterator {
+impl<C: Comparator> Iterator for MemTableIterator<C> {
     fn valid(&self) -> bool {
         self.iter.valid()
     }
@@ -241,14 +241,13 @@ mod tests {
     use crate::mem::MemTable;
     use crate::util::comparator::BytewiseComparator;
     use std::str;
-    use std::sync::Arc;
 
-    fn new_mem_table() -> MemTable {
-        let icmp = InternalKeyComparator::new(Arc::new(BytewiseComparator::default()));
+    fn new_mem_table() -> MemTable<BytewiseComparator> {
+        let icmp = InternalKeyComparator::new(BytewiseComparator::default());
         MemTable::new(icmp)
     }
 
-    fn add_test_data_set(memtable: &MemTable) -> Vec<(&str, &str)> {
+    fn add_test_data_set(memtable: &MemTable<BytewiseComparator>) -> Vec<(&str, &str)> {
         let tests = vec![
             (2, ValueType::Value, "boo", "boo"),
             (4, ValueType::Value, "foo", "val3"),
