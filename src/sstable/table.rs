@@ -16,6 +16,7 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
 use crate::cache::Cache;
+use crate::filter::FilterPolicy;
 use crate::iterator::{ConcatenateIterator, DerivedIterFactory, Iterator};
 use crate::options::{CompressionType, Options, ReadOptions};
 use crate::sstable::block::{Block, BlockBuilder, BlockIterator};
@@ -28,20 +29,20 @@ use crate::util::crc32::{extend, mask, unmask, value};
 use crate::{Error, Result};
 use snap::raw::max_compress_len;
 use std::cmp::Ordering;
+use std::rc::Rc;
 use std::sync::Arc;
 
 /// A `Table` is a sorted map from strings to strings, which must be immutable and persistent.
 /// A `Table` may be safely accessed from multiple threads
 /// without external synchronization.
 pub struct Table<F: File> {
-    // block cache handler
     file: F,
     cache_id: u64,
     filter_reader: Option<FilterBlockReader>,
     // None iff we fail to read meta block
     meta_block_handle: Option<BlockHandle>,
     index_block: Block,
-
+    // block cache handler
     block_cache: Option<Arc<dyn Cache<Vec<u8>, Arc<Block>>>>,
 }
 
@@ -264,16 +265,15 @@ pub fn new_table_iterator<C: Comparator, F: File>(
 /// Temporarily stores the contents of the table it is
 /// building in .sst file but does not close the file. It is up to the
 /// caller to close the file after calling `Finish()`.
-pub struct TableBuilder<UC: Comparator, TC: Comparator, F: File> {
-    options: Arc<Options<UC>>,
-    cmp: TC,
+pub struct TableBuilder<C: Comparator, F: File> {
+    cmp: C,
     // underlying sst file
     file: F,
     // the written data length
     // updated only after the pending_handle is stored in the index block
     offset: u64,
-    data_block: BlockBuilder<TC>,
-    index_block: BlockBuilder<TC>,
+    data_block: BlockBuilder<C>,
+    index_block: BlockBuilder<C>,
     // the last added key
     // can be used when adding a new entry into index block
     last_key: Vec<u8>,
@@ -289,10 +289,16 @@ pub struct TableBuilder<UC: Comparator, TC: Comparator, F: File> {
     pending_index_entry: bool,
     // handle for current block to add to index block
     pending_handle: BlockHandle,
+
+    // Fields from `Options`
+    block_size: usize,
+    block_restart_interval: usize,
+    compression: CompressionType,
+    filter_policy: Option<Rc<dyn FilterPolicy>>,
 }
 
-impl<UC: Comparator, TC: Comparator, F: File> TableBuilder<UC, TC, F> {
-    pub fn new(file: F, cmp: TC, options: Arc<Options<UC>>) -> Self {
+impl<C: Comparator, F: File> TableBuilder<C, F> {
+    pub fn new<UC: Comparator>(file: F, cmp: C, options: Arc<Options<UC>>) -> Self {
         let opt = options.clone();
         let db_builder = BlockBuilder::new(options.block_restart_interval, cmp.clone());
         let ib_builder = BlockBuilder::new(options.block_restart_interval, cmp.clone());
@@ -306,7 +312,6 @@ impl<UC: Comparator, TC: Comparator, F: File> TableBuilder<UC, TC, F> {
             }
         };
         Self {
-            options: opt,
             file,
             cmp,
             offset: 0,
@@ -318,6 +323,10 @@ impl<UC: Comparator, TC: Comparator, F: File> TableBuilder<UC, TC, F> {
             filter_block: fb,
             pending_index_entry: false,
             pending_handle: BlockHandle::new(0, 0),
+            compression: opt.compression,
+            block_size: opt.block_size,
+            block_restart_interval: opt.block_restart_interval,
+            filter_policy: opt.filter_policy.clone(),
         }
     }
 
@@ -353,7 +362,7 @@ impl<UC: Comparator, TC: Comparator, F: File> TableBuilder<UC, TC, F> {
         self.data_block.add(key, value);
 
         // flush the data to file block if reaching the block size limit
-        if self.data_block.current_size_estimate() >= self.options.block_size {
+        if self.data_block.current_size_estimate() >= self.block_size {
             self.flush()?
         }
         Ok(())
@@ -372,7 +381,7 @@ impl<UC: Comparator, TC: Comparator, F: File> TableBuilder<UC, TC, F> {
         if !self.data_block.is_empty() {
             assert!(!self.pending_index_entry, "[table builder] the index for the previous data block should never remain when flushing current block data");
             let data_block = self.data_block.finish();
-            let (compressed, compression) = compress_block(data_block, self.options.compression)?;
+            let (compressed, compression) = compress_block(data_block, self.compression)?;
             write_raw_block(
                 &mut self.file,
                 compressed.as_slice(),
@@ -419,10 +428,10 @@ impl<UC: Comparator, TC: Comparator, F: File> TableBuilder<UC, TC, F> {
         // write meta block
         let mut meta_block_handle = BlockHandle::new(0, 0);
         let mut meta_block_builder =
-            BlockBuilder::new(self.options.block_restart_interval, self.cmp.clone());
+            BlockBuilder::new(self.block_restart_interval, self.cmp.clone());
         let meta_block = {
             if has_filter_block {
-                let filter_key = if let Some(fp) = &self.options.filter_policy {
+                let filter_key = if let Some(fp) = &self.filter_policy {
                     "filter.".to_owned() + fp.name()
                 } else {
                     String::from("")
@@ -437,7 +446,7 @@ impl<UC: Comparator, TC: Comparator, F: File> TableBuilder<UC, TC, F> {
         self.maybe_append_index_block(None); // flush the last index first
         let index_block = self.index_block.finish();
         let mut index_block_handle = BlockHandle::new(0, 0);
-        let (c_index_block, ct) = compress_block(index_block, self.options.compression)?;
+        let (c_index_block, ct) = compress_block(index_block, self.compression)?;
         write_raw_block(
             &mut self.file,
             c_index_block.as_slice(),
@@ -511,7 +520,7 @@ impl<UC: Comparator, TC: Comparator, F: File> TableBuilder<UC, TC, F> {
     }
 
     fn write_block(&mut self, raw_block: &[u8], handle: &mut BlockHandle) -> Result<()> {
-        let (data, compression) = compress_block(raw_block, self.options.compression)?;
+        let (data, compression) = compress_block(raw_block, self.compression)?;
         write_raw_block(&mut self.file, &data, compression, handle, &mut self.offset)?;
         Ok(())
     }
