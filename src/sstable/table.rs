@@ -15,6 +15,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
+use crate::cache::Cache;
 use crate::iterator::{ConcatenateIterator, DerivedIterFactory, Iterator};
 use crate::options::{CompressionType, Options, ReadOptions};
 use crate::sstable::block::{Block, BlockBuilder, BlockIterator};
@@ -32,27 +33,31 @@ use std::sync::Arc;
 /// A `Table` is a sorted map from strings to strings, which must be immutable and persistent.
 /// A `Table` may be safely accessed from multiple threads
 /// without external synchronization.
-pub struct Table<F: File, UC: Comparator> {
-    options: Arc<Options<UC>>,
+pub struct Table<F: File> {
+    // block cache handler
     file: F,
     cache_id: u64,
     filter_reader: Option<FilterBlockReader>,
     // None iff we fail to read meta block
     meta_block_handle: Option<BlockHandle>,
     index_block: Block,
+
+    block_cache: Option<Arc<dyn Cache<Vec<u8>, Arc<Block>>>>,
 }
 
-impl<F: File, UC: Comparator> Table<F, UC> {
+impl<F: File> Table<F> {
     /// Attempt to open the table that is stored in bytes `[0..size)`
     /// of `file`, and read the metadata entries necessary to allow
     /// retrieving data from the table.
-    pub fn open<TC: Comparator>(
+    ///
+    /// NOTE: `UC` for user comparator and `TC` for table comparator
+    pub fn open<UC: Comparator, TC: Comparator>(
         file: F,
-        size: u64,
+        file_len: u64,
         options: Arc<Options<UC>>,
         cmp: TC,
     ) -> Result<Self> {
-        if size < FOOTER_ENCODED_LENGTH as u64 {
+        if file_len < FOOTER_ENCODED_LENGTH as u64 {
             return Err(Error::Corruption(
                 "file is too short to be an sstable".to_owned(),
             ));
@@ -61,7 +66,7 @@ impl<F: File, UC: Comparator> Table<F, UC> {
         let mut footer_space = vec![0; FOOTER_ENCODED_LENGTH];
         file.read_exact_at(
             footer_space.as_mut_slice(),
-            size - FOOTER_ENCODED_LENGTH as u64,
+            file_len - FOOTER_ENCODED_LENGTH as u64,
         )?;
         let (footer, _) = Footer::decode_from(footer_space.as_slice())?;
         // Read the index block
@@ -74,7 +79,7 @@ impl<F: File, UC: Comparator> Table<F, UC> {
             0
         };
         let mut t = Self {
-            options: options.clone(),
+            block_cache: options.block_cache.clone(),
             file,
             cache_id,
             filter_reader: None,
@@ -103,7 +108,7 @@ impl<F: File, UC: Comparator> Table<F, UC> {
                                 read_block(&t.file, &filter_handle, options.paranoid_checks)
                             {
                                 t.filter_reader = Some(FilterBlockReader::new(
-                                    t.options.filter_policy.clone().unwrap(),
+                                    options.filter_policy.clone().unwrap(),
                                     filter_block,
                                 ));
                             }
@@ -122,7 +127,7 @@ impl<F: File, UC: Comparator> Table<F, UC> {
         data_block_handle: BlockHandle,
         options: ReadOptions,
     ) -> Result<BlockIterator<CC>> {
-        let iter = if let Some(cache) = &self.options.block_cache {
+        let iter = if let Some(cache) = &self.block_cache {
             let mut cache_key_buffer = vec![0; 16];
             put_fixed_64(&mut cache_key_buffer, self.cache_id);
             put_fixed_64(&mut cache_key_buffer, data_block_handle.offset);
@@ -218,14 +223,14 @@ impl<F: File, UC: Comparator> Table<F, UC> {
     }
 }
 
-pub struct TableIterFactory<UC: Comparator, TC: Comparator, F: File> {
+pub struct TableIterFactory<C: Comparator, F: File> {
     options: ReadOptions,
-    table: Arc<Table<F, UC>>,
-    cmp: TC,
+    table: Arc<Table<F>>,
+    cmp: C,
 }
 
-impl<C: Comparator, TC: Comparator, F: File> DerivedIterFactory for TableIterFactory<C, TC, F> {
-    type Iter = BlockIterator<TC>;
+impl<C: Comparator, F: File> DerivedIterFactory for TableIterFactory<C, F> {
+    type Iter = BlockIterator<C>;
     fn derive(&self, value: &[u8]) -> Result<Self::Iter> {
         BlockHandle::decode_from(value).and_then(|(handle, _)| {
             self.table
@@ -234,8 +239,7 @@ impl<C: Comparator, TC: Comparator, F: File> DerivedIterFactory for TableIterFac
     }
 }
 
-pub type TableIterator<C, TC, F> =
-    ConcatenateIterator<BlockIterator<TC>, TableIterFactory<C, TC, F>>;
+pub type TableIterator<C, F> = ConcatenateIterator<BlockIterator<C>, TableIterFactory<C, F>>;
 
 /// Create a new `ConcatenateIterator` as table iterator.
 /// This iterator is able to yield all the key/values in the given `table` file
@@ -243,11 +247,11 @@ pub type TableIterator<C, TC, F> =
 /// Entry format:
 ///     key: internal key
 ///     value: value of user key
-pub fn new_table_iterator<C: Comparator, TC: Comparator, F: File>(
-    cmp: TC,
-    table: Arc<Table<F, C>>,
+pub fn new_table_iterator<C: Comparator, F: File>(
+    cmp: C,
+    table: Arc<Table<F>>,
     options: ReadOptions,
-) -> TableIterator<C, TC, F> {
+) -> TableIterator<C, F> {
     let index_iter = table.index_block.iter(cmp.clone());
     let factory = TableIterFactory {
         options,
