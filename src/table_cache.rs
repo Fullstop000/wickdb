@@ -33,12 +33,12 @@ pub struct TableCache<S: Storage + Clone, C: Comparator> {
     db_name: &'static str,
     options: Arc<Options<C>>,
     // the key of cache is the file number
-    cache: Arc<dyn Cache<Vec<u8>, Arc<Table<S::F, C>>>>,
+    cache: Arc<dyn Cache<Vec<u8>, Arc<Table<S::F>>>>,
 }
 
 impl<S: Storage + Clone, C: Comparator + 'static> TableCache<S, C> {
     pub fn new(db_name: &'static str, options: Arc<Options<C>>, size: usize, storage: S) -> Self {
-        let cache = Arc::new(LRUCache::<Vec<u8>, Arc<Table<S::F, C>>>::new(size, None));
+        let cache = Arc::new(LRUCache::<Vec<u8>, Arc<Table<S::F>>>::new(size, None));
         Self {
             storage,
             db_name,
@@ -53,7 +53,7 @@ impl<S: Storage + Clone, C: Comparator + 'static> TableCache<S, C> {
         cmp: TC,
         file_number: u64,
         file_size: u64,
-    ) -> Result<Arc<Table<S::F, C>>> {
+    ) -> Result<Arc<Table<S::F>>> {
         let mut key = vec![];
         VarintU64::put_varint(&mut key, file_number);
         match self.cache.look_up(&key) {
@@ -102,7 +102,7 @@ impl<S: Storage + Clone, C: Comparator + 'static> TableCache<S, C> {
         options: ReadOptions,
         file_number: u64,
         file_size: u64,
-    ) -> Result<TableIterator<C, TC, S::F>> {
+    ) -> Result<TableIterator<TC, S::F>> {
         let t = self.find_table(cmp.clone(), file_number, file_size)?;
         let iter = new_table_iterator(cmp, t, options);
         Ok(iter)

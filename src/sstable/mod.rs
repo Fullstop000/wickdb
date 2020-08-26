@@ -537,12 +537,12 @@ mod tests {
     }
 
     struct TableConstructor {
-        table: Option<Arc<Table<FileNode, TestComparator>>>,
+        table: Option<Arc<Table<FileNode>>>,
         cmp: TestComparator,
     }
 
     impl Constructor for TableConstructor {
-        type Iter = TableIterator<TestComparator, TestComparator, FileNode>;
+        type Iter = TableIterator<TestComparator, FileNode>;
 
         fn new(is_reversed: bool) -> Self {
             Self {
