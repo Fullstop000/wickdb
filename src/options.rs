@@ -17,7 +17,7 @@
 
 // use crate::cache::lru::SharedLRUCache;
 use crate::cache::lru::LRUCache;
-use crate::cache::Cache;
+use crate::cache::{Cache, ShardedCache};
 use crate::db::format::InternalFilterPolicy;
 use crate::filter::FilterPolicy;
 use crate::logger::Logger;
@@ -29,6 +29,8 @@ use crate::LevelFilter;
 use crate::Log;
 use std::rc::Rc;
 use std::sync::Arc;
+
+const DEFAULT_CACHE_SHARDS: usize = 8;
 
 #[derive(Clone, Copy, Debug, FromPrimitive)]
 pub enum CompressionType {
@@ -217,7 +219,11 @@ impl<C: Comparator> Options<C> {
         self.block_size = Self::clip_range(self.block_size, 1 << 10, 4 << 20);
         self.apply_logger(storage, &db_name);
         if self.block_cache.is_none() {
-            self.block_cache = Some(Arc::new(LRUCache::new(8 << 20, None)))
+            let mut shards = vec![];
+            for _ in 0..DEFAULT_CACHE_SHARDS {
+                shards.push(LRUCache::new(8 << 20, None));
+            }
+            self.block_cache = Some(Arc::new(ShardedCache::new(shards)))
         }
         if let Some(fp) = std::mem::replace(&mut self.filter_policy, None) {
             self.filter_policy = Some(Rc::new(InternalFilterPolicy::new(fp)));
@@ -262,7 +268,7 @@ impl<C: Comparator> Default for Options<C> {
             read_bytes_period: 1048576,
             write_buffer_size: 4 * 1024 * 1024, // 4MB
             max_open_files: 500,
-            block_cache: Some(Arc::new(LRUCache::new(8 << 20, None))),
+            block_cache: None,
             non_table_cache_files: 10,
             block_size: 4 * 1024, // 4KB
             block_restart_interval: 16,
