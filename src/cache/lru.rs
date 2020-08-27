@@ -17,9 +17,9 @@
 
 use crate::cache::Cache;
 use crate::util::collection::HashMap;
-
 use std::hash::{Hash, Hasher};
 use std::mem;
+use std::mem::MaybeUninit;
 use std::ptr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -51,8 +51,8 @@ impl<K> Default for Key<K> {
 
 /// Exact node in the `LRUCache`
 pub struct LRUHandle<K, V> {
-    key: K,
-    value: V,
+    key: MaybeUninit<K>,
+    value: MaybeUninit<V>,
     prev: *mut LRUHandle<K, V>,
     next: *mut LRUHandle<K, V>,
     charge: usize,
@@ -62,8 +62,8 @@ impl<K, V> LRUHandle<K, V> {
     /// Create new LRUHandle
     pub fn new(key: K, value: V, charge: usize) -> LRUHandle<K, V> {
         LRUHandle {
-            key,
-            value,
+            key: MaybeUninit::new(key),
+            value: MaybeUninit::new(value),
             charge,
             next: ptr::null_mut(),
             prev: ptr::null_mut(),
@@ -136,30 +136,30 @@ impl<K: Hash + Eq, V> LRUCache<K, V> {
 }
 
 impl<K: Hash + Eq, V> Cache<K, V> for LRUCache<K, V> {
-    fn insert(&self, key: K, value: V, charge: usize) -> Option<V> {
+    fn insert(&self, key: K, mut value: V, charge: usize) -> Option<V> {
         let mut mutex_data = self.mutex.lock().unwrap();
         if self.capacity > 0 {
             match mutex_data.table.get_mut(&Key {
                 k: &key as *const K,
             }) {
                 Some(h) => {
+                    let old_p = h as *mut Box<LRUHandle<K, V>>;
                     // swap the value and move handle to the head
-                    let old_v = mem::replace(&mut h.value, value);
+                    unsafe { mem::swap(&mut value, &mut (*(*old_p).value.as_mut_ptr())) };
                     let p: *mut LRUHandle<K, V> = h.as_mut();
                     Self::lru_remove(p);
                     Self::lru_append(mutex_data.lru, p);
                     if let Some(cb) = &self.callback {
-                        cb(&key, &old_v);
+                        cb(&key, &value);
                     }
-                    Some(old_v)
+                    Some(value)
                 }
                 None => {
                     let handle = LRUHandle::new(key, value, charge);
                     let mut v = Box::new(handle);
-                    let k: *const K = &v.as_ref().key;
+                    let k: *const K = v.as_ref().key.as_ptr();
                     let value_ptr: *mut LRUHandle<K, V> = v.as_mut();
                     mutex_data.table.insert(Key { k }, v);
-                    // Self::lru_remove(value_ptr);
                     Self::lru_append(mutex_data.lru, value_ptr);
                     self.usage.fetch_add(charge, Ordering::Release);
                     // evict last lru entries
@@ -168,14 +168,16 @@ impl<K: Hash + Eq, V> Cache<K, V> for LRUCache<K, V> {
                             && (*(*mutex_data).lru).next != mutex_data.lru
                         // not the dummy head
                         {
-                            let k = &(*(*mutex_data.lru).next).key as *const K;
+                            let k = (*(*mutex_data.lru).next).key.as_ptr();
                             let key = Key { k };
                             if let Some(mut n) = mutex_data.table.remove(&key) {
                                 self.usage.fetch_sub(n.charge, Ordering::SeqCst);
                                 Self::lru_remove(n.as_mut());
                                 if let Some(cb) = &self.callback {
-                                    cb(&n.key, &n.value);
+                                    cb(&(*n.key.as_ptr()), &(*n.value.as_ptr()));
                                 }
+                                ptr::drop_in_place(n.key.as_mut_ptr());
+                                ptr::drop_in_place(n.value.as_mut_ptr());
                             }
                         }
                     }
@@ -194,7 +196,7 @@ impl<K: Hash + Eq, V> Cache<K, V> for LRUCache<K, V> {
             let p = h.as_ref() as *const LRUHandle<K, V> as *mut LRUHandle<K, V>;
             Self::lru_remove(p);
             Self::lru_append(l.lru, p);
-            unsafe { &(*p).value }
+            unsafe { &(*(*p).value.as_ptr()) as &V }
         })
     }
 
@@ -205,8 +207,10 @@ impl<K: Hash + Eq, V> Cache<K, V> for LRUCache<K, V> {
         if let Some(mut n) = mutex_data.table.remove(&k) {
             self.usage.fetch_sub(n.charge, Ordering::SeqCst);
             Self::lru_remove(n.as_mut() as *mut LRUHandle<K, V>);
-            if let Some(cb) = &self.callback {
-                cb(key, &n.value);
+            unsafe {
+                if let Some(cb) = &self.callback {
+                    cb(key, &(*n.value.as_ptr()));
+                }
             }
         }
     }
@@ -216,15 +220,27 @@ impl<K: Hash + Eq, V> Cache<K, V> for LRUCache<K, V> {
         self.cache_id.fetch_add(1, Ordering::SeqCst)
     }
 
-    fn prune(&self) {
-        unimplemented!()
-    }
-
     #[inline]
     fn total_charge(&self) -> usize {
         self.usage.load(Ordering::Acquire)
     }
 }
+
+impl<K, V> Drop for LRUCache<K, V> {
+    fn drop(&mut self) {
+        let mut m = self.mutex.lock().unwrap();
+        (*m).table.values_mut().for_each(|e| unsafe {
+            ptr::drop_in_place(e.key.as_mut_ptr());
+            ptr::drop_in_place(e.value.as_mut_ptr());
+        });
+        unsafe {
+            let _head = *Box::from_raw(m.lru);
+        }
+    }
+}
+
+unsafe impl<K: Send, V: Send> Send for LRUCache<K, V> {}
+unsafe impl<K: Sync, V: Sync> Sync for LRUCache<K, V> {}
 
 #[cfg(test)]
 mod tests {
