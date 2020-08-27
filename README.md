@@ -35,12 +35,6 @@ You can find a simple worked example in `examples`.
 - Adding more test cases. The progress is tracked by this [issue](https://github.com/Fullstop000/wickdb/issues/3).
 - Adding benchmarks. The progress is tracked by this [issue](https://github.com/Fullstop000/wickdb/issues/21).
 
-#### Remove unsafe codes
-
-We should use Rust as safe as we could because that's why we prefer using Rust.
-
-- [`Slice`](https://github.com/Fullstop000/wickdb/blob/master/src/util/slice.rs) is extremly unsafe. The progress is tracked by this [issue](https://github.com/Fullstop000/wickdb/issues/24).
-
 ### Developing
 
 `wickdb` is built using the latest version of `stable` Rust, using [the 2018 edition](https://doc.rust-lang.org/edition-guide/rust-2018/).
