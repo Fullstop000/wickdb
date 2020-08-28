@@ -63,7 +63,6 @@ pub struct Version<C: Comparator> {
     icmp: InternalKeyComparator<C>,
     // files per level in this version
     // sorted by the smallest key in FileMetaData
-    // TODO: is this `Arc` necessary ?
     files: Vec<Vec<Arc<FileMetaData>>>,
 
     // next file to compact based on seek stats
@@ -123,7 +122,7 @@ impl<C: Comparator + 'static> Version<C> {
     ) -> Result<(Option<Vec<u8>>, SeekStats)> {
         let ikey = key.internal_key();
         let ukey = key.user_key();
-        let ucmp = self.icmp.user_comparator.clone();
+        let ucmp = &self.icmp.user_comparator;
         let mut seek_stats = SeekStats::new();
         for (level, files) in self.files.iter().enumerate() {
             let mut files_to_seek = vec![];
@@ -138,16 +137,16 @@ impl<C: Comparator + 'static> Version<C> {
                     if ucmp.compare(ukey, f.largest.user_key()) != CmpOrdering::Greater
                         && ucmp.compare(ukey, f.smallest.user_key()) != CmpOrdering::Less
                     {
-                        files_to_seek.push(f.clone());
+                        files_to_seek.push(f);
                     }
                 }
                 files_to_seek.sort_by(|a, b| b.number.cmp(&a.number));
             } else {
-                let index = Self::find_file(self.icmp.clone(), &self.files[level], &ikey);
+                let index = find_file(&self.icmp, &self.files[level], &ikey);
                 if index >= files.len() {
                     // we reach the end but not found a file matches
                 } else {
-                    let target = files[index].clone();
+                    let target = &files[index];
                     // If what we found is the first file, it could still not includes the target
                     // so let's check the smallest ukey. We use `ukey` because of the given `LookupKey`
                     // could has the same `ukey` as the `smallest` but a bigger `seq` number than it, which is smaller
@@ -231,31 +230,6 @@ impl<C: Comparator + 'static> Version<C> {
         s.push_str(summary.as_str());
         s.push_str("]");
         s
-    }
-
-    /// Binary search given files to find earliest index of index whose largest ikey >= given ikey.
-    /// If not found, returns the length of files.
-    pub fn find_file(
-        icmp: InternalKeyComparator<C>,
-        files: &[Arc<FileMetaData>],
-        ikey: &[u8],
-    ) -> usize {
-        let mut left = 0_usize;
-        let mut right = files.len();
-        while left < right {
-            let mid = (left + right) / 2;
-            let f = &files[mid];
-            if icmp.compare(f.largest.data(), ikey) == CmpOrdering::Less {
-                // Key at "mid.largest" is < "target".  Therefore all
-                // files at or before "mid" are uninteresting
-                left = mid + 1;
-            } else {
-                // Key at "mid.largest" is >= "target".  Therefore all files
-                // after "mid" are uninteresting.
-                right = mid;
-            }
-        }
-        right
     }
 
     /// Return the level at which we should place a new memtable compaction
@@ -360,7 +334,7 @@ impl<C: Comparator + 'static> Version<C> {
         internal_key: &[u8],
         mut func: Box<dyn FnMut(usize, Arc<FileMetaData>) -> bool>,
     ) {
-        let ucmp = self.icmp.user_comparator.clone();
+        let ucmp = &self.icmp.user_comparator;
         for (level, files) in self.files.iter().enumerate() {
             if level == 0 {
                 let mut target_files = vec![];
@@ -369,13 +343,13 @@ impl<C: Comparator + 'static> Version<C> {
                     if ucmp.compare(user_key, f.smallest.user_key()) != CmpOrdering::Less
                         && ucmp.compare(user_key, f.largest.user_key()) != CmpOrdering::Greater
                     {
-                        target_files.push(f.clone());
+                        target_files.push(f);
                     }
                 }
                 if !target_files.is_empty() {
                     target_files.sort_by(|a, b| b.number.cmp(&a.number))
                 }
-                for target_file in target_files.iter() {
+                for target_file in target_files {
                     if !func(0, target_file.clone()) {
                         return;
                     }
@@ -384,11 +358,7 @@ impl<C: Comparator + 'static> Version<C> {
                 if files.is_empty() {
                     continue;
                 }
-                let index = Self::find_file(
-                    self.icmp.clone(),
-                    self.files[level].as_slice(),
-                    &internal_key,
-                );
+                let index = find_file(&self.icmp, self.files[level].as_slice(), &internal_key);
                 if index >= files.len() {
                     // we reach the end but not found a file matches
                 } else {
@@ -449,44 +419,13 @@ impl<C: Comparator + 'static> Version<C> {
         smallest_ukey: Option<&[u8]>,
         largest_ukey: Option<&[u8]>,
     ) -> bool {
-        self.some_file_overlap_range(level > 0, &self.files[level], smallest_ukey, largest_ukey)
-    }
-
-    fn some_file_overlap_range(
-        &self,
-        disjoint: bool,
-        files: &[Arc<FileMetaData>],
-        smallest_ukey: Option<&[u8]>,
-        largest_ukey: Option<&[u8]>,
-    ) -> bool {
-        if !disjoint {
-            for file in files {
-                if self.key_is_after_file(file.clone(), smallest_ukey)
-                    || self.key_is_before_file(file.clone(), largest_ukey)
-                {
-                    // No overlap
-                    continue;
-                } else {
-                    return true;
-                }
-            }
-            return false;
-        }
-        // binary search since file ranges are disjoint
-        let index = {
-            if let Some(s_ukey) = smallest_ukey {
-                let smallest_ikey = InternalKey::new(s_ukey, MAX_KEY_SEQUENCE, VALUE_TYPE_FOR_SEEK);
-                Self::find_file(self.icmp.clone(), files, smallest_ikey.data())
-            } else {
-                0
-            }
-        };
-        if index >= files.len() {
-            // beginning of range is after all files, so no overlap
-            return false;
-        }
-        // check whether the upper bound is overlapping
-        !self.key_is_before_file(files[index].clone(), largest_ukey)
+        some_file_overlap_range(
+            &self.icmp,
+            level > 0,
+            &self.files[level],
+            smallest_ukey,
+            largest_ukey,
+        )
     }
 
     /// Return the approximate offset in the database of the data for
@@ -525,25 +464,6 @@ impl<C: Comparator + 'static> Version<C> {
             }
         }
         result
-    }
-    // used for smallest user key
-    fn key_is_after_file(&self, file: Arc<FileMetaData>, ukey: Option<&[u8]>) -> bool {
-        ukey.is_some()
-            && self
-                .icmp
-                .user_comparator
-                .compare(ukey.unwrap(), file.largest.user_key())
-                == CmpOrdering::Greater
-    }
-
-    // used for biggest user key
-    fn key_is_before_file(&self, file: Arc<FileMetaData>, ukey: Option<&[u8]>) -> bool {
-        ukey.is_some()
-            && self
-                .icmp
-                .user_comparator
-                .compare(ukey.unwrap(), file.smallest.user_key())
-                == CmpOrdering::Less
     }
 
     // Return all files in `level` that overlap [`begin`, `end`]
@@ -608,6 +528,92 @@ impl<C: Comparator + 'static> Version<C> {
     }
 }
 
+// Binary search given files to find earliest index of index whose largest ikey >= given ikey.
+// If not found, returns the length of files.
+fn find_file<C: Comparator>(
+    icmp: &InternalKeyComparator<C>,
+    files: &[Arc<FileMetaData>],
+    ikey: &[u8],
+) -> usize {
+    let mut left = 0_usize;
+    let mut right = files.len();
+    while left < right {
+        let mid = (left + right) / 2;
+        let f = &files[mid];
+        if icmp.compare(f.largest.data(), ikey) == CmpOrdering::Less {
+            // Key at "mid.largest" is < "target".  Therefore all
+            // files at or before "mid" are uninteresting
+            left = mid + 1;
+        } else {
+            // Key at "mid.largest" is >= "target".  Therefore all files
+            // after "mid" are uninteresting.
+            right = mid;
+        }
+    }
+    right
+}
+
+fn some_file_overlap_range<C: Comparator>(
+    icmp: &InternalKeyComparator<C>,
+    disjoint: bool,
+    files: &[Arc<FileMetaData>],
+    smallest_ukey: Option<&[u8]>,
+    largest_ukey: Option<&[u8]>,
+) -> bool {
+    if !disjoint {
+        for file in files {
+            if key_is_after_file(icmp, file, smallest_ukey)
+                || key_is_before_file(icmp, file, largest_ukey)
+            {
+                // No overlap
+                continue;
+            } else {
+                return true;
+            }
+        }
+        return false;
+    }
+    // binary search since file ranges are disjoint
+    let index = {
+        if let Some(s_ukey) = smallest_ukey {
+            let smallest_ikey = InternalKey::new(s_ukey, MAX_KEY_SEQUENCE, VALUE_TYPE_FOR_SEEK);
+            find_file(icmp, files, smallest_ikey.data())
+        } else {
+            0
+        }
+    };
+    if index >= files.len() {
+        // beginning of range is after all files, so no overlap
+        return false;
+    }
+    // check whether the upper bound is overlapping
+    !key_is_before_file(icmp, &files[index], largest_ukey)
+}
+// used for smallest user key
+fn key_is_after_file<C: Comparator>(
+    icmp: &InternalKeyComparator<C>,
+    file: &Arc<FileMetaData>,
+    ukey: Option<&[u8]>,
+) -> bool {
+    ukey.is_some()
+        && icmp
+            .user_comparator
+            .compare(ukey.unwrap(), file.largest.user_key())
+            == CmpOrdering::Greater
+}
+
+// used for biggest user key
+fn key_is_before_file<C: Comparator>(
+    icmp: &InternalKeyComparator<C>,
+    file: &Arc<FileMetaData>,
+    ukey: Option<&[u8]>,
+) -> bool {
+    ukey.is_some()
+        && icmp
+            .user_comparator
+            .compare(ukey.unwrap(), file.smallest.user_key())
+            == CmpOrdering::Less
+}
 /// file number and file size are both u64, so 2 * size_of(u64)
 pub const FILE_META_LENGTH: usize = 2 * mem::size_of::<u64>();
 
@@ -668,7 +674,7 @@ impl<C: Comparator + 'static> Iterator for LevelFileNumIterator<C> {
     }
 
     fn seek(&mut self, target: &[u8]) {
-        let index = Version::find_file(self.icmp.clone(), self.files.as_slice(), target);
+        let index = find_file(&self.icmp, self.files.as_slice(), target);
         self.index = index;
         self.fill_value_buf();
     }
@@ -707,30 +713,21 @@ impl<C: Comparator + 'static> Iterator for LevelFileNumIterator<C> {
     }
 }
 #[cfg(test)]
-mod tests {
+mod find_file_tests {
     use super::*;
     use crate::db::format::{InternalKey, InternalKeyComparator, ValueType};
     use crate::util::comparator::BytewiseComparator;
 
-    struct FindFileTests {
-        files: Vec<Arc<FileMetaData>>,
+    #[derive(Default)]
+    struct FindFileTest {
         // Indicate whether file ranges are already disjoint
-        disjoint: bool,
+        overlapping: bool,
+        files: Vec<Arc<FileMetaData>>,
         cmp: InternalKeyComparator<BytewiseComparator>,
     }
 
-    impl FindFileTests {
-        fn new() -> Self {
-            let files: Vec<Arc<FileMetaData>> = Vec::new();
-            let cmp = InternalKeyComparator::new(BytewiseComparator::default());
-            Self {
-                files,
-                cmp,
-                disjoint: false,
-            }
-        }
-
-        fn generate(&mut self, smallest: &str, largest: &str) {
+    impl FindFileTest {
+        fn add(&mut self, smallest: &str, largest: &str) {
             let mut file = FileMetaData::default();
             file.number = self.files.len() as u64 + 1;
             file.smallest = InternalKey::new(smallest.as_bytes(), 100, ValueType::Value);
@@ -738,51 +735,186 @@ mod tests {
             self.files.push(Arc::new(file));
         }
 
-        fn find(&self, key: &str) -> usize {
-            let ikey = InternalKey::new(key.as_bytes(), 100, ValueType::Value);
-            Version::find_file(self.cmp.clone(), &self.files, ikey.data())
+        fn add_with_seq(&mut self, smallest: (&str, u64), largest: (&str, u64)) {
+            let mut file = FileMetaData::default();
+            file.number = self.files.len() as u64 + 1;
+            file.smallest = InternalKey::new(smallest.0.as_bytes(), smallest.1, ValueType::Value);
+            file.largest = InternalKey::new(largest.0.as_bytes(), largest.1, ValueType::Value);
+            self.files.push(Arc::new(file));
         }
 
-        // fn overlaps(&self, smallest: &str, largest: &str) -> bool {
+        fn find(&self, key: &str) -> usize {
+            let ikey = InternalKey::new(key.as_bytes(), 100, ValueType::Value);
+            find_file(&self.cmp, &self.files, ikey.data())
+        }
 
-        // }
+        fn overlaps(&self, smallest: Option<&str>, largest: Option<&str>) -> bool {
+            some_file_overlap_range(
+                &self.cmp,
+                !self.overlapping,
+                &self.files,
+                smallest.map(|s| s.as_bytes()),
+                largest.map(|s| s.as_bytes()),
+            )
+        }
+    }
+
+    #[test]
+    fn test_empty_file_set() {
+        let t = FindFileTest::default();
+        assert_eq!(0, t.find("foo"));
+        assert!(!t.overlaps(Some("a"), Some("z")));
+        assert!(!t.overlaps(None, Some("z")));
+        assert!(!t.overlaps(Some("a"), None));
+        assert!(!t.overlaps(None, None));
     }
 
     #[test]
     fn test_find_file_with_single_file() {
-        let mut test_suites = FindFileTests::new();
-        assert_eq!(0, test_suites.find("Foo"));
-        test_suites.generate("p", "q");
-        let test_cases = vec![(0, "a"), (0, "p"), (0, "q"), (1, "q1"), (1, "z")];
-        for (expected, input) in test_cases {
-            assert_eq!(expected, test_suites.find(input), "input {}", input);
+        let mut t = FindFileTest::default();
+        t.add("p", "q");
+        // Find tests
+        for (expected, input) in vec![(0, "a"), (0, "p"), (0, "p1"), (0, "q"), (1, "q1"), (1, "z")]
+        {
+            assert_eq!(expected, t.find(input), "input {}", input);
+        }
+        // Overlap tests
+        for (expected, (lhs, rhs)) in vec![
+            (false, (Some("a"), Some("b"))),
+            (false, (Some("z1"), Some("z2"))),
+            (true, (Some("a"), Some("p"))),
+            (true, (Some("a"), Some("q"))),
+            (true, (Some("p"), Some("p1"))),
+            (true, (Some("p"), Some("q"))),
+            (true, (Some("p1"), Some("p2"))),
+            (true, (Some("p1"), Some("z"))),
+            (true, (Some("q"), Some("q"))),
+            (true, (Some("q"), Some("q1"))),
+            (false, (None, Some("j"))),
+            (false, (Some("r"), None)),
+            (true, (None, Some("p"))),
+            (true, (None, Some("p1"))),
+            (true, (Some("q"), None)),
+            (true, (None, None)),
+        ] {
+            assert_eq!(expected, t.overlaps(lhs, rhs))
         }
     }
 
     #[test]
     fn test_find_files_with_various_files() {
-        let mut test_suites = FindFileTests::new();
-        let files = vec![
+        let mut t = FindFileTest::default();
+        for (start, end) in vec![
             ("150", "200"),
             ("200", "250"),
             ("300", "350"),
             ("400", "450"),
-        ];
-        for (start, end) in files {
-            test_suites.generate(start, end);
+        ] {
+            t.add(start, end);
         }
-        let test_cases = vec![
+        // Find tests
+        for (expected, input) in vec![
             (0, "100"),
             (0, "150"),
+            (0, "151"),
+            (0, "199"),
+            (0, "200"),
             (1, "201"),
+            (1, "249"),
+            (1, "250"),
             (2, "251"),
             (2, "301"),
             (2, "350"),
             (3, "351"),
             (4, "451"),
-        ];
-        for (expected, input) in test_cases {
-            assert_eq!(expected, test_suites.find(input), "input {}", input);
+        ] {
+            assert_eq!(expected, t.find(input), "input {}", input);
+        }
+        // Overlap tests
+        for (expected, (lhs, rhs)) in vec![
+            (false, (Some("100"), Some("149"))),
+            (false, (Some("251"), Some("299"))),
+            (false, (Some("451"), Some("500"))),
+            (false, (Some("351"), Some("399"))),
+            (true, (Some("100"), Some("150"))),
+            (true, (Some("100"), Some("200"))),
+            (true, (Some("100"), Some("300"))),
+            (true, (Some("100"), Some("400"))),
+            (true, (Some("100"), Some("500"))),
+            (true, (Some("375"), Some("400"))),
+            (true, (Some("450"), Some("450"))),
+            (true, (Some("450"), Some("500"))),
+        ] {
+            assert_eq!(expected, t.overlaps(lhs, rhs))
+        }
+    }
+
+    #[test]
+    fn test_multiple_null_boundaries() {
+        let mut t = FindFileTest::default();
+        for (start, end) in vec![
+            ("150", "200"),
+            ("200", "250"),
+            ("300", "350"),
+            ("400", "450"),
+        ] {
+            t.add(start, end);
+        }
+        for (expected, (lhs, rhs)) in vec![
+            (false, (None, Some("149"))),
+            (false, (Some("451"), None)),
+            (true, (None, None)),
+            (true, (None, Some("150"))),
+            (true, (None, Some("199"))),
+            (true, (None, Some("200"))),
+            (true, (None, Some("201"))),
+            (true, (None, Some("400"))),
+            (true, (None, Some("800"))),
+            (true, (Some("100"), None)),
+            (true, (Some("200"), None)),
+            (true, (Some("449"), None)),
+            (true, (Some("450"), None)),
+        ] {
+            assert_eq!(expected, t.overlaps(lhs, rhs))
+        }
+    }
+
+    #[test]
+    fn test_overlap_sequence_check() {
+        let mut t = FindFileTest::default();
+        t.add_with_seq(("200", 5000), ("200", 300));
+        for (expected, (lhs, rhs)) in vec![
+            (false, (Some("199"), Some("199"))),
+            (false, (Some("201"), Some("300"))),
+            (true, (Some("200"), Some("200"))),
+            (true, (Some("190"), Some("200"))),
+            (true, (Some("200"), Some("210"))),
+        ] {
+            assert_eq!(expected, t.overlaps(lhs, rhs))
+        }
+    }
+
+    #[test]
+    fn test_overlapping_files() {
+        let mut t = FindFileTest::default();
+        t.overlapping = true;
+        t.add("150", "600");
+        t.add("400", "500");
+        for (expected, (lhs, rhs)) in vec![
+            (false, (Some("100"), Some("149"))),
+            (false, (Some("601"), Some("700"))),
+            (true, (Some("100"), Some("150"))),
+            (true, (Some("100"), Some("200"))),
+            (true, (Some("100"), Some("300"))),
+            (true, (Some("100"), Some("400"))),
+            (true, (Some("100"), Some("500"))),
+            (true, (Some("375"), Some("400"))),
+            (true, (Some("450"), Some("450"))),
+            (true, (Some("450"), Some("500"))),
+            (true, (Some("450"), Some("700"))),
+            (true, (Some("600"), Some("700"))),
+        ] {
+            assert_eq!(expected, t.overlaps(lhs, rhs))
         }
     }
 }
