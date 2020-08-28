@@ -449,9 +449,18 @@ impl<C: Comparator + 'static> Version<C> {
         smallest_ukey: Option<&[u8]>,
         largest_ukey: Option<&[u8]>,
     ) -> bool {
-        if level == 0 {
-            // need to check against all files in level 0
-            for file in self.files[0].iter() {
+        self.some_file_overlap_range(level > 0, &self.files[level], smallest_ukey, largest_ukey)
+    }
+
+    fn some_file_overlap_range(
+        &self,
+        disjoint: bool,
+        files: &[Arc<FileMetaData>],
+        smallest_ukey: Option<&[u8]>,
+        largest_ukey: Option<&[u8]>,
+    ) -> bool {
+        if !disjoint {
+            for file in files {
                 if self.key_is_after_file(file.clone(), smallest_ukey)
                     || self.key_is_before_file(file.clone(), largest_ukey)
                 {
@@ -463,21 +472,21 @@ impl<C: Comparator + 'static> Version<C> {
             }
             return false;
         }
-        // binary search in level > 0
+        // binary search since file ranges are disjoint
         let index = {
             if let Some(s_ukey) = smallest_ukey {
                 let smallest_ikey = InternalKey::new(s_ukey, MAX_KEY_SEQUENCE, VALUE_TYPE_FOR_SEEK);
-                Self::find_file(self.icmp.clone(), &self.files[level], smallest_ikey.data())
+                Self::find_file(self.icmp.clone(), files, smallest_ikey.data())
             } else {
                 0
             }
         };
-        if index >= self.files[level].len() {
+        if index >= files.len() {
             // beginning of range is after all files, so no overlap
             return false;
         }
         // check whether the upper bound is overlapping
-        !self.key_is_before_file(self.files[level][index].clone(), largest_ukey)
+        !self.key_is_before_file(files[index].clone(), largest_ukey)
     }
 
     /// Return the approximate offset in the database of the data for
@@ -704,7 +713,9 @@ mod tests {
     use crate::util::comparator::BytewiseComparator;
 
     struct FindFileTests {
-        pub files: Vec<Arc<FileMetaData>>,
+        files: Vec<Arc<FileMetaData>>,
+        // Indicate whether file ranges are already disjoint
+        disjoint: bool,
         cmp: InternalKeyComparator<BytewiseComparator>,
     }
 
@@ -712,8 +723,11 @@ mod tests {
         fn new() -> Self {
             let files: Vec<Arc<FileMetaData>> = Vec::new();
             let cmp = InternalKeyComparator::new(BytewiseComparator::default());
-
-            Self { files, cmp }
+            Self {
+                files,
+                cmp,
+                disjoint: false,
+            }
         }
 
         fn generate(&mut self, smallest: &str, largest: &str) {
@@ -728,6 +742,10 @@ mod tests {
             let ikey = InternalKey::new(key.as_bytes(), 100, ValueType::Value);
             Version::find_file(self.cmp.clone(), &self.files, ikey.data())
         }
+
+        // fn overlaps(&self, smallest: &str, largest: &str) -> bool {
+
+        // }
     }
 
     #[test]
