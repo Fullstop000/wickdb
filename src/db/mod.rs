@@ -33,7 +33,6 @@ use crate::sstable::table::TableBuilder;
 use crate::storage::{File, Storage};
 use crate::table_cache::TableCache;
 use crate::util::reporter::LogReporter;
-use crate::util::slice::Slice;
 use crate::version::version_edit::{FileMetaData, VersionEdit};
 use crate::version::version_set::{SSTableIters, VersionSet};
 use crate::version::Version;
@@ -217,9 +216,14 @@ impl<S: Storage + Clone, C: Comparator + 'static> WickDB<S, C> {
         Ok(wick_db)
     }
 
-    /// Compact the underlying storage for the key range `[begin, end]`.
+    /// Schedule a compaction for the key range `[begin, end]`.
     pub fn compact_range(&self, begin: Option<&[u8]>, end: Option<&[u8]>) -> Result<()> {
         self.inner.compact_range(begin, end)
+    }
+
+    /// Schedue a manual compaction for the key range `[begin, end]` at level `level`
+    pub fn compact_range_at(&self, level: usize, begin: Option<&[u8]>, end: Option<&[u8]>) {
+        self.inner.manual_compact_range(level, begin, end)
     }
 
     /// Returns the inner background error
@@ -650,7 +654,8 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         let mut record_buf = vec![];
         let mut batch = WriteBatch::default();
         let mut max_sequence = 0;
-        let mut have_compacted = false; // indicates that maybe we need
+        let mut need_compaction = false; // indicates whether the memtable needs to be compacted
+        let mut inserted_size = 0;
         while reader.read_record(&mut record_buf) {
             if let Err(e) = reporter.result() {
                 return Err(e);
@@ -671,11 +676,12 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                     info!("ignore errors when replaying log file : {:?}", e);
                 }
             }
+            inserted_size += batch.approximate_size();
             if last_seq > max_sequence {
                 max_sequence = last_seq
             }
             if mem_ref.approximate_memory_usage() > self.options.write_buffer_size {
-                have_compacted = true;
+                need_compaction = true;
                 *save_manifest = true;
                 let mut iter = mem_ref.iter();
                 versions.write_level0_files(
@@ -683,12 +689,17 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                     self.table_cache.clone(),
                     &mut iter,
                     edit,
+                    false,
                 )?;
                 mem = None;
             }
         }
+        info!(
+            "{} bytes inserted into Memtable in recovering",
+            inserted_size
+        );
         // See if we should keep reusing the last log file.
-        if self.options.reuse_logs && last_log && !have_compacted {
+        if self.options.reuse_logs && last_log && !need_compaction {
             let log_file = reader.into_file();
             info!("Reusing old log file {}", file_name);
             versions.record_writer = Some(Writer::new(log_file));
@@ -701,14 +712,22 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
             }
         }
         if let Some(m) = &mem {
+            debug!("Try to flush memtable into level 0 in recovering",);
             *save_manifest = true;
             let mut iter = m.iter();
-            versions.write_level0_files(self.db_name, self.table_cache.clone(), &mut iter, edit)?;
+            versions.write_level0_files(
+                self.db_name,
+                self.table_cache.clone(),
+                &mut iter,
+                edit,
+                false,
+            )?;
         }
         Ok(max_sequence)
     }
 
     // Delete any unneeded files and stale in-memory entries.
+    // This func could delete generated compaction files when the compaction is failed due some reasons (e.g. block entry currupted)
     fn delete_obsolete_files(&self, mut versions: MutexGuard<VersionSet<S, C>>) {
         if self.bg_error.read().is_err() {
             // After a background error, we don't know whether a new version may
@@ -895,6 +914,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
             self.table_cache.clone(),
             &mut iter,
             &mut edit,
+            true,
         ) {
             Ok(()) => {
                 if self.is_shutting_down.load(Ordering::Acquire) {
@@ -990,8 +1010,10 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
             self.compact_mem_table();
         } else {
             let mut versions = self.versions.lock().unwrap();
+            let mut is_manual = false;
             let (compaction, signal) = {
                 if let Some(manual) = self.manual_compaction_queue.lock().unwrap().pop_front() {
+                    is_manual = true;
                     let begin = if let Some(begin) = &manual.begin {
                         format!("{:?}", begin)
                     } else {
@@ -1025,7 +1047,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                 }
             };
             if let Some(mut compaction) = compaction {
-                if compaction.is_trivial_move() {
+                if !is_manual && compaction.is_trivial_move() {
                     // just move file to next level
                     let f = compaction.inputs.base.first().unwrap();
                     compaction.edit.delete_file(compaction.level, f.number);
@@ -1098,20 +1120,18 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
             }
         };
         let mut mem_compaction_duration = 0;
-        input_iter.seek_to_first();
+        dbg!(input_iter.seek_to_first());
+        dbg!(input_iter.valid());
 
         // the current user key to be compacted
 
-        let mut current_ukey = Slice::default();
-        let mut has_current_ukey = false;
         let mut last_sequence_for_key = u64::max_value();
 
-        let icmp = self.internal_comparator.clone();
-        let ucmp = icmp.user_comparator.clone();
         let mut status = Ok(());
-        // Iterate every key
+        // TODO: Use Option<&[u8]> instead
+        let mut current_ukey: Option<Vec<u8>> = None;
         while input_iter.valid() && !self.is_shutting_down.load(Ordering::Acquire) {
-            // Prioritize immutable compaction work
+            // Prioritize immutable memtable compaction work
             if self.im_mem.read().unwrap().is_some() {
                 let imm_start = SystemTime::now();
                 self.compact_mem_table();
@@ -1120,22 +1140,22 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
             let iter_status = input_iter.status();
             let ikey = input_iter.key();
             // Checkout whether we need rotate a new output file
-            if c.should_stop_before(ikey, icmp.clone()) && c.builder.is_some() {
+            if c.should_stop_before(ikey, &self.internal_comparator) && c.builder.is_some() {
                 status = self.finish_output_file(c, iter_status);
                 if status.is_err() {
                     break;
                 }
             }
             let mut drop = false;
+            let ucmp = &self.internal_comparator.user_comparator;
             match ParsedInternalKey::decode_from(ikey) {
                 Some(key) => {
-                    if !has_current_ukey
-                        || ucmp.compare(&key.user_key, current_ukey.as_slice())
+                    if !current_ukey.is_some()
+                        || ucmp.compare(&key.user_key, current_ukey.as_ref().unwrap())
                             != CmpOrdering::Equal
                     {
                         // First occurrence of this user key
-                        current_ukey = Slice::from(key.user_key);
-                        has_current_ukey = true;
+                        current_ukey = Some(key.user_key.to_vec());
                         last_sequence_for_key = u64::max_value();
                     }
                     // Keep the still-in-use old key or not
@@ -1183,8 +1203,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                     }
                 }
                 None => {
-                    current_ukey = Slice::default();
-                    has_current_ukey = false;
+                    current_ukey = None;
                     last_sequence_for_key = u64::max_value();
                 }
             }
@@ -1381,7 +1400,7 @@ pub(crate) fn build_table<S: Storage + Clone, C: Comparator + 'static>(
     if iter.valid() {
         let file = storage.create(file_name.as_str())?;
         let icmp = InternalKeyComparator::new(options.comparator.clone());
-        let mut builder = TableBuilder::new(file, icmp.clone(), options);
+        let mut builder = TableBuilder::new(file, icmp.clone(), &options);
         let mut prev_key = None;
         let smallest_key = iter.key().to_vec();
         while iter.valid() {
@@ -1427,12 +1446,13 @@ pub(crate) fn build_table<S: Storage + Clone, C: Comparator + 'static>(
 }
 
 #[cfg(test)]
-// TODO: remove this after DB test cases are completed
 #[allow(dead_code)]
 mod tests {
     use super::*;
     use crate::storage::mem::MemStorage;
-    use crate::{BloomFilter, BytewiseComparator, CompressionType};
+    use crate::{BloomFilter, BytewiseComparator, CompressionType, Options};
+    use rand::distributions::Alphanumeric;
+    use rand::{thread_rng, Rng};
     use std::ops::Deref;
     use std::rc::Rc;
     use std::str;
@@ -1508,7 +1528,6 @@ mod tests {
     }
 
     struct DBTest {
-        opt_type: TestOption,
         // Used as the db's inner storage
         store: MemStorage,
         // Used as the db's options
@@ -1541,22 +1560,17 @@ mod tests {
         .into_iter()
         .map(|opt| {
             let options = opt_hook(new_test_options(opt));
-            DBTest::new(opt, options)
+            DBTest::new(options)
         })
         .collect()
     }
 
     impl DBTest {
-        fn new(opt_type: TestOption, opt: Options<BytewiseComparator>) -> Self {
+        fn new(opt: Options<BytewiseComparator>) -> Self {
             let store = MemStorage::default();
             let name = "db_test";
             let db = WickDB::open_db(opt.clone(), name, store.clone()).unwrap();
-            DBTest {
-                opt_type,
-                store,
-                opt,
-                db,
-            }
+            DBTest { store, opt, db }
         }
 
         // Close the inner db without destroy the contents and establish a new WickDB on same db path with same option
@@ -1749,12 +1763,7 @@ mod tests {
             let name = "db_test";
             let opt = new_test_options(TestOption::Default);
             let db = WickDB::open_db(opt.clone(), name, store.clone()).unwrap();
-            DBTest {
-                opt_type: TestOption::Default,
-                store,
-                opt,
-                db,
-            }
+            DBTest { store, opt, db }
         }
     }
 
@@ -2231,6 +2240,43 @@ mod tests {
             t.assert_get("bar", Some("v2"));
             t.assert_get("big1", Some("x".repeat(10_000_000).as_str()));
             t.assert_get("big2", Some("y".repeat(1000).as_str()));
+        }
+    }
+
+    #[test]
+    fn test_compaction_generate_multiple_files() {
+        let mut opt = Options::default();
+        opt.write_buffer_size = 100_000_000;
+        opt.logger_level = crate::LevelFilter::Trace;
+        let mut t = DBTest::new(opt);
+        t.assert_file_num_at_level(0, 0);
+        let n = 80;
+        // write 8MB (80 values, each 100k)
+        let mut values = vec![];
+        for i in 0..n {
+            let v = thread_rng()
+                .sample_iter(&Alphanumeric)
+                .take(100000)
+                .collect::<String>();
+            values.push(v.clone());
+            t.put(&i.to_string(), &v).unwrap();
+        }
+
+        // As opt.reuse_log = false, reopening moves entries into level-0 after replaying the WAL
+        t.reopen().unwrap();
+        for i in 0..n {
+            t.assert_get(&i.to_string(), Some(&values[i]));
+        }
+        t.compact_range_at(0, None, None);
+        t.assert_file_num_at_level(0, 0);
+        let l1_count = t.inner.versions.lock().unwrap().level_files_count(1);
+        assert!(
+            l1_count > 1,
+            "level 1 file numbers should > 1, but got {}",
+            l1_count
+        );
+        for i in 0..n {
+            t.assert_get(&i.to_string(), Some(&values[i]));
         }
     }
 }

@@ -274,7 +274,7 @@ impl<C: Comparator> Default for Options<C> {
             block_restart_interval: 16,
             max_file_size: 2 * 1024 * 1024, // 2MB
             compression: CompressionType::SnappyCompression,
-            reuse_logs: true,
+            reuse_logs: false,
             filter_policy: None,
             logger: None,
             logger_level: LevelFilter::Warn,

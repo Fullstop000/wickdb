@@ -465,6 +465,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
         let version = self.current();
         let mut overlapping_inputs = version.get_overlapping_inputs(level, begin, end);
         if overlapping_inputs.is_empty() {
+            dbg!("no overlapping", begin, end);
             return None;
         }
         // Avoid compacting too much in one shot in case the range is large.
@@ -565,17 +566,16 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
         Some(self.setup_other_inputs(compaction))
     }
 
-    /// Persistent given memtable into a single sst file and the
-    /// file could be pushed into level1 or level2 if there's no too much
-    /// overlapping.
+    /// Persistent given memtable into a single sst file to level0.
+    /// If `into_base` is true, the file could be pushed into level1 or level2 if there's no too much overlapping.
     pub fn write_level0_files(
         &mut self,
         db_name: &str,
         table_cache: TableCache<S, C>,
         mem_iter: &mut dyn Iterator,
         edit: &mut VersionEdit,
+        into_base: bool,
     ) -> Result<()> {
-        let base = self.current();
         let now = SystemTime::now();
         let mut meta = FileMetaData::default();
         meta.number = self.inc_next_file_number();
@@ -599,7 +599,14 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
             );
             let smallest_ukey = meta.smallest.user_key();
             let largest_ukey = meta.largest.user_key();
-            level = base.pick_level_for_memtable_output(smallest_ukey, largest_ukey);
+            if into_base {
+                let base = self.current();
+                level = base.pick_level_for_memtable_output(smallest_ukey, largest_ukey);
+                debug!(
+                    "Pick up new level for table: level {}, table #{}",
+                    level, meta.number
+                );
+            }
             edit.add_file(
                 level,
                 meta.number,
@@ -638,11 +645,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
         output.number = file_number;
         let file_name = generate_filename(self.db_name, FileType::Table, file_number);
         let file = self.storage.create(file_name.as_str())?;
-        c.builder = Some(TableBuilder::new(
-            file,
-            self.icmp.clone(),
-            self.options.clone(),
-        ));
+        c.builder = Some(TableBuilder::new(file, self.icmp.clone(), &self.options));
         c.outputs.push(output);
         Ok(())
     }
@@ -1032,12 +1035,13 @@ impl<S: Storage + Clone, C: Comparator + 'static> DerivedIterFactory for FileIte
     // The value is a bytes with fixed encoded file number and fixed encoded file size
     fn derive(&self, value: &[u8]) -> Result<Self::Iter> {
         if value.len() != FILE_META_LENGTH {
+            dbg!("FileIterFactory Corruption");
             Err(Error::Corruption(
                 "file reader invoked with unexpected value".to_owned(),
             ))
         } else {
-            let file_number = decode_fixed_64(value);
-            let file_size = decode_fixed_64(&value[std::mem::size_of::<u64>()..]);
+            let file_number = dbg!(decode_fixed_64(value));
+            let file_size = dbg!(decode_fixed_64(&value[std::mem::size_of::<u64>()..]));
             self.table_cache
                 .new_iter(self.icmp.clone(), self.options, file_number, file_size)
         }
@@ -1054,9 +1058,9 @@ pub fn total_file_size(files: &[Arc<FileMetaData>]) -> u64 {
 /// The inner implementation is mostly like a merging iterator.
 pub struct SSTableIters<S: Storage + Clone, C: Comparator + 'static> {
     cmp: InternalKeyComparator<C>,
-    // Level0 table iterators. An iterator represents a table
+    // Level0 table iterators. One iterator for one sst file
     level0: Vec<TableIterator<InternalKeyComparator<C>, S::F>>,
-    // ConcatenateIterators for opening SST in level n>1 lazily. An iterator represents a level
+    // ConcatenateIterators for opening SST in level n>1 lazily. One iterator for one level
     leveln: Vec<ConcatenateIterator<LevelFileNumIterator<C>, FileIterFactory<S, C>>>,
 }
 
@@ -1122,7 +1126,7 @@ impl<S: Storage + Clone, C: Comparator> KMergeCore for SSTableIters<S, C> {
 
     fn get_child(&self, i: usize) -> &dyn Iterator {
         if i < self.level0.len() {
-            self.leveln.get(i).unwrap() as &dyn Iterator
+            self.level0.get(i).unwrap() as &dyn Iterator
         } else {
             let current = i - self.level0.len();
             self.leveln.get(current).unwrap() as &dyn Iterator
@@ -1131,7 +1135,7 @@ impl<S: Storage + Clone, C: Comparator> KMergeCore for SSTableIters<S, C> {
 
     fn get_child_mut(&mut self, i: usize) -> &mut dyn Iterator {
         if i < self.level0.len() {
-            self.leveln.get_mut(i).unwrap() as &mut dyn Iterator
+            self.level0.get_mut(i).unwrap() as &mut dyn Iterator
         } else {
             let current = i - self.level0.len();
             self.leveln.get_mut(current).unwrap() as &mut dyn Iterator

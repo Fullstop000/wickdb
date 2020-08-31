@@ -98,11 +98,11 @@ impl Default for Block {
 /// Iterator for every entry in the block
 pub struct BlockIterator<C: Comparator> {
     cmp: C,
-
     err: Option<Error>,
+
     // underlying block data
-    // should never be modified in iterator
     data: Rc<Vec<u8>>,
+
     /*
       restarts
     */
@@ -119,7 +119,7 @@ pub struct BlockIterator<C: Comparator> {
     shared: u32,     // shared length
     not_shared: u32, // not shared length
     value_len: u32,  // value length
-    key_offset: u32, // the offset of the key in the block
+    key_offset: u32, // the offset of the current key in the block
     // Buffer for a completed key
     // The key is saperated in multiple segments in `data`.
     key: Vec<u8>,
@@ -127,7 +127,6 @@ pub struct BlockIterator<C: Comparator> {
 
 impl<C: Comparator> BlockIterator<C> {
     pub fn new(cmp: C, data: Rc<Vec<u8>>, restarts: u32, restarts_len: u32) -> Self {
-        // should be 0
         Self {
             cmp,
             err: None,
@@ -159,6 +158,10 @@ impl<C: Comparator> BlockIterator<C> {
         self.key.clear();
         self.restart_index = index;
         self.current = self.get_restart_point(index);
+        debug!(
+            "seek_to_restart_point: restart_index {}, current {}",
+            self.restart_index, self.current
+        );
     }
 
     // Decodes a block entry from `current`
@@ -171,20 +174,38 @@ impl<C: Comparator> BlockIterator<C> {
         let (value_len, n2) = VarintU32::common_read(&src[(n1 + n0) as usize..]);
         let n = (n0 + n1 + n2) as u32;
         if offset + n + not_shared + value_len > self.restarts {
+            trace!(
+                "corrupted: parse_blcok_entry: current {}, restarts {}, entry lengh {}",
+                self.current,
+                self.restarts,
+                offset + n + not_shared + value_len
+            );
             self.corruption_err();
             return false;
         }
+        // trace!(
+        //     "############################## update key_offset: {}, current {} + encoded length {}",
+        //     self.current + n,
+        //     self.current,
+        //     n
+        // );
         self.key_offset = self.current + n;
         self.shared = shared; // actually not be used
         self.not_shared = not_shared;
+        trace!(
+            "############################# update value_len: {}",
+            value_len
+        );
         self.value_len = value_len;
         let total_key_len = (shared + not_shared) as usize;
         self.key.resize(total_key_len, 0);
-        // compressed key
+        // de-compress key
         let delta = &self.data[self.key_offset as usize..(self.key_offset + not_shared) as usize];
         for i in shared as usize..total_key_len {
             self.key[i] = delta[i - shared as usize]
         }
+        trace!("b.iter: key {}", std::str::from_utf8(&self.key).unwrap());
+
         // update restart index
         while self.restart_index + 1 < self.restarts_len
             && self.get_restart_point(self.restart_index + 1) < self.current
@@ -217,12 +238,13 @@ impl<C: Comparator> BlockIterator<C> {
 impl<C: Comparator> Iterator for BlockIterator<C> {
     #[inline]
     fn valid(&self) -> bool {
-        self.current < self.restarts
+        self.err.is_none() && self.current < self.restarts
     }
 
     fn seek_to_first(&mut self) {
         self.seek_to_restart_point(0);
         self.parse_block_entry();
+        trace!("block iter: seek to first: current {}", self.current);
     }
 
     fn seek_to_last(&mut self) {
@@ -280,7 +302,15 @@ impl<C: Comparator> Iterator for BlockIterator<C> {
     fn next(&mut self) {
         self.valid_or_panic();
         // Set the next current offset first
+        trace!(
+            "BlockIterator next before next_entry_offset: current {}",
+            self.current
+        );
         self.current = self.next_entry_offset();
+        trace!(
+            "BlockIterator next after next_entry_offset: current {}",
+            self.current
+        );
         self.parse_block_entry();
     }
 
@@ -305,8 +335,6 @@ impl<C: Comparator> Iterator for BlockIterator<C> {
         }
     }
 
-    // NOTICE: All the slices return by `key()` point to the same memory so be careful
-    // when call this in the loop
     fn key(&self) -> &[u8] {
         self.valid_or_panic();
         &self.key

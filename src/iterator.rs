@@ -195,10 +195,15 @@ impl<I: Iterator, F: DerivedIterFactory> Iterator for ConcatenateIterator<I, F> 
 
     fn seek_to_first(&mut self) {
         self.origin.seek_to_first();
+        dbg!("=================CC iter: Seek to first");
         self.init_derived_iter();
+        dbg!("=================CC iter: derive iter");
         if let Some(di) = self.derived.as_mut() {
-            di.seek_to_first()
+            dbg!("=================CC iter: derive iter seek_to_first");
+            di.seek_to_first();
+            dbg!(di.valid());
         }
+        dbg!("=================CC iter: skip_forward");
         // scan forward util finding the first valid entry
         self.skip_forward();
     }
