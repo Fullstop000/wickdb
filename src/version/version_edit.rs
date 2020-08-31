@@ -81,6 +81,16 @@ pub struct FileMetaData {
     pub largest: InternalKey,
 }
 
+impl PartialEq for FileMetaData {
+    fn eq(&self, other: &FileMetaData) -> bool {
+        self.file_size == other.file_size
+            && self.number == other.number
+            && self.smallest == other.smallest
+            && self.largest == other.largest
+    }
+}
+impl Eq for FileMetaData {}
+
 impl Default for FileMetaData {
     fn default() -> Self {
         FileMetaData {

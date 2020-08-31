@@ -831,7 +831,11 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
                 current.get_overlapping_inputs(c.level, Some(all_smallest), Some(all_largest));
             // Add boundary for expanded L(n) inputs
             // The `expanded0` could have a larger key range than the origin `inputs[0]` in given `c`
-            self.add_boundary_inputs_for_compact_files(c.level, &mut expanded0);
+            add_boundary_inputs_for_compact_files(
+                &self.icmp,
+                &current.files[c.level],
+                &mut expanded0,
+            );
             let expanded0_size = total_file_size(&expanded0);
             let not_expanded_size = total_file_size(&not_expand);
             let next_size = total_file_size(&overlapping_next_level);
@@ -905,71 +909,10 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
 
     // A helper of 'add_boundary_input_for_compact_files' for files in `c.level`
     fn add_boundary_inputs(&self, mut c: Compaction<S::F, C>) -> Compaction<S::F, C> {
-        self.add_boundary_inputs_for_compact_files(c.level, &mut c.inputs.base);
+        let level_files = &self.current().files[c.level];
+        add_boundary_inputs_for_compact_files(&self.icmp, level_files, &mut c.inputs.base);
         c
     }
-
-    // Add SST files which should have been included in `level` compaction but excluded by some reasons (e.g output size limit truncating).
-    // This guarantees that all the `InternalKey`s with a same user key in level `level` should be compacted. Otherwise, we might encounter a
-    // snapshot reading issue because the older key remains in a lower level when the newest key is at higher level
-    // after compaction.
-    fn add_boundary_inputs_for_compact_files(
-        &self,
-        level: usize,
-        files_to_compact: &mut Vec<Arc<FileMetaData>>,
-    ) {
-        if !files_to_compact.is_empty() {
-            // find the largest key in files to compact by internal comparator
-            // TODO: could pass an `Option<&InternalKey>` as the largest to avoid searching here
-            let mut tmp = files_to_compact[0].clone();
-            for f in files_to_compact.iter().skip(1) {
-                if self.icmp.compare(f.largest.data(), tmp.largest.data()) == CmpOrdering::Greater {
-                    tmp = f.clone();
-                }
-            }
-            let mut largest_key = &tmp.largest;
-            let mut smallest_boundary_file = self.find_smallest_boundary_file(level, &largest_key);
-            while let Some(file) = &smallest_boundary_file {
-                // If a boundary file was found, advance the `largest_key`. Otherwise we're done.
-                // This might leave 'holes' in files to be compacted because we only append the last boundary file.
-                // The 'holes' will be filled later (by calling `get_overlapping_inputs`).
-                files_to_compact.push(file.clone());
-                largest_key = &file.largest;
-                smallest_boundary_file = self.find_smallest_boundary_file(level, &largest_key);
-            }
-        }
-    }
-
-    // Iterate all the files in level until find the file whose smallest key has same user key
-    // and greater sequence number by `InternalComparator` ( actually smaller in digits )
-    fn find_smallest_boundary_file(
-        &self,
-        level: usize,
-        largest_key: &InternalKey,
-    ) -> Option<Arc<FileMetaData>> {
-        let ucmp = &self.icmp.user_comparator;
-        let current = self.current();
-        let level_files = &current.files[level];
-        let mut smallest_boundary_file: Option<Arc<FileMetaData>> = None;
-        for f in level_files.iter() {
-            if self.icmp.compare(f.smallest.data(), largest_key.data()) == CmpOrdering::Greater
-                && ucmp.compare(f.smallest.user_key(), largest_key.user_key()) == CmpOrdering::Equal
-            {
-                match &smallest_boundary_file {
-                    None => smallest_boundary_file = Some(f.clone()),
-                    Some(f) => {
-                        if self.icmp.compare(f.smallest.data(), f.smallest.data())
-                            == CmpOrdering::Less
-                        {
-                            smallest_boundary_file = Some(f.clone());
-                        }
-                    }
-                }
-            }
-        }
-        smallest_boundary_file
-    }
-
     // See if we can reuse the existing MANIFEST file
     fn should_reuse_manifest(&mut self, manifest_file: &str, file_size: u64) -> bool {
         if !self.options.reuse_logs {
@@ -1000,6 +943,66 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
             false
         }
     }
+}
+
+// Add SST files which should have been included in `level` compaction but excluded by some reasons (e.g output size limit truncating).
+// This guarantees that all the `InternalKey`s with a same user key in level `level` should be compacted. Otherwise, we might encounter a
+// snapshot reading issue because the older key remains in a lower level when the newest key is at higher level after compaction.
+// `files_to_compact` could be expand after this methods
+fn add_boundary_inputs_for_compact_files<C: Comparator>(
+    icmp: &InternalKeyComparator<C>,
+    level_files: &[Arc<FileMetaData>],
+    files_to_compact: &mut Vec<Arc<FileMetaData>>,
+) {
+    if !files_to_compact.is_empty() {
+        // find the largest key in files to compact by internal comparator
+        // TODO: could pass an `Option<&InternalKey>` as the largest to avoid searching here
+        let mut tmp = &files_to_compact[0];
+        for f in files_to_compact.iter().skip(1) {
+            if icmp.compare(f.largest.data(), tmp.largest.data()) == CmpOrdering::Greater {
+                tmp = f;
+            }
+        }
+        let mut largest_key = &tmp.largest;
+        let mut smallest_boundary_file =
+            find_smallest_boundary_file(icmp, level_files, &largest_key);
+        while let Some(file) = &smallest_boundary_file {
+            // If a boundary file was found, advance the `largest_key`. Otherwise we're done.
+            // This might leave 'holes' in files to be compacted because we only append the last boundary file.
+            // The 'holes' will be filled later (by calling `get_overlapping_inputs`).
+            files_to_compact.push(file.clone());
+            largest_key = &file.largest;
+            smallest_boundary_file = find_smallest_boundary_file(icmp, level_files, &largest_key);
+        }
+    }
+}
+
+// Iterate all the files in level until find the file whose smallest key has same user key
+// and greater sequence number by `InternalComparator` ( actually smaller in digits )
+fn find_smallest_boundary_file<C: Comparator>(
+    icmp: &InternalKeyComparator<C>,
+    level_files: &[Arc<FileMetaData>],
+    largest_key: &InternalKey,
+) -> Option<Arc<FileMetaData>> {
+    let ucmp = &icmp.user_comparator;
+    let mut smallest_boundary_file: Option<&Arc<FileMetaData>> = None;
+    for f in level_files {
+        // f.smallest.ikey > largest.ikey && f.smallest.ukey == largest.ukey
+        if icmp.compare(f.smallest.data(), largest_key.data()) == CmpOrdering::Greater
+            && ucmp.compare(f.smallest.user_key(), largest_key.user_key()) == CmpOrdering::Equal
+        {
+            match &smallest_boundary_file {
+                None => smallest_boundary_file = Some(f),
+                Some(current) => {
+                    if icmp.compare(f.smallest.data(), current.smallest.data()) == CmpOrdering::Less
+                    {
+                        smallest_boundary_file = Some(f);
+                    }
+                }
+            }
+        }
+    }
+    smallest_boundary_file.cloned()
 }
 
 ///
@@ -1181,5 +1184,184 @@ impl<S: Storage + Clone, C: Comparator> KMergeCore for SSTableIters<S, C> {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod add_boundary_tests {
+    use super::*;
+    use crate::db::format::{InternalKey, InternalKeyComparator, ValueType};
+    use crate::util::comparator::BytewiseComparator;
+
+    #[derive(Default)]
+    struct AddBoundaryInputTests {
+        icmp: InternalKeyComparator<BytewiseComparator>,
+        level_files: Vec<Arc<FileMetaData>>,
+        all: Vec<Arc<FileMetaData>>,
+    }
+
+    impl AddBoundaryInputTests {
+        fn new_file(
+            &mut self,
+            number: u64,
+            smallest: InternalKey,
+            largest: InternalKey,
+        ) -> Arc<FileMetaData> {
+            let mut f = FileMetaData::default();
+            f.number = number;
+            f.smallest = smallest;
+            f.largest = largest;
+            let f = Arc::new(f);
+            self.all.push(f.clone());
+            f
+        }
+    }
+
+    #[test]
+    fn test_empty_file_sets() {
+        let t = AddBoundaryInputTests::default();
+        let mut files_to_compact = vec![];
+        add_boundary_inputs_for_compact_files(&t.icmp, &t.level_files, &mut files_to_compact);
+        assert!(t.level_files.is_empty());
+        assert!(files_to_compact.is_empty());
+    }
+
+    #[test]
+    fn test_empty_level_files() {
+        let mut t = AddBoundaryInputTests::default();
+        let f = t.new_file(
+            1,
+            InternalKey::new(b"100", 2, ValueType::Value),
+            InternalKey::new(b"100", 1, ValueType::Value),
+        );
+        let mut files_to_compact = vec![f.clone()];
+        add_boundary_inputs_for_compact_files(&t.icmp, &t.level_files, &mut files_to_compact);
+        assert_eq!(1, files_to_compact.len());
+        assert_eq!(f, files_to_compact[0]);
+    }
+
+    #[test]
+    fn test_empty_compaction_files() {
+        let mut t = AddBoundaryInputTests::default();
+        let f = t.new_file(
+            1,
+            InternalKey::new(b"100", 2, ValueType::Value),
+            InternalKey::new(b"100", 1, ValueType::Value),
+        );
+        t.level_files.push(f);
+        let mut files_to_compact = vec![];
+        add_boundary_inputs_for_compact_files(&t.icmp, &t.level_files, &mut files_to_compact);
+        assert!(files_to_compact.is_empty());
+    }
+
+    // ensure the `files_to_compaction` will not be expanded if all the files in the key range are included
+    #[test]
+    fn test_no_boundary_files() {
+        let mut t = AddBoundaryInputTests::default();
+        let f1 = t.new_file(
+            1,
+            InternalKey::new(b"100", 2, ValueType::Value),
+            InternalKey::new(b"100", 1, ValueType::Value),
+        );
+        let f2 = t.new_file(
+            1,
+            InternalKey::new(b"200", 2, ValueType::Value),
+            InternalKey::new(b"200", 1, ValueType::Value),
+        );
+        let f3 = t.new_file(
+            1,
+            InternalKey::new(b"300", 2, ValueType::Value),
+            InternalKey::new(b"300", 1, ValueType::Value),
+        );
+        t.level_files.push(f1.clone());
+        t.level_files.push(f2.clone());
+        t.level_files.push(f3.clone());
+        let mut files_to_compact = vec![f2.clone(), f3.clone()];
+        add_boundary_inputs_for_compact_files(&t.icmp, &t.level_files, &mut files_to_compact);
+        assert_eq!(files_to_compact, vec![f2, f3]);
+    }
+
+    #[test]
+    fn test_one_boundary_file() {
+        let mut t = AddBoundaryInputTests::default();
+        let f1 = t.new_file(
+            1,
+            InternalKey::new(b"100", 3, ValueType::Value),
+            InternalKey::new(b"100", 2, ValueType::Value),
+        );
+        let f2 = t.new_file(
+            1,
+            InternalKey::new(b"100", 1, ValueType::Value),
+            InternalKey::new(b"200", 3, ValueType::Value),
+        );
+        let f3 = t.new_file(
+            1,
+            InternalKey::new(b"300", 2, ValueType::Value),
+            InternalKey::new(b"300", 1, ValueType::Value),
+        );
+        t.level_files.push(f3.clone());
+        t.level_files.push(f2.clone());
+        t.level_files.push(f1.clone());
+        let mut files_to_compact = vec![f1.clone()];
+        add_boundary_inputs_for_compact_files(&t.icmp, &t.level_files, &mut files_to_compact);
+        assert_eq!(files_to_compact, vec![f1, f2]);
+    }
+
+    #[test]
+    fn test_two_boundary_files() {
+        let mut t = AddBoundaryInputTests::default();
+        let f1 = t.new_file(
+            1,
+            InternalKey::new(b"100", 6, ValueType::Value),
+            InternalKey::new(b"100", 5, ValueType::Value),
+        );
+        let f2 = t.new_file(
+            1,
+            InternalKey::new(b"100", 2, ValueType::Value),
+            InternalKey::new(b"100", 1, ValueType::Value),
+        );
+        let f3 = t.new_file(
+            1,
+            InternalKey::new(b"100", 4, ValueType::Value),
+            InternalKey::new(b"100", 3, ValueType::Value),
+        );
+        t.level_files.push(f2.clone());
+        t.level_files.push(f3.clone());
+        t.level_files.push(f1.clone());
+        let mut files_to_compact = vec![f1.clone()];
+        add_boundary_inputs_for_compact_files(&t.icmp, &t.level_files, &mut files_to_compact);
+        assert_eq!(files_to_compact, vec![f1, f3, f2]);
+    }
+
+    #[test]
+    fn test_disjoint_files() {
+        let mut t = AddBoundaryInputTests::default();
+        let f1 = t.new_file(
+            1,
+            InternalKey::new(b"100", 6, ValueType::Value),
+            InternalKey::new(b"100", 5, ValueType::Value),
+        );
+        let f2 = t.new_file(
+            1,
+            InternalKey::new(b"100", 6, ValueType::Value),
+            InternalKey::new(b"100", 5, ValueType::Value),
+        );
+        let f3 = t.new_file(
+            1,
+            InternalKey::new(b"100", 2, ValueType::Value),
+            InternalKey::new(b"300", 1, ValueType::Value),
+        );
+        let f4 = t.new_file(
+            1,
+            InternalKey::new(b"100", 4, ValueType::Value),
+            InternalKey::new(b"100", 3, ValueType::Value),
+        );
+        t.level_files.push(f2.clone());
+        t.level_files.push(f3.clone());
+        t.level_files.push(f4.clone());
+
+        let mut files_to_compact = vec![f1.clone()];
+        add_boundary_inputs_for_compact_files(&t.icmp, &t.level_files, &mut files_to_compact);
+        assert_eq!(files_to_compact, vec![f1, f4, f3]);
     }
 }
