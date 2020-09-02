@@ -1150,7 +1150,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
             let ucmp = &self.internal_comparator.user_comparator;
             match ParsedInternalKey::decode_from(ikey) {
                 Some(key) => {
-                    if !current_ukey.is_some()
+                    if current_ukey.is_none()
                         || ucmp.compare(&key.user_key, current_ukey.as_ref().unwrap())
                             != CmpOrdering::Equal
                     {
