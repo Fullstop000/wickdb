@@ -1120,8 +1120,8 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
             }
         };
         let mut mem_compaction_duration = 0;
-        dbg!(input_iter.seek_to_first());
-        dbg!(input_iter.valid());
+        input_iter.seek_to_first();
+        input_iter.valid();
 
         // the current user key to be compacted
 

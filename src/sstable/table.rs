@@ -234,7 +234,6 @@ impl<C: Comparator, F: File> DerivedIterFactory for TableIterFactory<C, F> {
     type Iter = BlockIterator<C>;
     fn derive(&self, value: &[u8]) -> Result<Self::Iter> {
         BlockHandle::decode_from(value).and_then(|(handle, _)| {
-            trace!("TableIterFactory derive: block handle {:?}", &handle);
             self.table
                 .block_reader(self.cmp.clone(), handle, self.options)
         })
@@ -260,7 +259,6 @@ pub fn new_table_iterator<C: Comparator, F: File>(
         table,
         cmp,
     };
-    dbg!("new table iterator");
     ConcatenateIterator::new(index_iter, factory)
 }
 
