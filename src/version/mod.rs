@@ -656,7 +656,6 @@ impl<C: Comparator + 'static> Iterator for LevelFileNumIterator<C> {
     }
 
     fn seek_to_first(&mut self) {
-        dbg!("LevelFileNumIter: seek to first");
         self.index = 0;
         self.fill_value_buf();
     }

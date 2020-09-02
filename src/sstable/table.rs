@@ -663,12 +663,12 @@ mod tests {
         let file = s.open("test").unwrap();
         let file_len = file.len().unwrap();
         let cmp = BytewiseComparator::default();
-        let table = Table::open(file, file_len, opt.clone(), cmp).unwrap();
+        let table = Table::open(file, file_len, opt, cmp).unwrap();
         assert!(table.filter_reader.is_none());
         assert!(table.meta_block_handle.is_none()); // no filter block means no meta block
         let read_opt = ReadOptions::default();
-        let res = table.internal_get(read_opt, cmp, b"test");
-        assert!(res.is_err());
+        let res = table.internal_get(read_opt, cmp, b"test").unwrap();
+        assert!(res.is_none());
     }
 
     #[test]

@@ -465,7 +465,6 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
         let version = self.current();
         let mut overlapping_inputs = version.get_overlapping_inputs(level, begin, end);
         if overlapping_inputs.is_empty() {
-            dbg!("no overlapping", begin, end);
             return None;
         }
         // Avoid compacting too much in one shot in case the range is large.
@@ -1035,13 +1034,12 @@ impl<S: Storage + Clone, C: Comparator + 'static> DerivedIterFactory for FileIte
     // The value is a bytes with fixed encoded file number and fixed encoded file size
     fn derive(&self, value: &[u8]) -> Result<Self::Iter> {
         if value.len() != FILE_META_LENGTH {
-            dbg!("FileIterFactory Corruption");
             Err(Error::Corruption(
                 "file reader invoked with unexpected value".to_owned(),
             ))
         } else {
-            let file_number = dbg!(decode_fixed_64(value));
-            let file_size = dbg!(decode_fixed_64(&value[std::mem::size_of::<u64>()..]));
+            let file_number = decode_fixed_64(value);
+            let file_size = decode_fixed_64(&value[std::mem::size_of::<u64>()..]);
             self.table_cache
                 .new_iter(self.icmp.clone(), self.options, file_number, file_size)
         }
