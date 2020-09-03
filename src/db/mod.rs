@@ -948,7 +948,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         // Schedule a force memory compaction
         self.schedule_batch_and_wait(WriteOptions::default(), empty_batch, true)?;
         // Waiting for memory compaction complete
-        // TODO: This is not safe because there could be several compaction be triggered one by one
+        // TODO: This is not safe because there could be several compaction triggered continously
         thread::sleep(Duration::from_secs(1));
         if self.im_mem.read().unwrap().is_some() {
             return self.take_bg_error().map_or(Ok(()), |e| Err(e));
@@ -1449,7 +1449,6 @@ pub(crate) fn build_table<S: Storage + Clone, C: Comparator + 'static>(
 }
 
 #[cfg(test)]
-#[allow(dead_code)]
 mod tests {
     use super::*;
     use crate::storage::mem::MemStorage;
@@ -1465,10 +1464,6 @@ mod tests {
             self.inner.options.clone()
         }
 
-        fn files_count_at_level(&self, level: usize) -> usize {
-            self.inner.versions.lock().unwrap().level_files_count(level)
-        }
-
         fn total_sst_files(&self) -> usize {
             let versions = self.inner.versions.lock().unwrap();
             let mut res = 0;
@@ -1478,6 +1473,7 @@ mod tests {
             res
         }
 
+        #[allow(dead_code)]
         fn file_count_per_level(&self) -> String {
             let mut res = String::new();
             let versions = self.inner.versions.lock().unwrap();
@@ -1568,6 +1564,7 @@ mod tests {
         .collect()
     }
 
+    #[allow(dead_code)]
     impl DBTest {
         fn new(opt: Options<BytewiseComparator>) -> Self {
             let store = MemStorage::default();
@@ -2285,8 +2282,10 @@ mod tests {
     #[test]
     fn test_repeated_write_to_same_key() {
         let mut opt = Options::default();
-        opt.write_buffer_size = 100_000;
+        opt.write_buffer_size = 100_000; // limit the size of memtable
         opt.logger_level = crate::LevelFilter::Trace;
+        // We must have at most one file per level except for level-0,
+        // which may have up to kL0_StopWritesTrigger files.
         let max_files = opt.l0_stop_writes_threshold + opt.max_levels;
         let t = DBTest::new(opt.clone());
         let v = thread_rng()
@@ -2294,7 +2293,7 @@ mod tests {
             .take(2 * opt.write_buffer_size)
             .collect::<String>();
 
-        for i in 0..5 * max_files {
+        for i in 0..10 * max_files {
             t.put("key", &v).unwrap();
             assert!(
                 t.total_sst_files() < max_files,
@@ -2303,5 +2302,68 @@ mod tests {
                 t.total_sst_files()
             );
         }
+    }
+
+    #[test]
+    fn test_sparse_merge() {
+        let mut opt = Options::default();
+        opt.compression = crate::CompressionType::NoCompression;
+        opt.logger_level = crate::LevelFilter::Trace;
+        let t = DBTest::new(opt.clone());
+        t.fill_levels("A", "Z");
+        // Suppose there is:
+        //    small amount of data with prefix A
+        //    large amount of data with prefix B
+        //    small amount of data with prefix C
+        // and that recent updates have made small changes to all three prefixes.
+        // Check that we do not do a compaction that merges all of B in one shot.
+        t.put("A", "va").unwrap();
+        // Write approximately 100MB of "B" values
+        dbg!("==============insert B entries");
+        for i in 0..100_000 {
+            t.put(format!("B{}", i).as_str(), "x".repeat(1000).as_str())
+                .unwrap();
+        }
+        dbg!("==============insert B entries done");
+        t.put("C", "vc").unwrap();
+        t.inner.force_compact_mem_table().unwrap();
+        dbg!("==============compact l0");
+        t.compact_range_at(0, None, None);
+
+        dbg!("==============Make sparse update");
+        // Make sparse update
+        t.put("A", "va2").unwrap();
+        t.put("B100", "bvalue2").unwrap();
+        t.put("C", "vc2").unwrap();
+        t.inner.force_compact_mem_table().unwrap();
+
+        // Compactions should not cause us to create a situation where
+        // a file overlaps too much data at the next level.
+        assert!(
+            t.inner
+                .versions
+                .lock()
+                .unwrap()
+                .max_next_level_overlapping_bytes()
+                < 20 * 1024 * 1024
+        );
+        t.compact_range_at(0, None, None);
+        assert!(
+            t.inner
+                .versions
+                .lock()
+                .unwrap()
+                .max_next_level_overlapping_bytes()
+                < 20 * 1024 * 1024
+        );
+        t.compact_range_at(1, None, None);
+        assert!(
+            t.inner
+                .versions
+                .lock()
+                .unwrap()
+                .max_next_level_overlapping_bytes()
+                < 20 * 1024 * 1024
+        );
     }
 }

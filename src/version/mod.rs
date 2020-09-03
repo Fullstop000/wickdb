@@ -467,8 +467,7 @@ impl<C: Comparator + 'static> Version<C> {
     }
 
     // Return all files in `level` that overlap [`begin`, `end`]
-    // Notice that both `begin` and `end` is `InternalKey` but we
-    // compare the user key directly.
+    // Notice that both `begin` and `end` is `InternalKey` but we just compare the user key directly.
     // Since files in level0 probably overlaps with each other, the final output
     // total range could be larger than [begin, end]
     //

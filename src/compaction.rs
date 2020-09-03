@@ -60,6 +60,24 @@ impl CompactionInputs {
     fn iter_all(&self) -> impl Iterator<Item = &Arc<FileMetaData>> {
         self.base.iter().chain(self.parent.iter())
     }
+
+    #[inline]
+    fn desc_base_files(&self) -> String {
+        self.base
+            .iter()
+            .map(|f| f.number.to_string())
+            .collect::<Vec<String>>()
+            .join(",")
+    }
+
+    #[inline]
+    fn desc_parent_files(&self) -> String {
+        self.parent
+            .iter()
+            .map(|f| f.number.to_string())
+            .collect::<Vec<String>>()
+            .join(",")
+    }
 }
 
 /// A Compaction encapsulates information about a compaction
