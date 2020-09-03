@@ -168,6 +168,10 @@ impl<O: File, C: Comparator + 'static> Compaction<O, C> {
         let mut leveln = Vec::with_capacity(2);
         for file in self.inputs.base.iter() {
             if self.level == 0 {
+                debug!(
+                    "new level 0 table iter: number {}, file size {}",
+                    file.number, file.file_size
+                );
                 level0.push(table_cache.new_iter(
                     icmp.clone(),
                     read_options,
@@ -180,17 +184,20 @@ impl<O: File, C: Comparator + 'static> Compaction<O, C> {
                 leveln.push(ConcatenateIterator::new(origin, factory));
             }
         }
-        let origin = LevelFileNumIterator::new(icmp.clone(), self.inputs.parent.clone());
-        let factory = FileIterFactory::new(icmp.clone(), read_options, table_cache);
-        leveln.push(ConcatenateIterator::new(origin, factory));
+        if !self.inputs.parent.is_empty() {
+            let origin = LevelFileNumIterator::new(icmp.clone(), self.inputs.parent.clone());
+            let factory = FileIterFactory::new(icmp.clone(), read_options, table_cache);
+            leveln.push(ConcatenateIterator::new(origin, factory));
+        }
 
+        trace!("Iter: level0 {}, leveln {}", level0.len(), leveln.len());
         let iter = KMergeIter::new(SSTableIters::new(icmp, level0, leveln));
         Ok(iter)
     }
 
     /// Returns true iff we should stop building the current output
     /// before processing `ikey` for too much overlapping with grand parents
-    pub fn should_stop_before(&mut self, ikey: &[u8], icmp: InternalKeyComparator<C>) -> bool {
+    pub fn should_stop_before(&mut self, ikey: &[u8], icmp: &InternalKeyComparator<C>) -> bool {
         // `seen_key` guarantees that we should continue checking for next `ikey`
         // no matter whether the first `ikey` overlaps with grand parents
         while self.grand_parent_index < self.grand_parents.len()

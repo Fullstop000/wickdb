@@ -197,7 +197,7 @@ impl<I: Iterator, F: DerivedIterFactory> Iterator for ConcatenateIterator<I, F> 
         self.origin.seek_to_first();
         self.init_derived_iter();
         if let Some(di) = self.derived.as_mut() {
-            di.seek_to_first()
+            di.seek_to_first();
         }
         // scan forward util finding the first valid entry
         self.skip_forward();

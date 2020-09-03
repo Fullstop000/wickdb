@@ -480,8 +480,6 @@ impl<C: Comparator + 'static> Version<C> {
         begin: Option<&InternalKey>,
         end: Option<&InternalKey>,
     ) -> Vec<Arc<FileMetaData>> {
-        // TODO: the implementation treating level 0 files is somewhat tricky ( since we use unsafe pointer ).
-        //       Consider separate this into two single functions: one for level 0, one for level > 0
         let mut result = vec![];
         let cmp = &self.icmp.user_comparator;
         let mut user_begin = begin.map(|ik| ik.user_key());
@@ -494,13 +492,11 @@ impl<C: Comparator + 'static> Version<C> {
                     && cmp.compare(file_end, user_begin.unwrap()) == CmpOrdering::Less
                 {
                     // 'file' is completely before the specified range; skip it
-                    continue;
                 }
                 if user_end.is_some()
                     && cmp.compare(file_begin, user_end.unwrap()) == CmpOrdering::Greater
                 {
                     // 'file' is completely after the specified range; skip it
-                    continue;
                 }
                 result.push(file.clone());
                 if level == 0 {
@@ -696,13 +692,11 @@ impl<C: Comparator + 'static> Iterator for LevelFileNumIterator<C> {
         }
     }
 
-    // make sure the underlying data's lifetime is longer than returning Slice
     fn key(&self) -> &[u8] {
         self.valid_or_panic();
         self.files[self.index].largest.data()
     }
 
-    // make sure the iterator's lifetime is longer than returning Slice
     fn value(&self) -> &[u8] {
         self.valid_or_panic();
         &self.value_buf

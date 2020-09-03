@@ -298,7 +298,7 @@ pub struct TableBuilder<C: Comparator, F: File> {
 }
 
 impl<C: Comparator, F: File> TableBuilder<C, F> {
-    pub fn new<UC: Comparator>(file: F, cmp: C, options: Arc<Options<UC>>) -> Self {
+    pub fn new<UC: Comparator>(file: F, cmp: C, options: &Arc<Options<UC>>) -> Self {
         let opt = options.clone();
         let db_builder = BlockBuilder::new(options.block_restart_interval, cmp.clone());
         let ib_builder = BlockBuilder::new(options.block_restart_interval, cmp.clone());
@@ -643,7 +643,7 @@ mod tests {
         let opt = Arc::new(o);
         let new_file = s.create("test").unwrap();
         let cmp = BytewiseComparator::default();
-        let mut tb = TableBuilder::new(new_file, cmp, opt.clone());
+        let mut tb = TableBuilder::new(new_file, cmp, &opt);
         tb.finish(false).unwrap();
         let file = s.open("test").unwrap();
         let file_len = file.len().unwrap();
@@ -658,17 +658,17 @@ mod tests {
         let new_file = s.create("test").unwrap();
         let opt = Arc::new(Options::<BytewiseComparator>::default()); // no filter block on default
         let cmp = BytewiseComparator::default();
-        let mut tb = TableBuilder::new(new_file, cmp, opt.clone());
+        let mut tb = TableBuilder::new(new_file, cmp, &opt);
         tb.finish(false).unwrap();
         let file = s.open("test").unwrap();
         let file_len = file.len().unwrap();
         let cmp = BytewiseComparator::default();
-        let table = Table::open(file, file_len, opt.clone(), cmp).unwrap();
+        let table = Table::open(file, file_len, opt, cmp).unwrap();
         assert!(table.filter_reader.is_none());
         assert!(table.meta_block_handle.is_none()); // no filter block means no meta block
         let read_opt = ReadOptions::default();
-        let res = table.internal_get(read_opt, cmp, b"test");
-        assert!(res.is_err());
+        let res = table.internal_get(read_opt, cmp, b"test").unwrap();
+        assert!(res.is_none());
     }
 
     #[test]
@@ -677,7 +677,7 @@ mod tests {
         let s = MemStorage::default();
         let new_file = s.create("test").expect("file create should work");
         let opt = Arc::new(Options::<BytewiseComparator>::default());
-        let mut tb = TableBuilder::new(new_file, BytewiseComparator::default(), opt.clone());
+        let mut tb = TableBuilder::new(new_file, BytewiseComparator::default(), &opt);
         tb.add(b"222", b"").unwrap();
         tb.add(b"1", b"").unwrap();
     }
@@ -688,7 +688,7 @@ mod tests {
         let new_file = s.create("test").expect("file create should work");
         let opt = Arc::new(Options::<BytewiseComparator>::default());
         let cmp = BytewiseComparator::default();
-        let mut tb = TableBuilder::new(new_file, cmp, opt.clone());
+        let mut tb = TableBuilder::new(new_file, cmp, &opt);
         let test_pairs = vec![("", "test"), ("aaa", "123"), ("bbb", "456"), ("ccc", "789")];
         for (key, val) in test_pairs.clone().drain(..) {
             tb.data_block.add(key.as_bytes(), val.as_bytes());
@@ -720,7 +720,7 @@ mod tests {
         let new_file = s.create("test").unwrap();
         let opt = Arc::new(Options::<BytewiseComparator>::default());
         let cmp = BytewiseComparator::default();
-        let mut tb = TableBuilder::new(new_file, cmp, opt.clone());
+        let mut tb = TableBuilder::new(new_file, cmp, &opt);
         let tests = vec![("", "test"), ("a", "aa"), ("b", "bb")];
         for (key, val) in tests.clone().drain(..) {
             tb.add(key.as_bytes(), val.as_bytes()).unwrap();

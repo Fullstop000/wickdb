@@ -24,6 +24,7 @@ use std::cmp::{min, Ordering};
 use std::rc::Rc;
 
 // TODO: remove all magic number
+const U32_LEN: usize = std::mem::size_of::<u32>();
 
 /// `Block` is consist of one or more key/value entries and a block trailer.
 /// Block entry shares key prefix with its preceding key until a `restart`
@@ -43,8 +44,10 @@ use std::rc::Rc;
 #[derive(Clone, Debug)]
 pub struct Block {
     data: Rc<Vec<u8>>,
-    // offset in data of restart array
+    // restart array starting in `data`
     restart_offset: u32,
+    // the lenght of restart array
+    restarts_len: u32,
 }
 
 impl Block {
@@ -56,14 +59,15 @@ impl Block {
     ///
     pub fn new(data: Vec<u8>) -> Result<Self> {
         let size = data.len();
-        if size >= 4 {
-            let max_restarts_allowed = (size - 4) / 4;
-            let restarts_len = Self::restarts_len(&data) as usize;
+        if size >= U32_LEN {
+            let max_restarts_allowed = (size - U32_LEN) / U32_LEN;
+            let restarts_len = Self::restarts_len(&data);
             // make sure the size is enough for restarts
-            if restarts_len <= max_restarts_allowed {
+            if restarts_len as usize <= max_restarts_allowed {
                 return Ok(Self {
                     data: Rc::new(data),
-                    restart_offset: (size - (1 + restarts_len) * 4) as u32,
+                    restart_offset: (size - (1 + restarts_len as usize) * U32_LEN) as u32,
+                    restarts_len,
                 });
             }
         };
@@ -74,15 +78,19 @@ impl Block {
 
     /// Create a BlockIterator for current block.
     pub fn iter<C: Comparator>(&self, cmp: C) -> BlockIterator<C> {
-        let num_restarts = Self::restarts_len(self.data.as_slice());
-        BlockIterator::new(cmp, self.data.clone(), self.restart_offset, num_restarts)
+        BlockIterator::new(
+            cmp,
+            self.data.clone(),
+            self.restart_offset,
+            self.restarts_len,
+        )
     }
 
     // decoded the restarts length from block data
     #[inline]
     fn restarts_len(data: &[u8]) -> u32 {
         let size = data.len();
-        decode_fixed_32(&data[size - 4..])
+        decode_fixed_32(&data[size - U32_LEN..])
     }
 }
 
@@ -91,6 +99,7 @@ impl Default for Block {
         Self {
             data: Rc::new(vec![]),
             restart_offset: 0,
+            restarts_len: 0,
         }
     }
 }
@@ -98,11 +107,11 @@ impl Default for Block {
 /// Iterator for every entry in the block
 pub struct BlockIterator<C: Comparator> {
     cmp: C,
-
     err: Option<Error>,
+
     // underlying block data
-    // should never be modified in iterator
     data: Rc<Vec<u8>>,
+
     /*
       restarts
     */
@@ -119,7 +128,7 @@ pub struct BlockIterator<C: Comparator> {
     shared: u32,     // shared length
     not_shared: u32, // not shared length
     value_len: u32,  // value length
-    key_offset: u32, // the offset of the key in the block
+    key_offset: u32, // the offset of the current key in the block
     // Buffer for a completed key
     // The key is saperated in multiple segments in `data`.
     key: Vec<u8>,
@@ -127,7 +136,6 @@ pub struct BlockIterator<C: Comparator> {
 
 impl<C: Comparator> BlockIterator<C> {
     pub fn new(cmp: C, data: Rc<Vec<u8>>, restarts: u32, restarts_len: u32) -> Self {
-        // should be 0
         Self {
             cmp,
             err: None,
@@ -164,6 +172,12 @@ impl<C: Comparator> BlockIterator<C> {
     // Decodes a block entry from `current`
     // mark as corrupted when the current entry tail overflows the starting offset of restarts
     fn parse_block_entry(&mut self) -> bool {
+        if self.current >= self.restarts {
+            // Mark as invalid
+            self.current = self.restarts;
+            self.restart_index = self.restarts_len;
+            return false;
+        }
         let offset = self.current;
         let src = &self.data[offset as usize..];
         let (shared, n0) = VarintU32::common_read(src);
@@ -180,11 +194,12 @@ impl<C: Comparator> BlockIterator<C> {
         self.value_len = value_len;
         let total_key_len = (shared + not_shared) as usize;
         self.key.resize(total_key_len, 0);
-        // compressed key
+        // de-compress key
         let delta = &self.data[self.key_offset as usize..(self.key_offset + not_shared) as usize];
         for i in shared as usize..total_key_len {
             self.key[i] = delta[i - shared as usize]
         }
+
         // update restart index
         while self.restart_index + 1 < self.restarts_len
             && self.get_restart_point(self.restart_index + 1) < self.current
@@ -217,7 +232,7 @@ impl<C: Comparator> BlockIterator<C> {
 impl<C: Comparator> Iterator for BlockIterator<C> {
     #[inline]
     fn valid(&self) -> bool {
-        self.current < self.restarts
+        self.err.is_none() && self.current < self.restarts
     }
 
     fn seek_to_first(&mut self) {
@@ -279,7 +294,6 @@ impl<C: Comparator> Iterator for BlockIterator<C> {
 
     fn next(&mut self) {
         self.valid_or_panic();
-        // Set the next current offset first
         self.current = self.next_entry_offset();
         self.parse_block_entry();
     }
@@ -305,8 +319,6 @@ impl<C: Comparator> Iterator for BlockIterator<C> {
         }
     }
 
-    // NOTICE: All the slices return by `key()` point to the same memory so be careful
-    // when call this in the loop
     fn key(&self) -> &[u8] {
         self.valid_or_panic();
         &self.key
@@ -700,5 +712,31 @@ mod tests {
             iter.next();
         }
         assert!(!iter.valid());
+    }
+
+    #[test]
+    fn test_iter_big_entry_block() {
+        let c = BytewiseComparator::default();
+        let entries = vec![
+            ("a", "a".repeat(10000)),
+            ("b", "b".repeat(100000)),
+            ("c", "c".repeat(1000000)),
+        ];
+        let mut blocks = vec![];
+        for (k, v) in entries.clone() {
+            let mut builder = BlockBuilder::new(2, c);
+            builder.add(k.as_bytes(), v.as_bytes());
+            let data = builder.finish();
+            blocks.push(Block::new(data.to_vec()).unwrap());
+        }
+        for (b, (k, v)) in blocks.into_iter().zip(entries) {
+            let mut iter = b.iter(c);
+            assert!(!iter.valid());
+            iter.seek_to_first();
+            assert_eq!(k.as_bytes(), iter.key());
+            assert_eq!(v.as_bytes(), iter.value());
+            iter.next();
+            assert!(!iter.valid());
+        }
     }
 }

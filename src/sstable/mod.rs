@@ -559,7 +559,7 @@ mod tests {
         ) -> Result<()> {
             let file_name = "test_table";
             let file = storage.create(file_name)?;
-            let mut builder = TableBuilder::new(file, self.cmp, options.clone());
+            let mut builder = TableBuilder::new(file, self.cmp, &options);
             for (key, value) in data {
                 builder.add(key.as_slice(), value.as_slice()).unwrap();
             }
@@ -1106,7 +1106,7 @@ mod tests {
             // Restart interval does not matter for memtables
             (TestType::Memtable, false, 16),
             (TestType::Memtable, true, 16),
-            // // Do not bother with restart interval variations for DB
+            // Do not bother with restart interval variations for DB
             (TestType::DB, false, 16),
             (TestType::DB, true, 16),
         ]
