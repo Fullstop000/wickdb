@@ -700,6 +700,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 name = "wickdb"
 version = "0.1.0"
 dependencies = [
+ "chrono 0.4.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "crc32c 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "criterion 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "crossbeam-channel 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",

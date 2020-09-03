@@ -490,6 +490,7 @@ mod tests {
         let mut edit = VersionEdit::new(7);
         let filename = String::from("Hello");
         edit.set_comparator_name(filename);
+
         assert_eq!("Hello", edit.comparator_name.unwrap().as_str());
     }
 
@@ -498,6 +499,7 @@ mod tests {
         let mut edit = VersionEdit::new(7);
         let log_num = u64::max_value();
         edit.set_log_number(log_num);
+
         assert_eq!(edit.log_number.unwrap(), log_num);
     }
 

@@ -207,7 +207,7 @@ impl<C: Comparator> Options<C> {
     }
 
     /// Initialize Options by limiting ranges of some flags, applying customized Logger and etc.
-    pub(crate) fn initialize<O: File + 'static, S: Storage<F = O>>(
+    pub(crate) fn initialize<O: File + 'static, S: Storage<F = O> + Clone + 'static>(
         &mut self,
         db_name: String,
         storage: &S,
@@ -231,9 +231,14 @@ impl<C: Comparator> Options<C> {
     }
 
     #[allow(unused_must_use)]
-    fn apply_logger<S: Storage>(&mut self, storage: &S, db_path: &str) {
+    fn apply_logger<S: 'static + Storage + Clone>(&mut self, storage: &S, db_path: &str) {
         let user_logger = std::mem::replace(&mut self.logger, None);
-        let logger = Logger::new(user_logger, self.logger_level, storage, db_path);
+        let logger = Logger::new(
+            user_logger,
+            self.logger_level,
+            storage.clone(),
+            db_path.to_string(),
+        );
         let static_logger: &'static dyn Log = Box::leak(Box::new(logger));
         log::set_logger(static_logger);
         log::set_max_level(self.logger_level);
