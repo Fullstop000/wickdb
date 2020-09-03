@@ -190,7 +190,6 @@ impl<O: File, C: Comparator + 'static> Compaction<O, C> {
             leveln.push(ConcatenateIterator::new(origin, factory));
         }
 
-        trace!("Iter: level0 {}, leveln {}", level0.len(), leveln.len());
         let iter = KMergeIter::new(SSTableIters::new(icmp, level0, leveln));
         Ok(iter)
     }
@@ -249,8 +248,11 @@ impl<O: File, C: Comparator + 'static> Compaction<O, C> {
 
     /// Apply deletion for current inputs and current output files to the edit
     pub fn apply_to_edit(&mut self) {
-        for (delta, file) in self.inputs.iter_all().enumerate() {
-            self.edit.delete_file(self.level + delta, file.number)
+        for f in self.inputs.base.iter() {
+            self.edit.delete_file(self.level, f.number)
+        }
+        for f in self.inputs.parent.iter() {
+            self.edit.delete_file(self.level + 1, f.number)
         }
         for output in self.outputs.drain(..) {
             self.edit

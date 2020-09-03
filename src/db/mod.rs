@@ -243,7 +243,7 @@ impl<S: Storage + Clone, C: Comparator + 'static> WickDB<S, C> {
     fn process_batch(&self) {
         let db = self.inner.clone();
         let shutdown = self.shutdown_batch_processing_thread.0.clone();
-        thread::spawn(move || {
+        thread::Builder::new().name("batch process".to_owned()).spawn(move || {
             loop {
                 if db.is_shutting_down.load(Ordering::Acquire) {
                     // Cleanup all the batch queue
@@ -345,7 +345,7 @@ impl<S: Storage + Clone, C: Comparator + 'static> WickDB<S, C> {
             }
             shutdown.send(()).unwrap();
             debug!("batch processing thread shut down");
-        });
+        }).unwrap();
     }
 
     // Process a compaction work when receiving the signal.
@@ -353,27 +353,30 @@ impl<S: Storage + Clone, C: Comparator + 'static> WickDB<S, C> {
     fn process_compaction(&self) {
         let db = self.inner.clone();
         let shutdown = self.shutdown_compaction_thread.0.clone();
-        thread::spawn(move || {
-            while let Ok(()) = db.do_compaction.1.recv() {
-                if db.is_shutting_down.load(Ordering::Acquire) {
-                    // No more background work when shutting down
-                    break;
-                } else if db.bg_error.read().unwrap().is_some() {
-                    // Non more background work after a background error
-                } else {
-                    db.background_compaction();
-                }
-                db.background_compaction_scheduled
-                    .store(false, Ordering::Release);
+        thread::Builder::new()
+            .name("compaction".to_owned())
+            .spawn(move || {
+                while let Ok(()) = db.do_compaction.1.recv() {
+                    if db.is_shutting_down.load(Ordering::Acquire) {
+                        // No more background work when shutting down
+                        break;
+                    } else if db.bg_error.read().unwrap().is_some() {
+                        // Non more background work after a background error
+                    } else {
+                        db.background_compaction();
+                    }
+                    db.background_compaction_scheduled
+                        .store(false, Ordering::Release);
 
-                // Previous compaction may have produced too many files in a level,
-                // so reschedule another compaction if needed
-                let current = db.versions.lock().unwrap().current();
-                db.maybe_schedule_compaction(current);
-            }
-            shutdown.send(()).unwrap();
-            debug!("compaction thread shut down");
-        });
+                    // Previous compaction may have produced too many files in a level,
+                    // so reschedule another compaction if needed
+                    let current = db.versions.lock().unwrap().current();
+                    db.maybe_schedule_compaction(current);
+                }
+                shutdown.send(()).unwrap();
+                debug!("compaction thread shut down");
+            })
+            .unwrap();
     }
 }
 
@@ -2247,7 +2250,6 @@ mod tests {
     fn test_compaction_generate_multiple_files() {
         let mut opt = Options::default();
         opt.write_buffer_size = 100_000_000;
-        opt.logger_level = crate::LevelFilter::Trace;
         let mut t = DBTest::new(opt);
         t.assert_file_num_at_level(0, 0);
         let n = 80;
@@ -2277,6 +2279,29 @@ mod tests {
         );
         for i in 0..n {
             t.assert_get(&i.to_string(), Some(&values[i]));
+        }
+    }
+
+    #[test]
+    fn test_repeated_write_to_same_key() {
+        let mut opt = Options::default();
+        opt.write_buffer_size = 100_000;
+        opt.logger_level = crate::LevelFilter::Trace;
+        let max_files = opt.l0_stop_writes_threshold + opt.max_levels;
+        let t = DBTest::new(opt.clone());
+        let v = thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(2 * opt.write_buffer_size)
+            .collect::<String>();
+
+        for i in 0..5 * max_files {
+            t.put("key", &v).unwrap();
+            assert!(
+                t.total_sst_files() < max_files,
+                "after {}: {} total files",
+                i,
+                t.total_sst_files()
+            );
         }
     }
 }
