@@ -689,7 +689,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                 let mut iter = mem_ref.iter();
                 versions.write_level0_files(
                     self.db_name,
-                    self.table_cache.clone(),
+                    &self.table_cache,
                     &mut iter,
                     edit,
                     false,
@@ -718,13 +718,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
             debug!("Try to flush memtable into level 0 in recovering",);
             *save_manifest = true;
             let mut iter = m.iter();
-            versions.write_level0_files(
-                self.db_name,
-                self.table_cache.clone(),
-                &mut iter,
-                edit,
-                false,
-            )?;
+            versions.write_level0_files(self.db_name, &self.table_cache, &mut iter, edit, false)?;
         }
         Ok(max_sequence)
     }
@@ -914,7 +908,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         let mut iter = im_mem.as_ref().unwrap().iter();
         match versions.write_level0_files(
             self.db_name,
-            self.table_cache.clone(),
+            &self.table_cache,
             &mut iter,
             &mut edit,
             true,
@@ -1076,10 +1070,10 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                 } else {
                     let level = compaction.level;
                     info!(
-                        "Compacting {}@{} + {}@{} files",
-                        compaction.inputs.base.len(),
+                        "Compacting [{}]@{} + [{}]@{} files",
+                        compaction.inputs.desc_base_files(),
                         level,
-                        compaction.inputs.parent.len(),
+                        compaction.inputs.desc_parent_files(),
                         level + 1
                     );
                     {
@@ -1181,20 +1175,26 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                     if !drop {
                         // Open output file if necessary
                         if c.builder.is_none() {
-                            status = self.versions.lock().unwrap().open_compaction_output_file(c);
+                            status = self
+                                .versions
+                                .lock()
+                                .unwrap()
+                                .create_compaction_output_file(c);
                             if status.is_err() {
                                 break;
                             }
                         }
                         let last = c.outputs.len() - 1;
-                        // TODO: InternalKey::decoded_from adds extra cost of copying
                         if c.builder.as_ref().unwrap().num_entries() == 0 {
                             // We have a brand new builder so use current key as smallest
                             c.outputs[last].smallest = InternalKey::decoded_from(ikey);
                         }
                         // Keep updating the largest
                         c.outputs[last].largest = InternalKey::decoded_from(ikey);
-                        let _ = c.builder.as_mut().unwrap().add(ikey, input_iter.value());
+                        status = c.builder.as_mut().unwrap().add(ikey, input_iter.value());
+                        if status.is_err() {
+                            break;
+                        }
                         let builder = c.builder.as_ref().unwrap();
                         // Rotate a new output file if the current one is big enough
                         if builder.file_size() >= self.options.max_file_size {
@@ -1238,6 +1238,11 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                 c.inputs.parent.len(),
                 c.level + 1,
                 c.total_bytes,
+            );
+            trace!(
+                "Compaction: base {}, parent {}",
+                c.inputs.desc_base_files(),
+                c.inputs.desc_parent_files()
             );
             c.apply_to_edit();
             status = versions.log_and_apply(&mut c.edit);
@@ -1329,17 +1334,22 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         c.total_bytes += current_bytes;
         c.builder = None;
         if status.is_ok() && current_entries > 0 {
-            let output_number = c.outputs.last().unwrap().number;
+            let f = c.outputs.last().unwrap();
             // add the new file into the table cache
             let _ = self.table_cache.new_iter(
                 self.internal_comparator.clone(),
                 ReadOptions::default(),
-                output_number,
-                current_bytes,
+                f.number,
+                f.file_size,
             )?;
             info!(
-                "Generated table #{}@{}: {} keys, {} bytes",
-                output_number, c.level, current_entries, current_bytes
+                "Compaction output table #{}@{}: {} keys, {} bytes, [{:?} ... {:?}]",
+                f.number,
+                c.level + 1,
+                current_entries,
+                f.file_size,
+                f.smallest,
+                f.largest,
             );
         }
         status
@@ -2340,29 +2350,32 @@ mod tests {
         // Compactions should not cause us to create a situation where
         // a file overlaps too much data at the next level.
         assert!(
-            t.inner
+            dbg!(t
+                .inner
                 .versions
                 .lock()
                 .unwrap()
-                .max_next_level_overlapping_bytes()
+                .max_next_level_overlapping_bytes())
                 < 20 * 1024 * 1024
         );
         t.compact_range_at(0, None, None);
         assert!(
-            t.inner
+            dbg!(t
+                .inner
                 .versions
                 .lock()
                 .unwrap()
-                .max_next_level_overlapping_bytes()
+                .max_next_level_overlapping_bytes())
                 < 20 * 1024 * 1024
         );
         t.compact_range_at(1, None, None);
         assert!(
-            t.inner
+            dbg!(t
+                .inner
                 .versions
                 .lock()
                 .unwrap()
-                .max_next_level_overlapping_bytes()
+                .max_next_level_overlapping_bytes())
                 < 20 * 1024 * 1024
         );
     }

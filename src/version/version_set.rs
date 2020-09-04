@@ -44,7 +44,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-struct LevelState {
+struct LevelDiff {
     // set of new deleted files
     deleted_files: HashSet<u64>,
     // all new added files
@@ -54,7 +54,7 @@ struct LevelState {
 /// Summarizes the files added and deleted from a set of version edits.
 pub struct VersionBuilder<'a, C: Comparator> {
     // file changes for every level
-    levels: Vec<LevelState>,
+    levels: Vec<LevelDiff>,
     base: &'a Version<C>,
 }
 
@@ -63,7 +63,7 @@ impl<'a, C: Comparator + 'static> VersionBuilder<'a, C> {
         // let max_levels = base.options.max_levels as usize;
         let mut levels = Vec::with_capacity(max_levels);
         for _ in 0..max_levels {
-            levels.push(LevelState {
+            levels.push(LevelDiff {
                 deleted_files: HashSet::default(),
                 added_files: vec![],
             })
@@ -148,26 +148,10 @@ impl<'a, C: Comparator + 'static> VersionBuilder<'a, C> {
                     }
                     a.number.cmp(&b.number)
                 });
-                let mut s = "".to_owned();
-                s.push_str("[");
-                for f in &v.files[level] {
-                    s.push_str(&f.number.to_string());
-                    s.push_str(", ");
-                }
-                s.push_str("]");
-                trace!("level 0: {}", s);
             } else {
                 // sort by smallest key
                 v.files[level].sort_by(|a, b| icmp.compare(a.smallest.data(), b.smallest.data()));
                 // make sure there is no overlap in levels > 0
-                let mut s = "".to_owned();
-                s.push_str("[");
-                for f in &v.files[level] {
-                    s.push_str(&f.number.to_string());
-                    s.push_str(", ");
-                }
-                s.push_str("]");
-                trace!("overlapping check for level {}: {}", level, s);
                 assert!(!Self::has_overlapping(&icmp, &v.files[level]));
             }
         }
@@ -587,7 +571,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
     pub fn write_level0_files(
         &mut self,
         db_name: &str,
-        table_cache: TableCache<S, C>,
+        table_cache: &TableCache<S, C>,
         mem_iter: &mut dyn Iterator,
         edit: &mut VersionEdit,
         into_base: bool,
@@ -600,7 +584,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
             self.options.clone(),
             &self.storage,
             db_name,
-            &table_cache,
+            table_cache,
             mem_iter,
             &mut meta,
         );
@@ -653,7 +637,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
     }
 
     /// Create new table builder and physical file for current output in Compaction
-    pub fn open_compaction_output_file(&mut self, c: &mut Compaction<S::F, C>) -> Result<()> {
+    pub fn create_compaction_output_file(&mut self, c: &mut Compaction<S::F, C>) -> Result<()> {
         assert!(c.builder.is_none());
         let file_number = self.inc_next_file_number();
         self.pending_outputs.insert(file_number);

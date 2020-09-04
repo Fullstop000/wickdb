@@ -124,7 +124,10 @@ impl<I: Iterator, F: DerivedIterFactory> ConcatenateIterator<I, F> {
                         }
                         self.set_derived(Some(derived))
                     }
-                    Err(e) => Self::maybe_save_err(&mut self.err, Err(e)),
+                    Err(e) => {
+                        Self::maybe_save_err(&mut self.err, Err(e));
+                        self.set_derived(None);
+                    }
                 }
             }
         }
@@ -186,6 +189,10 @@ impl<I: Iterator, F: DerivedIterFactory> ConcatenateIterator<I, F> {
 
 impl<I: Iterator, F: DerivedIterFactory> Iterator for ConcatenateIterator<I, F> {
     fn valid(&self) -> bool {
+        if let Some(e) = &self.err {
+            error!("[concatenated iter] Error: {:?}", e);
+            return false;
+        }
         if let Some(di) = &self.derived {
             di.valid()
         } else {
