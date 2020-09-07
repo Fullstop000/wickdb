@@ -23,7 +23,7 @@ use crate::iterator::Iterator;
 use crate::options::{Options, ReadOptions};
 use crate::storage::Storage;
 use crate::table_cache::TableCache;
-use crate::util::coding::put_fixed_64;
+use crate::util::coding::encode_fixed_64;
 use crate::util::comparator::Comparator;
 use crate::version::version_edit::FileMetaData;
 use crate::version::version_set::total_file_size;
@@ -467,8 +467,7 @@ impl<C: Comparator + 'static> Version<C> {
     }
 
     // Return all files in `level` that overlap [`begin`, `end`]
-    // Notice that both `begin` and `end` is `InternalKey` but we
-    // compare the user key directly.
+    // Notice that both `begin` and `end` is `InternalKey` but we just compare the user key directly.
     // Since files in level0 probably overlaps with each other, the final output
     // total range could be larger than [begin, end]
     //
@@ -622,7 +621,7 @@ pub struct LevelFileNumIterator<C: Comparator> {
     files: Vec<Arc<FileMetaData>>,
     icmp: InternalKeyComparator<C>,
     index: usize,
-    value_buf: Vec<u8>,
+    value_buf: [u8; 16],
 }
 
 impl<C: Comparator + 'static> LevelFileNumIterator<C> {
@@ -632,7 +631,7 @@ impl<C: Comparator + 'static> LevelFileNumIterator<C> {
             files,
             icmp,
             index,
-            value_buf: Vec::with_capacity(FILE_META_LENGTH),
+            value_buf: [0; 16],
         }
     }
 
@@ -640,8 +639,8 @@ impl<C: Comparator + 'static> LevelFileNumIterator<C> {
     fn fill_value_buf(&mut self) {
         if self.valid() {
             let file = &self.files[self.index];
-            put_fixed_64(&mut self.value_buf, file.number);
-            put_fixed_64(&mut self.value_buf, file.file_size);
+            encode_fixed_64(&mut self.value_buf, file.number);
+            encode_fixed_64(&mut self.value_buf[8..], file.file_size);
         }
     }
 

@@ -44,7 +44,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-struct LevelState {
+struct LevelDiff {
     // set of new deleted files
     deleted_files: HashSet<u64>,
     // all new added files
@@ -54,7 +54,7 @@ struct LevelState {
 /// Summarizes the files added and deleted from a set of version edits.
 pub struct VersionBuilder<'a, C: Comparator> {
     // file changes for every level
-    levels: Vec<LevelState>,
+    levels: Vec<LevelDiff>,
     base: &'a Version<C>,
 }
 
@@ -63,7 +63,7 @@ impl<'a, C: Comparator + 'static> VersionBuilder<'a, C> {
         // let max_levels = base.options.max_levels as usize;
         let mut levels = Vec::with_capacity(max_levels);
         for _ in 0..max_levels {
-            levels.push(LevelState {
+            levels.push(LevelDiff {
                 deleted_files: HashSet::default(),
                 added_files: vec![],
             })
@@ -114,10 +114,9 @@ impl<'a, C: Comparator + 'static> VersionBuilder<'a, C> {
         }
     }
 
-    /// Apply all the changes on the base Version and produce a new Version based on it
-    /// same as `SaveTo` in C++ implementation
-    pub fn apply_to_new(self, icmp: &InternalKeyComparator<C>) -> Version<C> {
-        // TODO: config this to the option
+    // Apply all the changes on the base Version and produce a new Version based on it
+    // same as `SaveTo` in C++ implementation
+    fn apply_to_new(self, icmp: &InternalKeyComparator<C>) -> Version<C> {
         let mut v = Version::new(self.base.options.clone(), icmp.clone());
         for (level, (base_files, delta)) in self
             .base
@@ -127,15 +126,17 @@ impl<'a, C: Comparator + 'static> VersionBuilder<'a, C> {
             .zip(self.levels)
             .enumerate()
         {
-            for file in base_files {
-                // filter the deleted files
-                if !delta.deleted_files.contains(&file.number) {
-                    v.files[level].push(file)
+            for f in base_files {
+                if !delta.deleted_files.contains(&f.number) {
+                    v.files[level].push(f)
                 }
             }
-            for added_file in delta.added_files {
-                v.files[level].push(Arc::new(added_file));
+            for f in delta.added_files {
+                v.files[level].push(Arc::new(f));
             }
+            // TODO: base.files[level] is already sorted. Instead of appending
+            // added_files[level] to the end and sorting afterwards, it might be more
+            // efficient to sort added_files[level] and then merge the two sorted slices.
             if level == 0 {
                 // sort by file number
                 v.files[level].sort_by(|a, b| {
@@ -146,13 +147,12 @@ impl<'a, C: Comparator + 'static> VersionBuilder<'a, C> {
                         return icmp.compare(a.smallest.data(), b.smallest.data());
                     }
                     a.number.cmp(&b.number)
-                })
+                });
             } else {
                 // sort by smallest key
-                v.files[level].sort_by(|a, b| icmp.compare(a.smallest.data(), b.smallest.data()))
-            }
-            if level > 0 {
-                debug_assert!(!Self::has_overlapping(&icmp, &v.files[level]));
+                v.files[level].sort_by(|a, b| icmp.compare(a.smallest.data(), b.smallest.data()));
+                // make sure there is no overlap in levels > 0
+                assert!(!Self::has_overlapping(&icmp, &v.files[level]));
             }
         }
         v
@@ -570,7 +570,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
     pub fn write_level0_files(
         &mut self,
         db_name: &str,
-        table_cache: TableCache<S, C>,
+        table_cache: &TableCache<S, C>,
         mem_iter: &mut dyn Iterator,
         edit: &mut VersionEdit,
         into_base: bool,
@@ -583,7 +583,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
             self.options.clone(),
             &self.storage,
             db_name,
-            &table_cache,
+            table_cache,
             mem_iter,
             &mut meta,
         );
@@ -636,7 +636,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
     }
 
     /// Create new table builder and physical file for current output in Compaction
-    pub fn open_compaction_output_file(&mut self, c: &mut Compaction<S::F, C>) -> Result<()> {
+    pub fn create_compaction_output_file(&mut self, c: &mut Compaction<S::F, C>) -> Result<()> {
         assert!(c.builder.is_none());
         let file_number = self.inc_next_file_number();
         self.pending_outputs.insert(file_number);
@@ -766,6 +766,25 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
         if self.next_file_number <= num {
             self.next_file_number = num + 1
         }
+    }
+
+    /// Return the maximum overlapping data (in bytes) at next level for any
+    /// file at a level >= 1.
+    #[allow(dead_code)]
+    pub(crate) fn max_next_level_overlapping_bytes(&self) -> u64 {
+        let mut res = 0;
+        let current = self.current();
+        for level in 1..self.options.max_levels - 1 {
+            for f in &current.files[level] {
+                let overlaps =
+                    current.get_overlapping_inputs(level + 1, Some(&f.smallest), Some(&f.largest));
+                let sum = total_file_size(&overlaps);
+                if sum > res {
+                    res = sum
+                }
+            }
+        }
+        res
     }
 
     // Remove all the old versions

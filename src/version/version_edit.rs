@@ -103,10 +103,21 @@ impl Default for FileMetaData {
     }
 }
 
+/// The diff files changes between versions
+#[derive(Default, Debug)]
+pub struct FileDelta {
+    // (level, InternalKey)
+    pub compaction_pointers: Vec<(usize, InternalKey)>,
+    // (level, file_number)
+    pub deleted_files: HashSet<(usize, u64)>,
+    // (level, FileMetaData)
+    pub new_files: Vec<(usize, FileMetaData)>,
+}
+
 /// A summary for version updating
 /// Version(old) + VersionEdit = Version(new)
 pub struct VersionEdit {
-    max_levels: u8,
+    max_levels: usize,
     // comparator name
     pub comparator_name: Option<String>,
     // file number of .log
@@ -119,18 +130,8 @@ pub struct VersionEdit {
     pub file_delta: FileDelta,
 }
 
-#[derive(Default, Debug)]
-pub struct FileDelta {
-    // (level, InternalKey)
-    pub compaction_pointers: Vec<(usize, InternalKey)>,
-    // (level, file_number)
-    pub deleted_files: HashSet<(usize, u64)>,
-    // (level, FileMetaData)
-    pub new_files: Vec<(usize, FileMetaData)>,
-}
-
 impl VersionEdit {
-    pub fn new(max_levels: u8) -> Self {
+    pub fn new(max_levels: usize) -> Self {
         Self {
             max_levels,
             comparator_name: None,
@@ -428,9 +429,9 @@ fn get_internal_key(mut src: &mut &[u8]) -> Option<InternalKey> {
     VarintU32::get_varint_prefixed_slice(&mut src).map(|s| InternalKey::decoded_from(s))
 }
 
-fn get_level(max_levels: u8, src: &mut &[u8]) -> Option<u32> {
+fn get_level(max_levels: usize, src: &mut &[u8]) -> Option<u32> {
     VarintU32::drain_read(src).and_then(|l| {
-        if l <= u32::from(max_levels) {
+        if l <= max_levels as u32 {
             Some(l)
         } else {
             None

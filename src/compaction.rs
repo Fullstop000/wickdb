@@ -60,6 +60,24 @@ impl CompactionInputs {
     fn iter_all(&self) -> impl Iterator<Item = &Arc<FileMetaData>> {
         self.base.iter().chain(self.parent.iter())
     }
+
+    #[inline]
+    pub fn desc_base_files(&self) -> String {
+        self.base
+            .iter()
+            .map(|f| f.number.to_string())
+            .collect::<Vec<String>>()
+            .join(",")
+    }
+
+    #[inline]
+    pub fn desc_parent_files(&self) -> String {
+        self.parent
+            .iter()
+            .map(|f| f.number.to_string())
+            .collect::<Vec<String>>()
+            .join(",")
+    }
 }
 
 /// A Compaction encapsulates information about a compaction
@@ -84,12 +102,6 @@ pub struct Compaction<F: File, C: Comparator> {
     pub seen_key: bool,
     // Bytes of overlap between current output and grandparent files
     pub overlapped_bytes: u64,
-
-    // `level_ptrs` holds indices into `input_version.files`: our state
-    // is that we are positioned at one of the file ranges for each
-    // higher level than the ones involved in this compaction (i.e. for
-    // all L >= level n + 2)
-    pub level_ptrs: Vec<usize>,
 
     // Sequence numbers less than this are not significant since we
     // will never have to service a snapshot below smallest_snapshot.
@@ -126,7 +138,6 @@ impl<O: File, C: Comparator + 'static> Compaction<O, C> {
             grand_parent_index: 0,
             seen_key: false,
             overlapped_bytes: 0,
-            level_ptrs,
             oldest_snapshot_alive: 0,
             outputs: vec![],
             builder: None,
@@ -166,11 +177,11 @@ impl<O: File, C: Comparator + 'static> Compaction<O, C> {
         // For other levels, we will make a concatenating iterator per level.
         let mut level0 = Vec::with_capacity(self.inputs.base.len() + 1);
         let mut leveln = Vec::with_capacity(2);
-        for file in self.inputs.base.iter() {
-            if self.level == 0 {
+        if self.level == 0 {
+            for file in self.inputs.base.iter() {
                 debug!(
-                    "new level 0 table iter: number {}, file size {}",
-                    file.number, file.file_size
+                    "new level {} table iter: number {}, file size {}, [{:?} ... {:?}]",
+                    self.level, file.number, file.file_size, file.smallest, file.largest
                 );
                 level0.push(table_cache.new_iter(
                     icmp.clone(),
@@ -178,19 +189,34 @@ impl<O: File, C: Comparator + 'static> Compaction<O, C> {
                     file.number,
                     file.file_size,
                 )?);
-            } else {
-                let origin = LevelFileNumIterator::new(icmp.clone(), self.inputs.base.clone());
-                let factory = FileIterFactory::new(icmp.clone(), read_options, table_cache.clone());
-                leveln.push(ConcatenateIterator::new(origin, factory));
             }
+        } else {
+            for f in &self.inputs.base {
+                debug!(
+                    "new level {} table iter: number {}, file size {}, [{:?} ... {:?}]",
+                    self.level, f.number, f.file_size, f.smallest, f.largest
+                );
+            }
+            let origin = LevelFileNumIterator::new(icmp.clone(), self.inputs.base.clone());
+            let factory = FileIterFactory::new(icmp.clone(), read_options, table_cache.clone());
+            leveln.push(ConcatenateIterator::new(origin, factory));
         }
         if !self.inputs.parent.is_empty() {
+            for f in &self.inputs.parent {
+                debug!(
+                    "new level {} table iter: number {}, file size {}, [{:?} ... {:?}]",
+                    self.level + 1,
+                    f.number,
+                    f.file_size,
+                    f.smallest,
+                    f.largest
+                );
+            }
             let origin = LevelFileNumIterator::new(icmp.clone(), self.inputs.parent.clone());
             let factory = FileIterFactory::new(icmp.clone(), read_options, table_cache);
             leveln.push(ConcatenateIterator::new(origin, factory));
         }
 
-        trace!("Iter: level0 {}, leveln {}", level0.len(), leveln.len());
         let iter = KMergeIter::new(SSTableIters::new(icmp, level0, leveln));
         Ok(iter)
     }
@@ -220,27 +246,28 @@ impl<O: File, C: Comparator + 'static> Compaction<O, C> {
         false
     }
 
-    /// Returns false if the information we have available guarantees that
-    /// the compaction is producing data in "level+1" for which no relative key exists
-    /// in levels greater than "level+1".
+    /// Reports whether it is guaranteed that there are no
+    /// key/value pairs at c.level+2 or higher that have the user key ukey.
     pub fn key_exist_in_deeper_level(&mut self, ukey: &[u8]) -> bool {
-        let v = self.input_version.as_ref().unwrap().clone();
-        let icmp = v.comparator();
-        let ucmp = &icmp.user_comparator;
-        let max_levels = self.options.max_levels as usize;
+        let v = self.input_version.as_ref().unwrap();
+        let ucmp = &self
+            .input_version
+            .as_ref()
+            .unwrap()
+            .comparator()
+            .user_comparator;
+        let max_levels = self.options.max_levels;
         if self.level + 2 < max_levels {
             for level in self.level + 2..max_levels {
-                let files = v.get_level_files(level);
-                while self.level_ptrs[level] < files.len() {
-                    let f = files[self.level_ptrs[level]].clone();
+                for f in v.get_level_files(level) {
                     if ucmp.compare(ukey, f.largest.user_key()) != CmpOrdering::Greater {
                         if ucmp.compare(ukey, f.smallest.user_key()) != CmpOrdering::Less {
                             return true;
                         }
+                        // For levels above level 0, the files within a level are in
+                        // increasing ikey order, so we can break early.
                         break;
                     }
-                    // Update current level ptr for a passed file directly since the input `ukey` should be sorted.
-                    self.level_ptrs[level] += 1;
                 }
             }
         }
@@ -249,8 +276,11 @@ impl<O: File, C: Comparator + 'static> Compaction<O, C> {
 
     /// Apply deletion for current inputs and current output files to the edit
     pub fn apply_to_edit(&mut self) {
-        for (delta, file) in self.inputs.iter_all().enumerate() {
-            self.edit.delete_file(self.level + delta, file.number)
+        for f in self.inputs.base.iter() {
+            self.edit.delete_file(self.level, f.number)
+        }
+        for f in self.inputs.parent.iter() {
+            self.edit.delete_file(self.level + 1, f.number)
         }
         for output in self.outputs.drain(..) {
             self.edit

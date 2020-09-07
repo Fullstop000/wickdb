@@ -243,7 +243,7 @@ impl<S: Storage + Clone, C: Comparator + 'static> WickDB<S, C> {
     fn process_batch(&self) {
         let db = self.inner.clone();
         let shutdown = self.shutdown_batch_processing_thread.0.clone();
-        thread::spawn(move || {
+        thread::Builder::new().name("batch process".to_owned()).spawn(move || {
             loop {
                 if db.is_shutting_down.load(Ordering::Acquire) {
                     // Cleanup all the batch queue
@@ -345,7 +345,7 @@ impl<S: Storage + Clone, C: Comparator + 'static> WickDB<S, C> {
             }
             shutdown.send(()).unwrap();
             debug!("batch processing thread shut down");
-        });
+        }).unwrap();
     }
 
     // Process a compaction work when receiving the signal.
@@ -353,27 +353,30 @@ impl<S: Storage + Clone, C: Comparator + 'static> WickDB<S, C> {
     fn process_compaction(&self) {
         let db = self.inner.clone();
         let shutdown = self.shutdown_compaction_thread.0.clone();
-        thread::spawn(move || {
-            while let Ok(()) = db.do_compaction.1.recv() {
-                if db.is_shutting_down.load(Ordering::Acquire) {
-                    // No more background work when shutting down
-                    break;
-                } else if db.bg_error.read().unwrap().is_some() {
-                    // Non more background work after a background error
-                } else {
-                    db.background_compaction();
-                }
-                db.background_compaction_scheduled
-                    .store(false, Ordering::Release);
+        thread::Builder::new()
+            .name("compaction".to_owned())
+            .spawn(move || {
+                while let Ok(()) = db.do_compaction.1.recv() {
+                    if db.is_shutting_down.load(Ordering::Acquire) {
+                        // No more background work when shutting down
+                        break;
+                    } else if db.bg_error.read().unwrap().is_some() {
+                        // Non more background work after a background error
+                    } else {
+                        db.background_compaction();
+                    }
+                    db.background_compaction_scheduled
+                        .store(false, Ordering::Release);
 
-                // Previous compaction may have produced too many files in a level,
-                // so reschedule another compaction if needed
-                let current = db.versions.lock().unwrap().current();
-                db.maybe_schedule_compaction(current);
-            }
-            shutdown.send(()).unwrap();
-            debug!("compaction thread shut down");
-        });
+                    // Previous compaction may have produced too many files in a level,
+                    // so reschedule another compaction if needed
+                    let current = db.versions.lock().unwrap().current();
+                    db.maybe_schedule_compaction(current);
+                }
+                shutdown.send(()).unwrap();
+                debug!("compaction thread shut down");
+            })
+            .unwrap();
     }
 }
 
@@ -686,7 +689,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                 let mut iter = mem_ref.iter();
                 versions.write_level0_files(
                     self.db_name,
-                    self.table_cache.clone(),
+                    &self.table_cache,
                     &mut iter,
                     edit,
                     false,
@@ -715,13 +718,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
             debug!("Try to flush memtable into level 0 in recovering",);
             *save_manifest = true;
             let mut iter = m.iter();
-            versions.write_level0_files(
-                self.db_name,
-                self.table_cache.clone(),
-                &mut iter,
-                edit,
-                false,
-            )?;
+            versions.write_level0_files(self.db_name, &self.table_cache, &mut iter, edit, false)?;
         }
         Ok(max_sequence)
     }
@@ -911,7 +908,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         let mut iter = im_mem.as_ref().unwrap().iter();
         match versions.write_level0_files(
             self.db_name,
-            self.table_cache.clone(),
+            &self.table_cache,
             &mut iter,
             &mut edit,
             true,
@@ -945,7 +942,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         // Schedule a force memory compaction
         self.schedule_batch_and_wait(WriteOptions::default(), empty_batch, true)?;
         // Waiting for memory compaction complete
-        // TODO: This is not safe because there could be several compaction be triggered one by one
+        // TODO: This is not safe because there could be several compaction triggered continously
         thread::sleep(Duration::from_secs(1));
         if self.im_mem.read().unwrap().is_some() {
             return self.take_bg_error().map_or(Ok(()), |e| Err(e));
@@ -1073,10 +1070,10 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                 } else {
                     let level = compaction.level;
                     info!(
-                        "Compacting {}@{} + {}@{} files",
-                        compaction.inputs.base.len(),
+                        "Compacting [{}]@{} + [{}]@{} files",
+                        compaction.inputs.desc_base_files(),
                         level,
-                        compaction.inputs.parent.len(),
+                        compaction.inputs.desc_parent_files(),
                         level + 1
                     );
                     {
@@ -1178,20 +1175,26 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                     if !drop {
                         // Open output file if necessary
                         if c.builder.is_none() {
-                            status = self.versions.lock().unwrap().open_compaction_output_file(c);
+                            status = self
+                                .versions
+                                .lock()
+                                .unwrap()
+                                .create_compaction_output_file(c);
                             if status.is_err() {
                                 break;
                             }
                         }
                         let last = c.outputs.len() - 1;
-                        // TODO: InternalKey::decoded_from adds extra cost of copying
                         if c.builder.as_ref().unwrap().num_entries() == 0 {
                             // We have a brand new builder so use current key as smallest
                             c.outputs[last].smallest = InternalKey::decoded_from(ikey);
                         }
                         // Keep updating the largest
                         c.outputs[last].largest = InternalKey::decoded_from(ikey);
-                        let _ = c.builder.as_mut().unwrap().add(ikey, input_iter.value());
+                        status = c.builder.as_mut().unwrap().add(ikey, input_iter.value());
+                        if status.is_err() {
+                            break;
+                        }
                         let builder = c.builder.as_ref().unwrap();
                         // Rotate a new output file if the current one is big enough
                         if builder.file_size() >= self.options.max_file_size {
@@ -1230,9 +1233,9 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         if status.is_ok() {
             info!(
                 "Compacted {}@{} + {}@{} files => {} bytes",
-                c.inputs.base.len(),
+                c.inputs.desc_base_files(),
                 c.level,
-                c.inputs.parent.len(),
+                c.inputs.desc_parent_files(),
                 c.level + 1,
                 c.total_bytes,
             );
@@ -1326,17 +1329,22 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         c.total_bytes += current_bytes;
         c.builder = None;
         if status.is_ok() && current_entries > 0 {
-            let output_number = c.outputs.last().unwrap().number;
+            let f = c.outputs.last().unwrap();
             // add the new file into the table cache
             let _ = self.table_cache.new_iter(
                 self.internal_comparator.clone(),
                 ReadOptions::default(),
-                output_number,
-                current_bytes,
+                f.number,
+                f.file_size,
             )?;
             info!(
-                "Generated table #{}@{}: {} keys, {} bytes",
-                output_number, c.level, current_entries, current_bytes
+                "Compaction output table #{}@{}: {} keys, {} bytes, [{:?} ... {:?}]",
+                f.number,
+                c.level + 1,
+                current_entries,
+                f.file_size,
+                f.smallest,
+                f.largest,
             );
         }
         status
@@ -1446,7 +1454,6 @@ pub(crate) fn build_table<S: Storage + Clone, C: Comparator + 'static>(
 }
 
 #[cfg(test)]
-#[allow(dead_code)]
 mod tests {
     use super::*;
     use crate::storage::mem::MemStorage;
@@ -1462,10 +1469,6 @@ mod tests {
             self.inner.options.clone()
         }
 
-        fn files_count_at_level(&self, level: usize) -> usize {
-            self.inner.versions.lock().unwrap().level_files_count(level)
-        }
-
         fn total_sst_files(&self) -> usize {
             let versions = self.inner.versions.lock().unwrap();
             let mut res = 0;
@@ -1475,6 +1478,7 @@ mod tests {
             res
         }
 
+        #[allow(dead_code)]
         fn file_count_per_level(&self) -> String {
             let mut res = String::new();
             let versions = self.inner.versions.lock().unwrap();
@@ -1565,6 +1569,7 @@ mod tests {
         .collect()
     }
 
+    #[allow(dead_code)]
     impl DBTest {
         fn new(opt: Options<BytewiseComparator>) -> Self {
             let store = MemStorage::default();
@@ -2247,7 +2252,6 @@ mod tests {
     fn test_compaction_generate_multiple_files() {
         let mut opt = Options::default();
         opt.write_buffer_size = 100_000_000;
-        opt.logger_level = crate::LevelFilter::Trace;
         let mut t = DBTest::new(opt);
         t.assert_file_num_at_level(0, 0);
         let n = 80;
@@ -2278,5 +2282,90 @@ mod tests {
         for i in 0..n {
             t.assert_get(&i.to_string(), Some(&values[i]));
         }
+    }
+
+    #[test]
+    fn test_repeated_write_to_same_key() {
+        let mut opt = Options::default();
+        opt.write_buffer_size = 100_000; // limit the size of memtable
+        opt.logger_level = crate::LevelFilter::Trace;
+        // We must have at most one file per level except for level-0,
+        // which may have up to kL0_StopWritesTrigger files.
+        let max_files = opt.l0_stop_writes_threshold + opt.max_levels;
+        let t = DBTest::new(opt.clone());
+        let v = thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(2 * opt.write_buffer_size)
+            .collect::<String>();
+
+        for i in 0..10 * max_files {
+            t.put("key", &v).unwrap();
+            assert!(
+                t.total_sst_files() < max_files,
+                "after {}: {} total files",
+                i,
+                t.total_sst_files()
+            );
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn test_sparse_merge() {
+        let mut opt = Options::default();
+        opt.compression = crate::CompressionType::NoCompression;
+        opt.logger_level = crate::LevelFilter::Trace;
+        let t = DBTest::new(opt.clone());
+        t.fill_levels("A", "Z");
+        // Suppose there is:
+        //    small amount of data with prefix A
+        //    large amount of data with prefix B
+        //    small amount of data with prefix C
+        // and that recent updates have made small changes to all three prefixes.
+        // Check that we do not do a compaction that merges all of B in one shot.
+        t.put("A", "va").unwrap();
+        // Write approximately 100MB of "B" values
+        for i in 0..100_000 {
+            t.put(format!("B{}", i).as_str(), "x".repeat(1000).as_str())
+                .unwrap();
+        }
+        t.put("C", "vc").unwrap();
+        t.inner.force_compact_mem_table().unwrap();
+        t.compact_range_at(0, None, None);
+
+        // Make sparse update
+        t.put("A", "va2").unwrap();
+        t.put("B100", "bvalue2").unwrap();
+        t.put("C", "vc2").unwrap();
+        t.inner.force_compact_mem_table().unwrap();
+
+        // Compactions should not cause us to create a situation where
+        // a file overlaps too much data at the next level.
+        assert!(
+            t.inner
+                .versions
+                .lock()
+                .unwrap()
+                .max_next_level_overlapping_bytes()
+                < 20 * 1024 * 1024
+        );
+        t.compact_range_at(0, None, None);
+        assert!(
+            t.inner
+                .versions
+                .lock()
+                .unwrap()
+                .max_next_level_overlapping_bytes()
+                < 20 * 1024 * 1024
+        );
+        t.compact_range_at(1, None, None);
+        assert!(
+            t.inner
+                .versions
+                .lock()
+                .unwrap()
+                .max_next_level_overlapping_bytes()
+                < 20 * 1024 * 1024
+        );
     }
 }
