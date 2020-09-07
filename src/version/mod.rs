@@ -430,8 +430,6 @@ impl<C: Comparator + 'static> Version<C> {
 
     /// Return the approximate offset in the database of the data for
     /// given `ikey` in this version
-    // TODO: remove this later
-    #[allow(dead_code)]
     pub fn approximate_offset_of<S: Storage + Clone>(
         &self,
         ikey: &InternalKey,

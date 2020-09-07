@@ -206,8 +206,6 @@ impl<F: File> Table<F> {
     /// bytes, and so includes effects like compression of the underlying data.
     /// E.g., the approximate offset of the last key in the table will
     /// be close to the file length.
-    /// Temporary only used in tests.
-    #[allow(dead_code)]
     pub(crate) fn approximate_offset_of<TC: Comparator>(&self, cmp: TC, key: &[u8]) -> u64 {
         let mut index_iter = self.index_block.iter(cmp);
         index_iter.seek(key);

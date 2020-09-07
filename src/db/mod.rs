@@ -1314,31 +1314,24 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         status
     }
 
-    // Returns the approximate file system space used by keys in "[start .. end)" in
-    // level <= `n`.
+    // Returns the approximate file system space used by keys in "[start .. end)"
     //
     // Note that the returned sizes measure file system space usage, so
     // if the user data compresses by a factor of ten, the returned
     // sizes will be one-tenth the size of the corresponding user data size.
     //
     // The results may not include the sizes of recently written data.
-    // TODO: remove this later
-    #[allow(dead_code)]
-    fn get_approximate_sizes(&self, start: &[u8], end: &[u8], n: usize) -> Vec<u64> {
+    pub fn get_approximate_size(&self, start: &[u8], end: &[u8]) -> u64 {
         let current = self.versions.lock().unwrap().current();
         let start_ikey = InternalKey::new(start, MAX_KEY_SEQUENCE, VALUE_TYPE_FOR_SEEK);
         let end_ikey = InternalKey::new(end, MAX_KEY_SEQUENCE, VALUE_TYPE_FOR_SEEK);
-        (0..n)
-            .map(|_| {
-                let start = current.approximate_offset_of(&start_ikey, &self.table_cache);
-                let limit = current.approximate_offset_of(&end_ikey, &self.table_cache);
-                if limit >= start {
-                    limit - start
-                } else {
-                    0
-                }
-            })
-            .collect::<Vec<_>>()
+        let start = current.approximate_offset_of(&start_ikey, &self.table_cache);
+        let limit = current.approximate_offset_of(&end_ikey, &self.table_cache);
+        if limit >= start {
+            limit - start
+        } else {
+            0
+        }
     }
 }
 
@@ -1724,6 +1717,21 @@ mod tests {
             let current = self.inner.versions.lock().unwrap().current();
             println!("{}", current.level_summary());
         }
+
+        fn assert_approximate_size(&self, start: &str, end: &str, a: usize, b: usize) {
+            let s = self
+                .inner
+                .get_approximate_size(start.as_bytes(), end.as_bytes());
+            assert!(
+                s <= b as u64 && s >= a as u64,
+                "approximate size between '{}' - '{}' should be between [{}, {}], but got {}",
+                start,
+                end,
+                a,
+                b,
+                s
+            );
+        }
     }
 
     impl Default for DBTest {
@@ -1741,6 +1749,17 @@ mod tests {
         fn deref(&self) -> &Self::Target {
             &self.db
         }
+    }
+
+    fn rand_string(n: usize) -> String {
+        thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(n)
+            .collect::<String>()
+    }
+
+    fn key(i: usize) -> String {
+        format!("key{:06}", i)
     }
 
     #[test]
@@ -2194,7 +2213,6 @@ mod tests {
     fn test_recover_during_memtable_compaction() {
         for mut t in cases(|mut opt| {
             opt.write_buffer_size = 10000;
-            opt.logger_level = crate::LevelFilter::Debug;
             opt
         }) {
             // Trigger a long memtable compaction and reopen the database during it
@@ -2211,7 +2229,6 @@ mod tests {
             t.assert_get("big2", Some("y".repeat(1000).as_str()));
         }
     }
-
     #[test]
     fn test_compaction_generate_multiple_files() {
         let mut opt = Options::default();
@@ -2222,10 +2239,7 @@ mod tests {
         // write 8MB (80 values, each 100k)
         let mut values = vec![];
         for i in 0..n {
-            let v = thread_rng()
-                .sample_iter(&Alphanumeric)
-                .take(100000)
-                .collect::<String>();
+            let v = rand_string(100_000);
             values.push(v.clone());
             t.put(&i.to_string(), &v).unwrap();
         }
@@ -2257,11 +2271,7 @@ mod tests {
         // which may have up to kL0_StopWritesTrigger files.
         let max_files = opt.l0_stop_writes_threshold + opt.max_levels;
         let t = DBTest::new(opt.clone());
-        let v = thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(2 * opt.write_buffer_size)
-            .collect::<String>();
-
+        let v = rand_string(2 * opt.write_buffer_size);
         for i in 0..10 * max_files {
             t.put("key", &v).unwrap();
             assert!(
@@ -2331,5 +2341,56 @@ mod tests {
                 .max_next_level_overlapping_bytes()
                 < 20 * 1024 * 1024
         );
+    }
+
+    #[test]
+    fn test_approximate_size() {
+        for mut t in cases(|mut opt| {
+            opt.write_buffer_size = 100_000_000;
+            opt.logger_level = crate::LevelFilter::Debug;
+            opt.compression = crate::CompressionType::NoCompression;
+            opt
+        }) {
+            t.assert_approximate_size("", "xyz", 0, 0);
+            t.assert_file_num_at_level(0, 0);
+            let n = 80;
+            let s1 = 100_000;
+            let s2 = 105_000; // allow some expansion from metadata
+            for i in 0..n {
+                t.put(&key(i), &rand_string(s1)).unwrap();
+            }
+            // approximate_size does not account for memtable
+            t.assert_approximate_size("", &key(50), 0, 0);
+            if t.options().reuse_logs {
+                t.reopen().unwrap();
+                // Recovery will reuse memtable
+                t.assert_approximate_size("", &key(50), 0, 0);
+            }
+            // Check sizes across recovery by reopening a few times
+            for _ in 0..3 {
+                t.reopen().unwrap();
+                for compact_start in (0..n).step_by(10) {
+                    for i in (0..n).step_by(10) {
+                        t.assert_approximate_size("", &key(i), s1 * i, s2 * i);
+                        t.assert_approximate_size(
+                            "",
+                            &(key(i) + ".suffix"),
+                            s1 * (i + 1),
+                            s2 * (i + 1),
+                        );
+                        t.assert_approximate_size(&key(i), &key(i + 10), s1 * 10, s2 * 10);
+                    }
+                    t.assert_approximate_size("", &key(50), s1 * 50, s2 * 50);
+                    t.assert_approximate_size("", &(key(50) + ".suffix"), s1 * 50, s2 * 50);
+                    t.compact_range(
+                        Some(key(compact_start).as_bytes()),
+                        Some(key(compact_start + 9).as_bytes()),
+                    )
+                    .unwrap();
+                }
+                t.assert_file_num_at_level(0, 0);
+                t.assert_file_num_at_level(1, 0);
+            }
+        }
     }
 }
