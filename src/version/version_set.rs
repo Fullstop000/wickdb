@@ -174,9 +174,7 @@ impl<'a, C: Comparator + 'static> VersionBuilder<'a, C> {
 pub struct VersionSet<S: Storage + Clone, C: Comparator> {
     // Snapshots that clients might be acquiring
     pub snapshots: SnapshotList,
-    // The compaction stats for every level
-    pub compaction_stats: Vec<CompactionStats>,
-    // Set of table files to protect from deletion because they are part of ongoing compaction
+    // Set of table files to protect them from deletion because they are part of ongoing compaction
     pub pending_outputs: HashSet<u64>,
     // WAL writer
     pub record_writer: Option<Writer<S::F>>,
@@ -210,10 +208,8 @@ unsafe impl<S: Storage + Clone, C: Comparator> Send for VersionSet<S, C> {}
 impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
     pub fn new(db_name: &'static str, options: Arc<Options<C>>, storage: S) -> Self {
         let max_level = options.max_levels as usize;
-        let mut compaction_stats = Vec::with_capacity(max_level);
         let mut compaction_pointer = Vec::with_capacity(max_level);
         for _ in 0..max_level {
-            compaction_stats.push(CompactionStats::new());
             compaction_pointer.push(InternalKey::default());
         }
         let icmp = InternalKeyComparator::new(options.comparator.clone());
@@ -223,7 +219,6 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
         versions.push_front(first_v);
         Self {
             snapshots: SnapshotList::default(),
-            compaction_stats,
             pending_outputs: HashSet::default(),
             db_name,
             storage,
@@ -365,6 +360,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
     ///     * After trivial compaction (only file move)
     ///     * After major compaction
     pub fn log_and_apply(&mut self, edit: &mut VersionEdit) -> Result<()> {
+        let level_summary_before = self.current().level_summary();
         if let Some(target_log) = edit.log_number {
             assert!(target_log >= self.log_number && target_log < self.next_file_number,
                     "[version set] applying VersionEdit use a invalid log number {}, expect to be at [{}, {})", target_log, self.log_number, self.next_file_number);
@@ -388,7 +384,11 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
         builder.accumulate(file_delta, self);
         let mut v = builder.apply_to_new(&self.icmp);
         v.finalize();
-
+        let summary = v.level_summary();
+        info!(
+            "Compaction result summary : \n\t before {} \n\t now {}",
+            level_summary_before, summary
+        );
         // cleanup all the old versions
         self.gc();
 
@@ -614,10 +614,14 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
                 meta.largest.clone(),
             );
         }
-        self.compaction_stats[level].accumulate(
-            now.elapsed().unwrap().as_micros() as u64,
-            0,
-            meta.file_size,
+        info!(
+            "Compactions stats for Level{}: {:?}",
+            level,
+            CompactionStats {
+                micros: now.elapsed().unwrap().as_micros() as u64,
+                bytes_read: 0,
+                bytes_written: meta.file_size,
+            }
         );
         build_result
     }
