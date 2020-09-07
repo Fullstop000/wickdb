@@ -1233,16 +1233,11 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         if status.is_ok() {
             info!(
                 "Compacted {}@{} + {}@{} files => {} bytes",
-                c.inputs.base.len(),
+                c.inputs.desc_base_files(),
                 c.level,
-                c.inputs.parent.len(),
+                c.inputs.desc_parent_files(),
                 c.level + 1,
                 c.total_bytes,
-            );
-            trace!(
-                "Compaction: base {}, parent {}",
-                c.inputs.desc_base_files(),
-                c.inputs.desc_parent_files()
             );
             c.apply_to_edit();
             status = versions.log_and_apply(&mut c.edit);
@@ -2329,18 +2324,14 @@ mod tests {
         // Check that we do not do a compaction that merges all of B in one shot.
         t.put("A", "va").unwrap();
         // Write approximately 100MB of "B" values
-        dbg!("==============insert B entries");
         for i in 0..100_000 {
             t.put(format!("B{}", i).as_str(), "x".repeat(1000).as_str())
                 .unwrap();
         }
-        dbg!("==============insert B entries done");
         t.put("C", "vc").unwrap();
         t.inner.force_compact_mem_table().unwrap();
-        dbg!("==============compact l0");
         t.compact_range_at(0, None, None);
 
-        dbg!("==============Make sparse update");
         // Make sparse update
         t.put("A", "va2").unwrap();
         t.put("B100", "bvalue2").unwrap();
@@ -2350,32 +2341,29 @@ mod tests {
         // Compactions should not cause us to create a situation where
         // a file overlaps too much data at the next level.
         assert!(
-            dbg!(t
-                .inner
+            t.inner
                 .versions
                 .lock()
                 .unwrap()
-                .max_next_level_overlapping_bytes())
+                .max_next_level_overlapping_bytes()
                 < 20 * 1024 * 1024
         );
         t.compact_range_at(0, None, None);
         assert!(
-            dbg!(t
-                .inner
+            t.inner
                 .versions
                 .lock()
                 .unwrap()
-                .max_next_level_overlapping_bytes())
+                .max_next_level_overlapping_bytes()
                 < 20 * 1024 * 1024
         );
         t.compact_range_at(1, None, None);
         assert!(
-            dbg!(t
-                .inner
+            t.inner
                 .versions
                 .lock()
                 .unwrap()
-                .max_next_level_overlapping_bytes())
+                .max_next_level_overlapping_bytes()
                 < 20 * 1024 * 1024
         );
     }

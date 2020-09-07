@@ -163,7 +163,6 @@ impl<'a, C: Comparator + 'static> VersionBuilder<'a, C> {
     fn has_overlapping(icmp: &InternalKeyComparator<C>, files: &[Arc<FileMetaData>]) -> bool {
         for fs in files.windows(2) {
             if icmp.compare(fs[0].largest.data(), fs[1].smallest.data()) != CmpOrdering::Less {
-                trace!("File has overlapping: a[{:?}] , b[{:?}]", fs[0], fs[1]);
                 return true;
             }
         }
