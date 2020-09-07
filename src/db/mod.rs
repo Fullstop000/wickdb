@@ -16,7 +16,7 @@ pub mod format;
 pub mod iterator;
 
 use crate::batch::{WriteBatch, HEADER_SIZE};
-use crate::compaction::{Compaction, ManualCompaction};
+use crate::compaction::{Compaction, CompactionStats, ManualCompaction};
 use crate::db::filename::{generate_filename, parse_filename, update_current, FileType};
 use crate::db::format::{
     InternalKey, InternalKeyComparator, LookupKey, ParsedInternalKey, ValueType, MAX_KEY_SEQUENCE,
@@ -46,7 +46,7 @@ use std::mem;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, RwLock};
 use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant};
 
 /// A `DB` is a persistent ordered map from keys to values.
 /// A `DB` is safe for concurrent access from multiple threads without
@@ -203,7 +203,7 @@ impl<S: Storage + Clone, C: Comparator + 'static> WickDB<S, C> {
         }
 
         let current = versions.current();
-        db.delete_obsolete_files(versions);
+        db.delete_obsolete_files(versions)?;
         let wick_db = WickDB {
             inner: Arc::new(db),
             shutdown_batch_processing_thread: crossbeam_channel::bounded(1),
@@ -222,13 +222,13 @@ impl<S: Storage + Clone, C: Comparator + 'static> WickDB<S, C> {
     }
 
     /// Schedue a manual compaction for the key range `[begin, end]` at level `level`
-    pub fn compact_range_at(&self, level: usize, begin: Option<&[u8]>, end: Option<&[u8]>) {
+    pub fn compact_range_at(
+        &self,
+        level: usize,
+        begin: Option<&[u8]>,
+        end: Option<&[u8]>,
+    ) -> Result<()> {
         self.inner.manual_compact_range(level, begin, end)
-    }
-
-    /// Returns the inner background error
-    pub fn take_background_err(&self) -> Option<Error> {
-        self.inner.take_bg_error()
     }
 
     // The thread take batches from the queue and apples them into memtable and WAL.
@@ -364,6 +364,7 @@ impl<S: Storage + Clone, C: Comparator + 'static> WickDB<S, C> {
                         // Non more background work after a background error
                     } else {
                         db.background_compaction();
+                        db.background_work_finished_signal.notify_all();
                     }
                     db.background_compaction_scheduled
                         .store(false, Ordering::Release);
@@ -404,7 +405,7 @@ pub struct DBImpl<S: Storage + Clone, C: Comparator> {
     // All the compaction will be executed one by one once compaction is triggered
     manual_compaction_queue: Mutex<VecDeque<ManualCompaction>>,
 
-    // signal of compaction finished
+    // signal whether the compaction finished
     background_work_finished_signal: Condvar,
     // whether we have scheduled and running a compaction
     background_compaction_scheduled: AtomicBool,
@@ -725,44 +726,39 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
 
     // Delete any unneeded files and stale in-memory entries.
     // This func could delete generated compaction files when the compaction is failed due some reasons (e.g. block entry currupted)
-    fn delete_obsolete_files(&self, mut versions: MutexGuard<VersionSet<S, C>>) {
-        if self.bg_error.read().is_err() {
-            // After a background error, we don't know whether a new version may
-            // or may not have been committed, so we cannot safely garbage collect
-            return;
-        }
+    fn delete_obsolete_files(&self, mut versions: MutexGuard<VersionSet<S, C>>) -> Result<()> {
         versions.lock_live_files();
         // ignore IO error on purpose
-        if let Ok(files) = self.env.list(self.db_name) {
-            for file in files.iter() {
-                if let Some((file_type, number)) = parse_filename(file) {
-                    let keep = match file_type {
-                        FileType::Log => {
-                            number >= versions.log_number() || number == versions.prev_log_number()
-                        }
-                        FileType::Manifest => number >= versions.manifest_number(),
-                        FileType::Table => versions.pending_outputs.contains(&number),
-                        // Any temp files that are currently being written to must
-                        // be recorded in pending_outputs
-                        FileType::Temp => versions.pending_outputs.contains(&number),
-                        _ => true,
-                    };
-                    if !keep {
-                        if file_type == FileType::Table {
-                            self.table_cache.evict(number)
-                        }
-                        info!(
-                            "Delete type={:?} #{} [filename {:?}]",
-                            file_type, number, &file
-                        );
-                        // ignore the IO error here
-                        if let Err(e) = self.env.remove(&file) {
-                            error!("Delete file failed [filename {:?}]: {:?}", &file, e)
-                        }
+        let files = self.env.list(self.db_name)?;
+        for file in files.iter() {
+            if let Some((file_type, number)) = parse_filename(file) {
+                let keep = match file_type {
+                    FileType::Log => {
+                        number >= versions.log_number() || number == versions.prev_log_number()
+                    }
+                    FileType::Manifest => number >= versions.manifest_number(),
+                    FileType::Table => versions.pending_outputs.contains(&number),
+                    // Any temp files that are currently being written to must
+                    // be recorded in pending_outputs
+                    FileType::Temp => versions.pending_outputs.contains(&number),
+                    _ => true,
+                };
+                if !keep {
+                    if file_type == FileType::Table {
+                        self.table_cache.evict(number)
+                    }
+                    info!(
+                        "Delete type={:?} #{} [filename {:?}]",
+                        file_type, number, &file
+                    );
+                    // ignore the IO error here
+                    if let Err(e) = self.env.remove(&file) {
+                        error!("Delete file failed [filename {:?}]: {:?}", &file, e)
                     }
                 }
             }
         }
+        Ok(())
     }
 
     // Schedule a WriteBatch to close batch processing thread for gracefully shutting down db
@@ -900,43 +896,27 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
     }
 
     // Compact immutable memory table to level0 files
-    fn compact_mem_table(&self) {
+    fn compact_mem_table(&self) -> Result<()> {
         debug!("Compact memtable");
         let mut versions = self.versions.lock().unwrap();
         let mut edit = VersionEdit::new(self.options.max_levels);
         let mut im_mem = self.im_mem.write().unwrap();
         let mut iter = im_mem.as_ref().unwrap().iter();
-        match versions.write_level0_files(
-            self.db_name,
-            &self.table_cache,
-            &mut iter,
-            &mut edit,
-            true,
-        ) {
-            Ok(()) => {
-                if self.is_shutting_down.load(Ordering::Acquire) {
-                    self.record_bg_error(Error::DBClosed("compact memory table".to_owned()))
-                } else {
-                    edit.prev_log_number = Some(0);
-                    edit.log_number = Some(versions.log_number());
-                    match versions.log_and_apply(&mut edit) {
-                        Ok(()) => {
-                            *im_mem = None;
-                            self.delete_obsolete_files(versions);
-                        }
-                        Err(e) => {
-                            self.record_bg_error(e);
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                self.record_bg_error(e);
-            }
+        versions.write_level0_files(self.db_name, &self.table_cache, &mut iter, &mut edit, true)?;
+        if self.is_shutting_down.load(Ordering::Acquire) {
+            Err(Error::DBClosed("when compacting memory table".to_owned()))
+        } else {
+            edit.prev_log_number = Some(0);
+            edit.log_number = Some(versions.log_number());
+            let res = versions.log_and_apply(&mut edit);
+            *im_mem = None;
+            self.delete_obsolete_files(versions)?;
+            res
         }
     }
 
     // Force current memtable contents(even if the memtable is not full) to be compacted into sst files
+    // Only used in tests
     fn force_compact_mem_table(&self) -> Result<()> {
         let empty_batch = WriteBatch::default();
         // Schedule a force memory compaction
@@ -975,14 +955,19 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         }
         self.force_compact_mem_table()?;
         for l in 0..max_level_with_files {
-            self.manual_compact_range(l, begin, end)
+            self.manual_compact_range(l, begin, end)?
         }
         Ok(())
     }
 
     // Schedules a manual compaction for the key range `[begin, end]` and waits util the
     // compaction completes
-    fn manual_compact_range(&self, level: usize, begin: Option<&[u8]>, end: Option<&[u8]>) {
+    fn manual_compact_range(
+        &self,
+        level: usize,
+        begin: Option<&[u8]>,
+        end: Option<&[u8]>,
+    ) -> Result<()> {
         assert!(level + 1 < self.options.max_levels as usize);
         let (sender, finished) = crossbeam_channel::bounded(1);
         {
@@ -996,19 +981,23 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         }
         let v = self.versions.lock().unwrap().current();
         self.maybe_schedule_compaction(v);
-        finished.recv().unwrap();
+        match finished.recv() {
+            Ok(res) => res,
+            Err(e) => Err(Error::RecvError(e)),
+        }
     }
 
     // The complete compaction process
-    // This is a sync function call
+    // This is a sync function call and any error will be
     fn background_compaction(&self) {
         if self.im_mem.read().unwrap().is_some() {
-            // minor compaction
-            self.compact_mem_table();
+            if let Err(e) = self.compact_mem_table() {
+                warn!("Compact memtable error: {:?}", e);
+            }
         } else {
             let mut versions = self.versions.lock().unwrap();
             let mut is_manual = false;
-            let (compaction, signal) = {
+            let (compaction, done) = {
                 if let Some(manual) = self.manual_compaction_queue.lock().unwrap().pop_front() {
                     is_manual = true;
                     let begin = if let Some(begin) = &manual.begin {
@@ -1035,7 +1024,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                         }
                         None => {
                             info!("Received manual compaction at level-{} from {} .. {}; No compaction needs to be done", manual.level, begin, end);
-                            manual.done.send(()).unwrap();
+                            manual.done.send(Ok(())).unwrap();
                             (None, None)
                         }
                     }
@@ -1055,9 +1044,9 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                         f.smallest.clone(),
                         f.largest.clone(),
                     );
-                    if let Err(e) = versions.log_and_apply(&mut compaction.edit) {
-                        error!("Error in compaction: {:?}", &e);
-                        self.record_bg_error(e);
+                    let res = versions.log_and_apply(&mut compaction.edit);
+                    if let Err(e) = res.as_ref() {
+                        error!("Compaction error: {}", e);
                     }
                     let current_summary = versions.current().level_summary();
                     info!(
@@ -1066,7 +1055,13 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                         compaction.level + 1,
                         f.file_size,
                         current_summary
-                    )
+                    );
+                    if let Some(done) = done {
+                        done.send(res).unwrap();
+                    }
+                    if let Err(e) = self.delete_obsolete_files(versions) {
+                        error!("Delete obsolete files error: {}", e);
+                    }
                 } else {
                     let level = compaction.level;
                     info!(
@@ -1088,60 +1083,53 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                     }
                     // Unlock VersionSet here to avoid dead lock
                     mem::drop(versions);
-                    self.delete_obsolete_files(self.do_compaction(&mut compaction));
-                }
-                if !self.is_shutting_down.load(Ordering::Acquire) {
-                    if let Some(e) = self.bg_error.read().unwrap().as_ref() {
-                        error!("Compaction error: {:?}", e)
+                    match self.do_compaction(&mut compaction) {
+                        Ok(versions) => {
+                            let res = self.delete_obsolete_files(versions);
+                            if let Some(done) = done {
+                                done.send(res).unwrap();
+                            }
+                        }
+                        Err(e) => {
+                            {
+                                let versions = self.versions.lock().unwrap();
+                                let _ = self.delete_obsolete_files(versions);
+                            }
+                            error!("Compaction error: {:?}", &e);
+                            if let Some(done) = done {
+                                done.send(Err(e)).unwrap();
+                            }
+                        }
                     }
-                }
-                if let Some(signal) = signal {
-                    signal.send(()).unwrap();
-                }
+                };
             }
         }
-        self.background_work_finished_signal.notify_all();
     }
 
-    // Merging files in level n into file in level n + 1 and
-    // keep the still-in-use files
-    fn do_compaction(&self, c: &mut Compaction<S::F, C>) -> MutexGuard<VersionSet<S, C>> {
-        let now = SystemTime::now();
-        let mut input_iter = match c
-            .new_input_iterator(self.internal_comparator.clone(), self.table_cache.clone())
-        {
-            Ok(iter) => iter,
-            Err(e) => {
-                self.record_bg_error(e);
-                return self.versions.lock().unwrap();
-            }
-        };
+    // Merging files in level n into file in level n + 1 and keep the still-in-use files
+    // This func could compact memtable first if the writing is still on-going
+    // `delete_obsolete_files` must be called even if this returns an error
+    fn do_compaction(&self, c: &mut Compaction<S::F, C>) -> Result<MutexGuard<VersionSet<S, C>>> {
+        let now = Instant::now();
+        let mut input_iter =
+            c.new_input_iterator(self.internal_comparator.clone(), self.table_cache.clone())?;
         let mut mem_compaction_duration = 0;
         input_iter.seek_to_first();
-        input_iter.valid();
-
-        // the current user key to be compacted
 
         let mut last_sequence_for_key = u64::max_value();
-
-        let mut status = Ok(());
         // TODO: Use Option<&[u8]> instead
         let mut current_ukey: Option<Vec<u8>> = None;
         while input_iter.valid() && !self.is_shutting_down.load(Ordering::Acquire) {
-            // Prioritize immutable memtable compaction work
             if self.im_mem.read().unwrap().is_some() {
-                let imm_start = SystemTime::now();
-                self.compact_mem_table();
-                mem_compaction_duration = imm_start.elapsed().unwrap().as_micros() as u64;
+                let imm_start = Instant::now();
+                self.compact_mem_table()?;
+                mem_compaction_duration += imm_start.elapsed().as_micros() as u64;
             }
             let iter_status = input_iter.status();
             let ikey = input_iter.key();
             // Checkout whether we need rotate a new output file
             if c.should_stop_before(ikey, &self.internal_comparator) && c.builder.is_some() {
-                status = self.finish_output_file(c, iter_status);
-                if status.is_err() {
-                    break;
-                }
+                self.finish_output_file(c, iter_status)?
             }
             let mut drop = false;
             let ucmp = &self.internal_comparator.user_comparator;
@@ -1175,14 +1163,10 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                     if !drop {
                         // Open output file if necessary
                         if c.builder.is_none() {
-                            status = self
-                                .versions
+                            self.versions
                                 .lock()
                                 .unwrap()
-                                .create_compaction_output_file(c);
-                            if status.is_err() {
-                                break;
-                            }
+                                .create_compaction_output_file(c)?;
                         }
                         let last = c.outputs.len() - 1;
                         if c.builder.as_ref().unwrap().num_entries() == 0 {
@@ -1191,17 +1175,11 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                         }
                         // Keep updating the largest
                         c.outputs[last].largest = InternalKey::decoded_from(ikey);
-                        status = c.builder.as_mut().unwrap().add(ikey, input_iter.value());
-                        if status.is_err() {
-                            break;
-                        }
+                        c.builder.as_mut().unwrap().add(ikey, input_iter.value())?;
                         let builder = c.builder.as_ref().unwrap();
                         // Rotate a new output file if the current one is big enough
                         if builder.file_size() >= self.options.max_file_size {
-                            status = self.finish_output_file(c, input_iter.status());
-                            if status.is_err() {
-                                break;
-                            }
+                            self.finish_output_file(c, input_iter.status())?;
                         }
                     }
                 }
@@ -1212,25 +1190,30 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
             }
             input_iter.next();
         }
-        // TODO: simplify the implementation
-        if status.is_ok() && self.is_shutting_down.load(Ordering::Acquire) {
-            status = Err(Error::DBClosed("major compaction".to_owned()))
-        }
-        if status.is_ok() && c.builder.is_some() {
-            status = self.finish_output_file(c, input_iter.status())
-        }
-        if status.is_ok() {
-            status = input_iter.status()
-        }
-        // Collect the stats of this compaction even if some err occurred
-        let mut versions = self.versions.lock().unwrap();
-        let level_summary_before = versions.current().level_summary();
-        versions.compaction_stats[c.level + 1].accumulate(
-            now.elapsed().unwrap().as_micros() as u64 - mem_compaction_duration,
-            c.bytes_read(),
-            c.bytes_written(),
+        info!(
+            "Compactions stats for Level{}: {:?}",
+            c.level,
+            CompactionStats {
+                micros: now.elapsed().as_micros() as u64 - mem_compaction_duration,
+                bytes_read: c.bytes_read(),
+                bytes_written: c.bytes_written(),
+            }
         );
-        if status.is_ok() {
+        if self.is_shutting_down.load(Ordering::Acquire) {
+            return Err(Error::DBClosed("major compaction".to_owned()));
+        }
+        if c.builder.is_some() {
+            self.finish_output_file(c, input_iter.status())?;
+        }
+        // Close unclosed table builder and remove files in `pending_outputs`
+        if let Some(builder) = c.builder.as_mut() {
+            builder.close()
+        }
+        let mut versions = self.versions.lock().unwrap();
+        for output in c.outputs.iter() {
+            versions.pending_outputs.remove(&output.number);
+        }
+        if let Ok(()) = input_iter.status() {
             info!(
                 "Compacted {}@{} + {}@{} files => {} bytes",
                 c.inputs.desc_base_files(),
@@ -1240,26 +1223,9 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                 c.total_bytes,
             );
             c.apply_to_edit();
-            status = versions.log_and_apply(&mut c.edit);
+            versions.log_and_apply(&mut c.edit)?;
         }
-        if let Err(e) = status {
-            self.record_bg_error(e)
-        }
-
-        let summary = versions.current().level_summary();
-        info!(
-            "Compaction result summary : \n\t before {} \n\t now {}",
-            level_summary_before, summary
-        );
-
-        // Close unclosed table builder and remove files in `pending_outputs`
-        if let Some(builder) = c.builder.as_mut() {
-            builder.close()
-        }
-        for output in c.outputs.iter() {
-            versions.pending_outputs.remove(&output.number);
-        }
-        versions
+        Ok(versions)
     }
 
     // Replace the `bg_error` with new `Error` if it's `None`
@@ -1271,7 +1237,6 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         }
     }
 
-    // Takes the background error
     fn take_bg_error(&self) -> Option<Error> {
         self.bg_error.write().unwrap().take()
     }
@@ -1330,7 +1295,6 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         c.builder = None;
         if status.is_ok() && current_entries > 0 {
             let f = c.outputs.last().unwrap();
-            // add the new file into the table cache
             let _ = self.table_cache.new_iter(
                 self.internal_comparator.clone(),
                 ReadOptions::default(),
@@ -1984,7 +1948,7 @@ mod tests {
             }
             t.print_sst_files();
             // Clear level 1 if necessary
-            t.inner.manual_compact_range(1, None, None);
+            t.inner.manual_compact_range(1, None, None).unwrap();
             t.print_sst_files();
             t.assert_file_num_at_level(0, 1);
             t.assert_file_num_at_level(1, 0);
@@ -2271,7 +2235,7 @@ mod tests {
         for i in 0..n {
             t.assert_get(&i.to_string(), Some(&values[i]));
         }
-        t.compact_range_at(0, None, None);
+        t.compact_range_at(0, None, None).unwrap();
         t.assert_file_num_at_level(0, 0);
         let l1_count = t.inner.versions.lock().unwrap().level_files_count(1);
         assert!(
@@ -2331,7 +2295,7 @@ mod tests {
         }
         t.put("C", "vc").unwrap();
         t.inner.force_compact_mem_table().unwrap();
-        t.compact_range_at(0, None, None);
+        t.compact_range_at(0, None, None).unwrap();
 
         // Make sparse update
         t.put("A", "va2").unwrap();
@@ -2349,7 +2313,7 @@ mod tests {
                 .max_next_level_overlapping_bytes()
                 < 20 * 1024 * 1024
         );
-        t.compact_range_at(0, None, None);
+        t.compact_range_at(0, None, None).unwrap();
         assert!(
             t.inner
                 .versions
@@ -2358,7 +2322,7 @@ mod tests {
                 .max_next_level_overlapping_bytes()
                 < 20 * 1024 * 1024
         );
-        t.compact_range_at(1, None, None);
+        t.compact_range_at(1, None, None).unwrap();
         assert!(
             t.inner
                 .versions

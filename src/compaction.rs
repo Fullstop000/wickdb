@@ -34,7 +34,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct ManualCompaction {
     pub level: usize,
-    pub done: Sender<()>,
+    pub done: Sender<Result<()>>,
     pub begin: Option<InternalKey>, // None means beginning of key range
     pub end: Option<InternalKey>,   // None means end of key range
 }
@@ -360,26 +360,12 @@ pub fn total_range<'a, C: Comparator>(
     (smallest, largest)
 }
 /// A helper struct for recording the statistics in compactions
+#[derive(Debug)]
 pub struct CompactionStats {
-    micros: u64,
-    bytes_read: u64,
-    bytes_written: u64,
-}
-
-impl CompactionStats {
-    pub fn new() -> Self {
-        CompactionStats {
-            micros: 0,
-            bytes_read: 0,
-            bytes_written: 0,
-        }
-    }
-
-    /// Add new stats to self
-    #[inline]
-    pub fn accumulate(&mut self, micros: u64, bytes_read: u64, bytes_written: u64) {
-        self.micros += micros;
-        self.bytes_read += bytes_read;
-        self.bytes_written += bytes_written;
-    }
+    // The microseconds this compaction takes
+    pub micros: u64,
+    /// The data size read by this compaction
+    pub bytes_read: u64,
+    /// The data size created in new generated SSTables
+    pub bytes_written: u64,
 }
