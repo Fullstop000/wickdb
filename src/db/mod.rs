@@ -2310,6 +2310,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_sparse_merge() {
         let mut opt = Options::default();
         opt.compression = crate::CompressionType::NoCompression;
