@@ -397,8 +397,8 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
         if self.manifest_writer.is_none() {
             new_manifest_file =
                 generate_filename(self.db_name, FileType::Manifest, self.manifest_file_number);
-            //            edit.set_next_file(self.next_file_number);
             let f = self.storage.create(new_manifest_file.as_str())?;
+            debug!("New manifest file #{}", self.manifest_file_number);
             let mut writer = Writer::new(f);
             match self.write_snapshot(&mut writer) {
                 Ok(()) => self.manifest_writer = Some(writer),
@@ -797,7 +797,6 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
     }
 
     // Create snapshot of current version and persistent to manifest file.
-    // Only be called when initializing a new db
     fn write_snapshot(&self, writer: &mut Writer<S::F>) -> Result<()> {
         let mut edit = VersionEdit::new(self.options.max_levels);
         // Save metadata

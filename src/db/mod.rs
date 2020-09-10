@@ -212,6 +212,7 @@ impl<S: Storage + Clone, C: Comparator + 'static> WickDB<S, C> {
         wick_db.process_compaction();
         wick_db.process_batch();
         // Schedule a compaction to current version for potential unfinished work
+        debug!("Trigger a compaction for current version");
         wick_db.inner.maybe_schedule_compaction(current);
         Ok(wick_db)
     }
@@ -901,6 +902,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         let mut versions = self.versions.lock().unwrap();
         let mut edit = VersionEdit::new(self.options.max_levels);
         let mut im_mem = self.im_mem.write().unwrap();
+        dbg!(im_mem.as_ref().unwrap().approximate_memory_usage());
         let mut iter = im_mem.as_ref().unwrap().iter();
         versions.write_level0_files(self.db_name, &self.table_cache, &mut iter, &mut edit, true)?;
         if self.is_shutting_down.load(Ordering::Acquire) {
@@ -1362,43 +1364,41 @@ pub(crate) fn build_table<S: Storage + Clone, C: Comparator + 'static>(
     iter.seek_to_first();
     let file_name = generate_filename(db_name, FileType::Table, meta.number);
     let mut status = Ok(());
-    if iter.valid() {
+    if dbg!(iter.valid()) {
         let file = storage.create(file_name.as_str())?;
         let icmp = InternalKeyComparator::new(options.comparator.clone());
         let mut builder = TableBuilder::new(file, icmp.clone(), &options);
-        let mut prev_key = None;
-        let smallest_key = iter.key().to_vec();
+        let mut prev_key = vec![];
+        meta.smallest = InternalKey::decoded_from(iter.key());
         while iter.valid() {
             let key = iter.key().to_vec();
-            let value = iter.value();
-            let s = builder.add(&key, value);
+            let s = builder.add(&key, iter.value());
             if s.is_err() {
                 status = s;
                 break;
             }
-            prev_key = Some(key);
+            prev_key = key;
             iter.next();
         }
+        if !prev_key.is_empty() {
+            meta.largest = InternalKey::decoded_from(&prev_key);
+        }
         if status.is_ok() {
-            if let Some(prev_key) = prev_key {
-                meta.smallest = InternalKey::decoded_from(&smallest_key);
-                meta.largest = InternalKey::decoded_from(&prev_key);
-                status = builder.finish(true).and_then(|_| {
-                    meta.file_size = builder.file_size();
-                    // make sure that the new file is in the cache
-                    let mut it = table_cache.new_iter(
-                        icmp,
-                        ReadOptions::default(),
-                        meta.number,
-                        meta.file_size,
-                    )?;
-                    it.status()
-                })
-            }
+            status = builder.finish(true).and_then(|_| {
+                meta.file_size = builder.file_size();
+                assert!(meta.file_size > 0);
+                // make sure that the new file is in the cache
+                let mut it = table_cache.new_iter(
+                    icmp,
+                    ReadOptions::default(),
+                    meta.number,
+                    meta.file_size,
+                )?;
+                it.status()
+            });
         }
     }
-
-    let iter_status = iter.status();
+    let iter_status = dbg!(iter.status());
     if iter_status.is_err() {
         status = iter_status;
     };
@@ -1514,9 +1514,9 @@ mod tests {
     {
         vec![
             TestOption::Default,
-            TestOption::Reuse,
-            TestOption::FilterPolicy,
-            TestOption::UnCompressed,
+            // TestOption::Reuse,
+            // TestOption::FilterPolicy,
+            // TestOption::UnCompressed,
         ]
         .into_iter()
         .map(|opt| {
@@ -2344,6 +2344,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_approximate_size() {
         for mut t in cases(|mut opt| {
             opt.write_buffer_size = 100_000_000;
@@ -2369,6 +2370,7 @@ mod tests {
             // Check sizes across recovery by reopening a few times
             for _ in 0..3 {
                 t.reopen().unwrap();
+                dbg!("=========================================== after re-open");
                 for compact_start in (0..n).step_by(10) {
                     for i in (0..n).step_by(10) {
                         t.assert_approximate_size("", &key(i), s1 * i, s2 * i);
@@ -2382,6 +2384,7 @@ mod tests {
                     }
                     t.assert_approximate_size("", &key(50), s1 * 50, s2 * 50);
                     t.assert_approximate_size("", &(key(50) + ".suffix"), s1 * 50, s2 * 50);
+                    dbg!("=========================================== compact range");
                     t.compact_range(
                         Some(key(compact_start).as_bytes()),
                         Some(key(compact_start + 9).as_bytes()),
