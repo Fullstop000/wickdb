@@ -212,7 +212,6 @@ impl<S: Storage + Clone, C: Comparator + 'static> WickDB<S, C> {
         wick_db.process_compaction();
         wick_db.process_batch();
         // Schedule a compaction to current version for potential unfinished work
-        debug!("Trigger a compaction for current version");
         wick_db.inner.maybe_schedule_compaction(current);
         Ok(wick_db)
     }
@@ -414,7 +413,7 @@ pub struct DBImpl<S: Storage + Clone, C: Comparator> {
     do_compaction: (Sender<()>, Receiver<()>),
     // Though Memtable is thread safe with multiple readers and single writers and
     // all relative methods are using immutable borrowing,
-    // we still need to mutate the field `mem` and `im_mem` in few situations.
+    // we still need to mutate the field `mem` and `im_mem` in some situations.
     mem: ShardedLock<MemTable<C>>,
     // There is a compacted immutable table or not
     im_mem: ShardedLock<Option<MemTable<C>>>,
@@ -699,14 +698,14 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                 mem = None;
             }
         }
-        info!(
+        debug!(
             "{} bytes inserted into Memtable in recovering",
             inserted_size
         );
         // See if we should keep reusing the last log file.
         if self.options.reuse_logs && last_log && !need_compaction {
             let log_file = reader.into_file();
-            info!("Reusing old log file {}", file_name);
+            debug!("Reusing old log file {}", file_name);
             versions.record_writer = Some(Writer::new(log_file));
             versions.set_log_number(log_number);
             if let Some(m) = mem {
@@ -884,10 +883,14 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                 // rotate the mem to immutable mem
                 {
                     let mut mem = self.mem.write().unwrap();
-                    let memtable =
-                        mem::replace(&mut *mem, MemTable::new(self.internal_comparator.clone()));
-                    let mut im_mem = self.im_mem.write().unwrap();
-                    *im_mem = Some(memtable);
+                    if mem.count() > 0 {
+                        let memtable = mem::replace(
+                            &mut *mem,
+                            MemTable::new(self.internal_comparator.clone()),
+                        );
+                        let mut im_mem = self.im_mem.write().unwrap();
+                        *im_mem = Some(memtable);
+                    }
                     force = false; // do not force another compaction if have room
                 }
                 self.maybe_schedule_compaction(versions.current());
@@ -902,7 +905,6 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         let mut versions = self.versions.lock().unwrap();
         let mut edit = VersionEdit::new(self.options.max_levels);
         let mut im_mem = self.im_mem.write().unwrap();
-        dbg!(im_mem.as_ref().unwrap().approximate_memory_usage());
         let mut iter = im_mem.as_ref().unwrap().iter();
         versions.write_level0_files(self.db_name, &self.table_cache, &mut iter, &mut edit, true)?;
         if self.is_shutting_down.load(Ordering::Acquire) {
@@ -918,7 +920,6 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
     }
 
     // Force current memtable contents(even if the memtable is not full) to be compacted into sst files
-    // Only used in tests
     fn force_compact_mem_table(&self) -> Result<()> {
         let empty_batch = WriteBatch::default();
         // Schedule a force memory compaction
@@ -1192,15 +1193,6 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
             }
             input_iter.next();
         }
-        info!(
-            "Compactions stats for Level{}: {:?}",
-            c.level,
-            CompactionStats {
-                micros: now.elapsed().as_micros() as u64 - mem_compaction_duration,
-                bytes_read: c.bytes_read(),
-                bytes_written: c.bytes_written(),
-            }
-        );
         if self.is_shutting_down.load(Ordering::Acquire) {
             return Err(Error::DBClosed("major compaction".to_owned()));
         }
@@ -1211,6 +1203,15 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         if let Some(builder) = c.builder.as_mut() {
             builder.close()
         }
+        info!(
+            "Compactions stats for Level{}: {:?}",
+            c.level,
+            CompactionStats {
+                micros: now.elapsed().as_micros() as u64 - mem_compaction_duration,
+                bytes_read: c.bytes_read(),
+                bytes_written: c.bytes_written(),
+            }
+        );
         let mut versions = self.versions.lock().unwrap();
         for output in c.outputs.iter() {
             versions.pending_outputs.remove(&output.number);
@@ -1364,7 +1365,7 @@ pub(crate) fn build_table<S: Storage + Clone, C: Comparator + 'static>(
     iter.seek_to_first();
     let file_name = generate_filename(db_name, FileType::Table, meta.number);
     let mut status = Ok(());
-    if dbg!(iter.valid()) {
+    if iter.valid() {
         let file = storage.create(file_name.as_str())?;
         let icmp = InternalKeyComparator::new(options.comparator.clone());
         let mut builder = TableBuilder::new(file, icmp.clone(), &options);
@@ -1398,7 +1399,7 @@ pub(crate) fn build_table<S: Storage + Clone, C: Comparator + 'static>(
             });
         }
     }
-    let iter_status = dbg!(iter.status());
+    let iter_status = iter.status();
     if iter_status.is_err() {
         status = iter_status;
     };
@@ -2344,7 +2345,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_approximate_size() {
         for mut t in cases(|mut opt| {
             opt.write_buffer_size = 100_000_000;
@@ -2368,9 +2368,9 @@ mod tests {
                 t.assert_approximate_size("", &key(50), 0, 0);
             }
             // Check sizes across recovery by reopening a few times
-            for _ in 0..3 {
+            for i in 0..3 {
+                dbg!(i);
                 t.reopen().unwrap();
-                dbg!("=========================================== after re-open");
                 for compact_start in (0..n).step_by(10) {
                     for i in (0..n).step_by(10) {
                         t.assert_approximate_size("", &key(i), s1 * i, s2 * i);
@@ -2384,15 +2384,15 @@ mod tests {
                     }
                     t.assert_approximate_size("", &key(50), s1 * 50, s2 * 50);
                     t.assert_approximate_size("", &(key(50) + ".suffix"), s1 * 50, s2 * 50);
-                    dbg!("=========================================== compact range");
-                    t.compact_range(
+                    t.compact_range_at(
+                        0,
                         Some(key(compact_start).as_bytes()),
                         Some(key(compact_start + 9).as_bytes()),
                     )
                     .unwrap();
                 }
                 t.assert_file_num_at_level(0, 0);
-                t.assert_file_num_at_level(1, 0);
+                assert!(t.num_sst_files_at_level(1) > 0);
             }
         }
     }
