@@ -108,7 +108,7 @@ impl<'a, C: Comparator + 'static> VersionBuilder<'a, C> {
             }
             new_file
                 .allowed_seeks
-                .store(allowed_seeks, Ordering::Release);
+                .store(allowed_seeks, Ordering::Relaxed);
             self.levels[level].deleted_files.remove(&new_file.number);
             self.levels[level].added_files.push(new_file);
         }
@@ -132,7 +132,9 @@ impl<'a, C: Comparator + 'static> VersionBuilder<'a, C> {
                 }
             }
             for f in delta.added_files {
-                v.files[level].push(Arc::new(f));
+                if !delta.deleted_files.contains(&f.number) {
+                    v.files[level].push(Arc::new(f));
+                }
             }
             // TODO: base.files[level] is already sorted. Instead of appending
             // added_files[level] to the end and sorting afterwards, it might be more
@@ -397,8 +399,8 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
         if self.manifest_writer.is_none() {
             new_manifest_file =
                 generate_filename(self.db_name, FileType::Manifest, self.manifest_file_number);
-            //            edit.set_next_file(self.next_file_number);
             let f = self.storage.create(new_manifest_file.as_str())?;
+            debug!("New manifest file #{}", self.manifest_file_number);
             let mut writer = Writer::new(f);
             match self.write_snapshot(&mut writer) {
                 Ok(()) => self.manifest_writer = Some(writer),
@@ -797,7 +799,6 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
     }
 
     // Create snapshot of current version and persistent to manifest file.
-    // Only be called when initializing a new db
     fn write_snapshot(&self, writer: &mut Writer<S::F>) -> Result<()> {
         let mut edit = VersionEdit::new(self.options.max_levels);
         // Save metadata
@@ -1216,6 +1217,7 @@ impl<S: Storage + Clone, C: Comparator> KMergeCore for SSTableIters<S, C> {
 mod add_boundary_tests {
     use super::*;
     use crate::db::format::{InternalKey, InternalKeyComparator, ValueType};
+    use crate::storage::mem::MemStorage;
     use crate::util::comparator::BytewiseComparator;
 
     #[derive(Default)]
@@ -1388,5 +1390,131 @@ mod add_boundary_tests {
         let mut files_to_compact = vec![f1.clone()];
         add_boundary_inputs_for_compact_files(&t.icmp, &t.level_files, &mut files_to_compact);
         assert_eq!(files_to_compact, vec![f1, f4, f3]);
+    }
+
+    fn new_test_file_meta_data(number: u64) -> FileMetaData {
+        FileMetaData {
+            allowed_seeks: std::sync::atomic::AtomicUsize::new(0),
+            file_size: 0,
+            number,
+            smallest: InternalKey::new(number.to_string().as_bytes(), 1, ValueType::Value),
+            largest: InternalKey::new(number.to_string().as_bytes(), 2, ValueType::Value),
+        }
+    }
+
+    fn new_test_version(files: Vec<Vec<u64>>) -> Version<BytewiseComparator> {
+        let file_metadata = files
+            .into_iter()
+            .map(|f| {
+                f.into_iter()
+                    .map(|n| Arc::new(new_test_file_meta_data(n)))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let opts = Arc::new(Options::<BytewiseComparator>::default());
+        let icmp = InternalKeyComparator::new(BytewiseComparator::default());
+        let mut v = Version::new(opts.clone(), icmp);
+        v.files = file_metadata;
+        v
+    }
+
+    fn new_test_file_diff(delete: Vec<Vec<u64>>, add: Vec<Vec<u64>>) -> FileDelta {
+        let mut deleted_files = crate::util::collection::HashSet::default();
+        for (level, files) in delete.into_iter().enumerate() {
+            for f in files {
+                deleted_files.insert((level, f));
+            }
+        }
+        let mut added_files = vec![];
+        for (level, files) in add.into_iter().enumerate() {
+            for f in files {
+                added_files.push((level, new_test_file_meta_data(f)));
+            }
+        }
+        FileDelta {
+            compaction_pointers: vec![],
+            deleted_files,
+            new_files: added_files,
+        }
+    }
+
+    impl<C: Comparator> Version<C> {
+        fn assert_files(&self, mut expect: Vec<Vec<u64>>) {
+            for files in expect.iter_mut() {
+                files.sort();
+            }
+            assert_eq!(self.all_files_num(), expect)
+        }
+
+        fn all_files_num(&self) -> Vec<Vec<u64>> {
+            let mut files = self
+                .files
+                .iter()
+                .map(|files| files.into_iter().map(|f| f.number).collect::<Vec<_>>())
+                .collect::<Vec<_>>();
+            for f in files.iter_mut() {
+                f.sort();
+            }
+            files
+        }
+    }
+
+    #[test]
+    fn test_version_builder_accumulate_and_apply() {
+        let opts = Arc::new(Options::<BytewiseComparator>::default());
+        let mut mock_vset = VersionSet::new("test", opts.clone(), MemStorage::default());
+        for (base, diffs, expect) in vec![
+            (
+                vec![],
+                vec![(vec![], vec![])],
+                vec![vec![], vec![], vec![], vec![], vec![], vec![], vec![]],
+            ),
+            (
+                vec![vec![1]],
+                vec![(vec![vec![1]], vec![vec![2]]), (vec![], vec![vec![3, 4]])],
+                vec![
+                    vec![2, 3, 4],
+                    vec![],
+                    vec![],
+                    vec![],
+                    vec![],
+                    vec![],
+                    vec![],
+                ],
+            ),
+            (
+                vec![vec![], vec![3], vec![], vec![]],
+                vec![
+                    (
+                        vec![vec![1], vec![5], vec![], vec![]],
+                        // add 2@0 4,5@1 6,7,8@3
+                        vec![vec![2], vec![4, 5], vec![], vec![6, 7, 8]],
+                    ),
+                    (
+                        // delete 5@1
+                        vec![vec![], vec![5]],
+                        vec![],
+                    ),
+                ],
+                vec![
+                    vec![2],
+                    vec![3, 4],
+                    vec![],
+                    vec![6, 7, 8],
+                    vec![],
+                    vec![],
+                    vec![],
+                ],
+            ),
+        ] {
+            let v = new_test_version(base);
+            let mut vb = VersionBuilder::new(opts.max_levels, &v);
+            for (delete, add) in diffs {
+                let d = new_test_file_diff(delete, add);
+                vb.accumulate(d, &mut mock_vset);
+            }
+            let new_v = vb.apply_to_new(&v.icmp);
+            new_v.assert_files(expect);
+        }
     }
 }
