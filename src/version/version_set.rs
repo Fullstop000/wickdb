@@ -312,7 +312,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
     /// Create new snapshot with `last_sequence`
     #[inline]
     pub fn new_snapshot(&mut self) -> Arc<Snapshot> {
-        self.snapshots.snapshot(self.last_sequence)
+        self.snapshots.acquire(self.last_sequence)
     }
 
     /// Returns the collection of all the file iterators in current version

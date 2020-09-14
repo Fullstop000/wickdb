@@ -15,7 +15,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::collections::vec_deque::VecDeque;
 use std::sync::Arc;
 
 const MIN_SNAPSHOT: u64 = 0;
@@ -23,7 +22,7 @@ const MIN_SNAPSHOT: u64 = 0;
 /// Abstract handle to particular state of a DB.
 /// A `Snapshot` is an immutable object and can therefore be safely
 /// accessed from multiple threads without any external synchronization.
-#[derive(Clone, Copy)]
+#[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Copy)]
 pub struct Snapshot {
     // The sequence number pointing to the view of db
     sequence_number: u64,
@@ -47,14 +46,11 @@ impl From<u64> for Snapshot {
 /// Different from the C++ implementation,  a VecDequeue is handled for the SnapshotList because
 /// a safe double-linked circular list implementation in Rust is tough and not worth it.
 /// Although Rust provides a standard double linked list, use a array based containers are faster.
-/// See https://doc.rust-lang.org/std/collections/struct.LinkedList.html
 pub struct SnapshotList {
     // The initialized snapshot with `MIN_SNAPSHOT` number.
     first: Arc<Snapshot>,
     // All the newly allocated snapshots.
-    // A new snapshot will be `pushed back` into `snapshots`
-    // Since a Snapshot will be never altered after allocated, `Arc` is suitable here
-    snapshots: VecDeque<Arc<Snapshot>>,
+    snapshots: Vec<Arc<Snapshot>>,
 }
 
 impl Default for SnapshotList {
@@ -62,7 +58,7 @@ impl Default for SnapshotList {
         let first = Arc::new(MIN_SNAPSHOT.into());
         Self {
             first,
-            snapshots: VecDeque::new(),
+            snapshots: vec![],
         }
     }
 }
@@ -74,12 +70,13 @@ impl SnapshotList {
         self.snapshots.is_empty()
     }
 
+    /// Returns the oldest snapshot
     #[inline]
-    pub fn oldest(&self) -> Arc<Snapshot> {
+    pub(crate) fn oldest(&self) -> Arc<Snapshot> {
         if self.is_empty() {
             self.first.clone()
         } else {
-            self.snapshots.front().unwrap().clone()
+            self.snapshots.first().unwrap().clone()
         }
     }
 
@@ -88,12 +85,12 @@ impl SnapshotList {
         if self.is_empty() {
             self.first.clone()
         } else {
-            self.snapshots.back().unwrap().clone()
+            self.snapshots.last().unwrap().clone()
         }
     }
 
     /// Creates a `Snapshot` and appends it to the end of the list
-    pub fn snapshot(&mut self, seq: u64) -> Arc<Snapshot> {
+    pub fn acquire(&mut self, seq: u64) -> Arc<Snapshot> {
         let last_seq = self.last_seq();
         assert!(seq >= last_seq, "[snapshot] the sequence number must be monotonically increasing : [new: {}], [last: {}]", seq, last_seq);
         if last_seq == seq {
@@ -102,7 +99,7 @@ impl SnapshotList {
             let s = Arc::new(Snapshot {
                 sequence_number: seq,
             });
-            self.snapshots.push_back(s.clone());
+            self.snapshots.push(s.clone());
             s
         }
     }
@@ -116,8 +113,20 @@ impl SnapshotList {
     #[inline]
     fn last_seq(&self) -> u64 {
         self.snapshots
-            .back()
+            .last()
             .map_or(self.first.sequence(), |s| s.sequence_number)
+    }
+
+    /// Returns true if the given snapshot is removed from the lists
+    #[inline]
+    pub fn release(&mut self, s: Arc<Snapshot>) -> bool {
+        match self.snapshots.as_slice().binary_search(&s) {
+            Ok(i) => {
+                self.snapshots.remove(i);
+                true
+            }
+            Err(_) => false,
+        }
     }
 }
 
@@ -130,7 +139,7 @@ mod tests {
         let mut s = SnapshotList::default();
         assert!(s.is_empty());
         assert_eq!(MIN_SNAPSHOT, s.last_seq());
-        assert_eq!(MIN_SNAPSHOT, s.snapshot(MIN_SNAPSHOT).sequence());
+        assert_eq!(MIN_SNAPSHOT, s.acquire(MIN_SNAPSHOT).sequence());
     }
 
     #[test]
@@ -138,29 +147,45 @@ mod tests {
         let mut s = SnapshotList::default();
         assert_eq!(MIN_SNAPSHOT, s.oldest().sequence());
         for i in vec![1, 1, 2, 3] {
-            s.snapshot(i);
+            s.acquire(i);
         }
     }
 
     #[test]
     fn test_gc() {
         let mut s = SnapshotList::default();
-        s.snapshot(1);
-        let s2 = s.snapshot(2);
-        s.snapshot(3);
+        s.acquire(1);
+        let s2 = s.acquire(2);
+        s.acquire(3);
         s.gc();
         assert_eq!(1, s.snapshots.len());
-        assert_eq!(s2.sequence(), s.snapshots.pop_front().unwrap().sequence());
+        assert_eq!(s2.sequence(), s.snapshots.pop().unwrap().sequence());
     }
 
     #[test]
     fn test_append_new_snapshot() {
         let mut s = SnapshotList::default();
         for i in vec![1, 1, 2, 3] {
-            let s = s.snapshot(i);
+            let s = s.acquire(i);
             assert_eq!(s.sequence(), i);
         }
         assert_eq!(1, s.oldest().sequence());
         assert_eq!(3, s.newest().sequence());
+    }
+
+    #[test]
+    fn test_release() {
+        let mut s = SnapshotList::default();
+        for i in vec![1, 1, 2, 3] {
+            s.acquire(i);
+        }
+        assert!(s.release(Arc::new(Snapshot { sequence_number: 2 })));
+        assert_eq!(
+            vec![1, 3],
+            s.snapshots
+                .into_iter()
+                .map(|s| s.sequence_number)
+                .collect::<Vec<_>>()
+        );
     }
 }
