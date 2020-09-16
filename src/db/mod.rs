@@ -2448,6 +2448,7 @@ mod tests {
                 t.reopen().unwrap();
                 // Recovery will reuse memtable
                 t.assert_approximate_size("", &key(50), 0, 0);
+                continue;
             }
             // Check sizes across recovery by reopening a few times
             for _ in 0..3 {
