@@ -16,6 +16,7 @@
 // found in the LICENSE file.
 
 pub mod arena;
+pub mod inlineskiplist;
 pub mod skiplist;
 
 use crate::db::format::{InternalKeyComparator, LookupKey, ValueType, INTERNAL_KEY_TAIL};
