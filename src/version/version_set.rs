@@ -237,7 +237,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
             compaction_pointer,
         }
     }
-    /// Returns the number of files in a certain level
+    /// Returns the number of files in a certain level using latest version
     #[inline]
     pub fn level_files_count(&self, level: usize) -> usize {
         assert!(level < self.options.max_levels as usize);
