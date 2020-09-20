@@ -884,12 +884,12 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                 info!("Too many L0 files; waiting...");
                 versions = self.background_work_finished_signal.wait(versions).unwrap();
             } else {
-                // there must be no prev log
                 let new_log_num = versions.get_next_file_number();
                 let log_file = self
                     .env
                     .create(generate_filename(self.db_name, FileType::Log, new_log_num).as_str())?;
                 versions.set_next_file_number(new_log_num + 1);
+                versions.set_log_number(new_log_num);
                 versions.record_writer = Some(Writer::new(log_file));
                 // rotate the mem to immutable mem
                 {
@@ -922,7 +922,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
             Err(Error::DBClosed("when compacting memory table".to_owned()))
         } else {
             edit.prev_log_number = Some(0);
-            edit.log_number = Some(versions.log_number());
+            edit.log_number = Some(versions.log_number()); // earlier logs no longer needed
             let res = versions.log_and_apply(&mut edit);
             *im_mem = None;
             self.delete_obsolete_files(versions)?;
