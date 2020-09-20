@@ -1981,10 +1981,8 @@ mod tests {
                 t.put("z", "end").unwrap();
                 t.inner.force_compact_mem_table().unwrap();
             }
-            t.print_sst_files();
             // Clear level 1 if necessary
             t.inner.manual_compact_range(1, None, None).unwrap();
-            t.print_sst_files();
             t.assert_file_num_at_level(0, 1);
             t.assert_file_num_at_level(1, 0);
             t.assert_file_num_at_level(2, 1);
@@ -2566,5 +2564,20 @@ mod tests {
             assert_eq!("[ tiny ]".to_owned(), t.all_entires_for(b"foo"));
             t.assert_approximate_size("", "pastfoo", 0, 1000);
         }
+    }
+
+    #[test]
+    fn test_mem_compact_into_max_level() {
+        let t = DBTest::default();
+        t.put("foo", "v1").unwrap();
+        t.inner.force_compact_mem_table().unwrap();
+        t.assert_file_num_at_level(t.opt.max_mem_compact_level, 1);
+
+        // Place a table at level last-1 to prevent merging with preceding mutation
+        t.put("a", "begin").unwrap();
+        t.put("z", "end").unwrap();
+        t.inner.force_compact_mem_table().unwrap();
+        t.assert_file_num_at_level(t.opt.max_mem_compact_level, 1);
+        t.assert_file_num_at_level(t.opt.max_mem_compact_level - 1, 1);
     }
 }

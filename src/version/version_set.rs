@@ -421,15 +421,16 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
                         Ok(()) => {
                             // If we just created a MANIFEST file, install it by writing a
                             // new CURRENT file that points to it.
-                            if !new_manifest_file.is_empty() {
-                                if let Err(_) = update_current(
+                            if !new_manifest_file.is_empty()
+                                && update_current(
                                     &self.storage,
                                     self.db_name,
                                     self.manifest_file_number,
-                                ) {
-                                    self.manifest_writer = None;
-                                    return self.storage.remove(new_manifest_file.as_str());
-                                }
+                                )
+                                .is_err()
+                            {
+                                self.manifest_writer = None;
+                                return self.storage.remove(new_manifest_file.as_str());
                             }
                             // install new version
                             self.versions.push_front(Arc::new(v));
