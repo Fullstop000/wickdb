@@ -94,16 +94,12 @@ pub struct WickDB<S: Storage + Clone + 'static, C: Comparator> {
     shutdown_compaction_thread: (Sender<()>, Receiver<()>),
 }
 
-pub type WickDBIterator<S, C> = DBIterator<
-    KMergeIter<
-        DBIteratorCore<
-            InternalKeyComparator<C>,
-            MemTableIterator<C>,
-            KMergeIter<SSTableIters<S, C>>,
-        >,
-    >,
-    S,
-    C,
+/// The iterator yields all the user keys and user values in db
+pub type WickDBIterator<S, C> = DBIterator<InternalIterator<S, C>, S, C>;
+
+// The iterator yields all the internal keys and internal values in db
+type InternalIterator<S, C> = KMergeIter<
+    DBIteratorCore<InternalKeyComparator<C>, MemTableIterator<C>, KMergeIter<SSTableIters<S, C>>>,
 >;
 
 impl<S: Storage + Clone, C: Comparator + 'static> DB for WickDB<S, C> {
@@ -120,30 +116,19 @@ impl<S: Storage + Clone, C: Comparator + 'static> DB for WickDB<S, C> {
     }
 
     fn iter(&self, read_opt: ReadOptions) -> Result<Self::Iterator> {
+        let internal_iter = self.internal_iter(read_opt)?;
         let ucmp = self.inner.internal_comparator.user_comparator.clone();
         let sequence = if let Some(snapshot) = &read_opt.snapshot {
             snapshot.sequence()
         } else {
             self.inner.versions.lock().unwrap().last_sequence()
         };
-        let mut mem_iters = vec![];
-        mem_iters.push(self.inner.mem.read().unwrap().iter());
-        if let Some(im_mem) = self.inner.im_mem.read().unwrap().as_ref() {
-            mem_iters.push(im_mem.iter());
-        }
-        let sst_iter = self
-            .inner
-            .versions
-            .lock()
-            .unwrap()
-            .current_sst_iter(read_opt, self.inner.table_cache.clone())?;
-        let iter_core = DBIteratorCore::new(
-            self.inner.internal_comparator.clone(),
-            mem_iters,
-            vec![sst_iter],
-        );
-        let iter = KMergeIter::new(iter_core);
-        Ok(DBIterator::new(iter, self.inner.clone(), sequence, ucmp))
+        Ok(DBIterator::new(
+            internal_iter,
+            self.inner.clone(),
+            sequence,
+            ucmp,
+        ))
     }
 
     fn delete(&self, options: WriteOptions, key: &[u8]) -> Result<()> {
@@ -229,6 +214,12 @@ impl<S: Storage + Clone, C: Comparator + 'static> WickDB<S, C> {
         end: Option<&[u8]>,
     ) -> Result<()> {
         self.inner.manual_compact_range(level, begin, end)
+    }
+
+    /// Returns true if the given snapshot is removed
+    pub fn release_snapshot(&self, s: Arc<Snapshot>) -> bool {
+        let mut vset = self.inner.versions.lock().unwrap();
+        vset.snapshots.release(s)
     }
 
     // The thread take batches from the queue and apples them into memtable and WAL.
@@ -378,6 +369,26 @@ impl<S: Storage + Clone, C: Comparator + 'static> WickDB<S, C> {
                 debug!("compaction thread shut down");
             })
             .unwrap();
+    }
+
+    fn internal_iter(&self, read_opt: ReadOptions) -> Result<InternalIterator<S, C>> {
+        let mut mem_iters = vec![];
+        mem_iters.push(self.inner.mem.read().unwrap().iter());
+        if let Some(im_mem) = self.inner.im_mem.read().unwrap().as_ref() {
+            mem_iters.push(im_mem.iter());
+        }
+        let sst_iter = self
+            .inner
+            .versions
+            .lock()
+            .unwrap()
+            .current_sst_iter(read_opt, self.inner.table_cache.clone())?;
+        let iter_core = DBIteratorCore::new(
+            self.inner.internal_comparator.clone(),
+            mem_iters,
+            vec![sst_iter],
+        );
+        Ok(KMergeIter::new(iter_core))
     }
 }
 
@@ -873,12 +884,12 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                 info!("Too many L0 files; waiting...");
                 versions = self.background_work_finished_signal.wait(versions).unwrap();
             } else {
-                // there must be no prev log
                 let new_log_num = versions.get_next_file_number();
                 let log_file = self
                     .env
                     .create(generate_filename(self.db_name, FileType::Log, new_log_num).as_str())?;
                 versions.set_next_file_number(new_log_num + 1);
+                versions.set_log_number(new_log_num);
                 versions.record_writer = Some(Writer::new(log_file));
                 // rotate the mem to immutable mem
                 {
@@ -911,7 +922,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
             Err(Error::DBClosed("when compacting memory table".to_owned()))
         } else {
             edit.prev_log_number = Some(0);
-            edit.log_number = Some(versions.log_number());
+            edit.log_number = Some(versions.log_number()); // earlier logs no longer needed
             let res = versions.log_and_apply(&mut edit);
             *im_mem = None;
             self.delete_obsolete_files(versions)?;
@@ -1515,9 +1526,9 @@ mod tests {
     {
         vec![
             TestOption::Default,
-            // TestOption::Reuse,
-            // TestOption::FilterPolicy,
-            // TestOption::UnCompressed,
+            TestOption::Reuse,
+            TestOption::FilterPolicy,
+            TestOption::UnCompressed,
         ]
         .into_iter()
         .map(|opt| {
@@ -1590,6 +1601,10 @@ mod tests {
             }
         }
 
+        fn must_release_snapshot(&self, s: Arc<Snapshot>) {
+            assert!(self.release_snapshot(s))
+        }
+
         // Return a string that contains all key,value pairs in order,
         // formatted like "(k1->v1)(k2->v2)...".
         // Also checks the db iterator works fine in both forward and backward direction
@@ -1623,7 +1638,7 @@ mod tests {
 
         // Return all the values for the given `user_key`
         fn all_entires_for(&self, user_key: &[u8]) -> String {
-            let mut iter = self.db.iter(ReadOptions::default()).unwrap();
+            let mut iter = self.db.internal_iter(ReadOptions::default()).unwrap();
             let ikey = InternalKey::new(user_key, MAX_KEY_SEQUENCE, ValueType::Value);
             iter.seek(ikey.data());
             let mut result = String::new();
@@ -1966,10 +1981,8 @@ mod tests {
                 t.put("z", "end").unwrap();
                 t.inner.force_compact_mem_table().unwrap();
             }
-            t.print_sst_files();
             // Clear level 1 if necessary
             t.inner.manual_compact_range(1, None, None).unwrap();
-            t.print_sst_files();
             t.assert_file_num_at_level(0, 1);
             t.assert_file_num_at_level(1, 0);
             t.assert_file_num_at_level(2, 1);
@@ -2176,6 +2189,30 @@ mod tests {
     }
 
     #[test]
+    fn test_iter_pins_ref() {
+        let t = DBTest::default();
+        t.put("foo", "hello").unwrap();
+
+        // Get iterator that will yield the current contents of the DB.
+        let mut iter = t.iter(ReadOptions::default()).unwrap();
+
+        // Wirte to force compactions
+        t.put("foo", "newvalue1").unwrap();
+        for i in 0..100 {
+            t.put(&key(i), &(key(i) + "v".repeat(100_000).as_str()))
+                .unwrap();
+        }
+        t.put("foo", "newvalue2").unwrap();
+        iter.seek_to_first();
+        assert!(iter.valid());
+        assert_eq!(str::from_utf8(iter.key()).unwrap(), "foo");
+        assert_eq!(str::from_utf8(iter.value()).unwrap(), "hello");
+        iter.next();
+        // Iter should only contains entries before being created
+        assert!(!iter.valid());
+    }
+
+    #[test]
     fn test_reopen_with_empty_db() {
         for mut t in default_cases() {
             t.reopen().unwrap();
@@ -2230,6 +2267,50 @@ mod tests {
             t.assert_get("big2", Some("y".repeat(1000).as_str()));
         }
     }
+
+    #[test]
+    fn test_minor_compactions_happend() {
+        let mut opts = Options::default();
+        opts.write_buffer_size = 10000;
+        let mut t = DBTest::new(opts);
+        let n = 500;
+        let starting_num_tables = t.total_sst_files();
+        for i in 0..n {
+            t.put(&key(i), &(key(i) + "v".repeat(1000).as_str()))
+                .unwrap();
+        }
+        let ending_num_tables = t.total_sst_files();
+        assert!(starting_num_tables < ending_num_tables);
+        for i in 0..n {
+            t.assert_get(&key(i), Some(&(key(i) + "v".repeat(1000).as_str())))
+        }
+        t.reopen().unwrap();
+        for i in 0..n {
+            t.assert_get(&key(i), Some(&(key(i) + "v".repeat(1000).as_str())))
+        }
+    }
+
+    #[test]
+    fn test_recover_with_large_log() {
+        let opts = Options::default();
+        let mut t = DBTest::new(opts);
+        t.put("big1", &"1".repeat(200_000)).unwrap();
+        t.put("big2", &"2".repeat(200_000)).unwrap();
+        t.put("small3", &"3".repeat(10)).unwrap();
+        t.put("small4", &"4".repeat(10)).unwrap();
+        assert_eq!(t.num_sst_files_at_level(0), 0);
+
+        // Make sure that if we re-open with a small write buffer size that
+        // we flush table files in the middle of a large log file.
+        t.opt.write_buffer_size = 100_000;
+        t.reopen().unwrap();
+        assert_eq!(t.num_sst_files_at_level(0), 3);
+        t.assert_get("big1", Some(&"1".repeat(200_000)));
+        t.assert_get("big2", Some(&"2".repeat(200_000)));
+        t.assert_get("small3", Some(&"3".repeat(10)));
+        t.assert_get("small4", Some(&"4".repeat(10)));
+    }
+
     #[test]
     fn test_compaction_generate_multiple_files() {
         let mut opt = Options::default();
@@ -2348,7 +2429,6 @@ mod tests {
     fn test_approximate_size() {
         for mut t in cases(|mut opt| {
             opt.write_buffer_size = 100_000_000;
-            opt.logger_level = crate::LevelFilter::Debug;
             opt.compression = crate::CompressionType::NoCompression;
             opt
         }) {
@@ -2366,10 +2446,10 @@ mod tests {
                 t.reopen().unwrap();
                 // Recovery will reuse memtable
                 t.assert_approximate_size("", &key(50), 0, 0);
+                continue;
             }
             // Check sizes across recovery by reopening a few times
-            for i in 0..3 {
-                dbg!(i);
+            for _ in 0..3 {
                 t.reopen().unwrap();
                 for compact_start in (0..n).step_by(10) {
                     for i in (0..n).step_by(10) {
@@ -2395,5 +2475,109 @@ mod tests {
                 assert!(t.num_sst_files_at_level(1) > 0);
             }
         }
+    }
+
+    #[test]
+    fn test_approximiate_sizes_min_of_small_and_large() {
+        for mut t in cases(|mut opt| {
+            opt.compression = crate::CompressionType::NoCompression;
+            opt
+        }) {
+            let big1 = rand_string(100_000);
+            t.put(&key(0), &rand_string(10000)).unwrap();
+            t.put(&key(1), &rand_string(10000)).unwrap();
+            t.put(&key(2), &big1).unwrap();
+            t.put(&key(3), &rand_string(10000)).unwrap();
+            t.put(&key(4), &big1).unwrap();
+            t.put(&key(5), &rand_string(10000)).unwrap();
+            t.put(&key(6), &rand_string(300000)).unwrap();
+            t.put(&key(7), &rand_string(10000)).unwrap();
+            if t.opt.reuse_logs {
+                t.inner.force_compact_mem_table().unwrap();
+            }
+            for _ in 0..3 {
+                t.reopen().unwrap();
+                t.assert_approximate_size("", &key(0), 0, 0);
+                t.assert_approximate_size("", &key(1), 10000, 11000);
+                t.assert_approximate_size("", &key(2), 20000, 21000);
+                t.assert_approximate_size("", &key(3), 120000, 121000);
+                t.assert_approximate_size("", &key(4), 130000, 131000);
+                t.assert_approximate_size("", &key(5), 230000, 231000);
+                t.assert_approximate_size("", &key(6), 240000, 241000);
+                t.assert_approximate_size("", &key(7), 540000, 541000);
+                t.assert_approximate_size("", &key(8), 550000, 560000);
+                t.assert_approximate_size(&key(3), &key(5), 110000, 111000);
+                t.compact_range_at(0, None, None).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn test_snapshot() {
+        for t in default_cases() {
+            t.put("foo", "v1").unwrap();
+            let s1 = t.snapshot();
+            t.put("foo", "v2").unwrap();
+            let s2 = t.snapshot();
+            t.put("foo", "v3").unwrap();
+            let s3 = t.snapshot();
+            t.put("foo", "v4").unwrap();
+
+            assert_eq!(
+                Some("v1".to_owned()),
+                t.get("foo", Some(s1.sequence().into()))
+            );
+            assert_eq!(
+                Some("v2".to_owned()),
+                t.get("foo", Some(s2.sequence().into()))
+            );
+            assert_eq!(
+                Some("v3".to_owned()),
+                t.get("foo", Some(s3.sequence().into()))
+            );
+            assert_eq!(Some("v4".to_owned()), t.get("foo", None));
+        }
+    }
+
+    #[test]
+    fn test_hidden_values_are_removed() {
+        for t in default_cases() {
+            t.fill_levels("a", "z");
+            let big = rand_string(50000);
+            t.put("foo", &big).unwrap();
+            t.put("pastfoo", "v").unwrap();
+            let s = t.snapshot();
+            t.put("foo", "tiny").unwrap();
+            t.put("pastfoo2", "v2").unwrap();
+            t.inner.force_compact_mem_table().unwrap();
+            assert!(t.num_sst_files_at_level(0) > 0);
+
+            assert_eq!(t.get("foo", Some(s.sequence().into())), Some(big.clone()));
+            t.assert_approximate_size("", "pastfoo", 50000, 60000);
+            t.must_release_snapshot(s);
+            assert_eq!(format!("[ tiny, {} ]", big), t.all_entires_for(b"foo"));
+            t.compact_range_at(0, None, Some(b"x")).unwrap();
+            assert_eq!("[ tiny ]".to_owned(), t.all_entires_for(b"foo"));
+            t.assert_file_num_at_level(0, 0);
+            assert!(t.num_sst_files_at_level(1) >= 1);
+            t.compact_range_at(1, None, Some(b"x")).unwrap();
+            assert_eq!("[ tiny ]".to_owned(), t.all_entires_for(b"foo"));
+            t.assert_approximate_size("", "pastfoo", 0, 1000);
+        }
+    }
+
+    #[test]
+    fn test_mem_compact_into_max_level() {
+        let t = DBTest::default();
+        t.put("foo", "v1").unwrap();
+        t.inner.force_compact_mem_table().unwrap();
+        t.assert_file_num_at_level(t.opt.max_mem_compact_level, 1);
+
+        // Place a table at level last-1 to prevent merging with preceding mutation
+        t.put("a", "begin").unwrap();
+        t.put("z", "end").unwrap();
+        t.inner.force_compact_mem_table().unwrap();
+        t.assert_file_num_at_level(t.opt.max_mem_compact_level, 1);
+        t.assert_file_num_at_level(t.opt.max_mem_compact_level - 1, 1);
     }
 }

@@ -73,8 +73,7 @@ pub struct ParsedInternalKey<'a> {
 }
 
 impl<'a> ParsedInternalKey<'a> {
-    /// Try to extract a `ParsedInternalKey` from given bytes. This might be dangerous since
-    /// a `Slice` never guarantees the underlying data lives as long as enough.
+    /// Try to extract a `ParsedInternalKey` from given bytes.
     /// Returns `None` if data length is less than 8 or getting an unknown value type.
     pub fn decode_from(internal_key: &'a [u8]) -> Option<ParsedInternalKey<'_>> {
         let size = internal_key.len();

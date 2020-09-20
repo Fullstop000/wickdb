@@ -312,7 +312,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
     /// Create new snapshot with `last_sequence`
     #[inline]
     pub fn new_snapshot(&mut self) -> Arc<Snapshot> {
-        self.snapshots.snapshot(self.last_sequence)
+        self.snapshots.acquire(self.last_sequence)
     }
 
     /// Returns the collection of all the file iterators in current version
@@ -400,7 +400,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
             new_manifest_file =
                 generate_filename(self.db_name, FileType::Manifest, self.manifest_file_number);
             let f = self.storage.create(new_manifest_file.as_str())?;
-            debug!("New manifest file #{}", self.manifest_file_number);
+            debug!("Create new manifest file #{}", self.manifest_file_number);
             let mut writer = Writer::new(f);
             match self.write_snapshot(&mut writer) {
                 Ok(()) => self.manifest_writer = Some(writer),
@@ -416,22 +416,21 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
         if let Some(writer) = self.manifest_writer.as_mut() {
             match writer.add_record(&record) {
                 Ok(()) => {
+                    debug!("Append new VersionEdit: {:?}", &edit);
                     match writer.sync() {
                         Ok(()) => {
                             // If we just created a MANIFEST file, install it by writing a
                             // new CURRENT file that points to it.
-                            if !new_manifest_file.is_empty() {
-                                match update_current(
+                            if !new_manifest_file.is_empty()
+                                && update_current(
                                     &self.storage,
                                     self.db_name,
                                     self.manifest_file_number,
-                                ) {
-                                    Ok(()) => {}
-                                    Err(_) => {
-                                        self.manifest_writer = None;
-                                        return self.storage.remove(new_manifest_file.as_str());
-                                    }
-                                }
+                                )
+                                .is_err()
+                            {
+                                self.manifest_writer = None;
+                                return self.storage.remove(new_manifest_file.as_str());
                             }
                             // install new version
                             self.versions.push_front(Arc::new(v));
@@ -945,13 +944,10 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
             return false;
         }
         if let Some((file_type, file_number)) = parse_filename(manifest_file) {
-            if file_type != FileType::Manifest {
+            if file_type != FileType::Manifest || file_size > self.options.max_file_size {
+                // Make new compacted MANIFEST if old one is too big
                 return false;
             };
-            // Make new compacted MANIFEST if old one is too big
-            if file_size > self.options.max_file_size {
-                return false;
-            }
             match self.storage.open(manifest_file) {
                 Ok(f) => {
                     info!("Reusing MANIFEST {}", manifest_file);
