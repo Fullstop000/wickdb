@@ -212,6 +212,9 @@ impl<C: Comparator> Options<C> {
         db_name: String,
         storage: &S,
     ) {
+        if self.max_mem_compact_level < 2 {
+            self.max_mem_compact_level = 2
+        }
         self.max_open_files =
             Self::clip_range(self.max_open_files, 64 + self.non_table_cache_files, 50000);
         self.write_buffer_size = Self::clip_range(self.write_buffer_size, 64 << 10, 1 << 30);

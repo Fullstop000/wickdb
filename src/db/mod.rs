@@ -142,7 +142,10 @@ impl<S: Storage + Clone, C: Comparator + 'static> DB for WickDB<S, C> {
     }
 
     fn close(&mut self) -> Result<()> {
-        self.inner.is_shutting_down.store(true, Ordering::Release);
+        if self.inner.is_shutting_down.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        self.inner.is_shutting_down.store(true, Ordering::Relaxed);
         self.inner.schedule_close_batch();
         let _ = self.shutdown_batch_processing_thread.1.recv();
         // Send a signal to avoid blocking forever
@@ -1541,7 +1544,6 @@ mod tests {
         .collect()
     }
 
-    #[allow(dead_code)]
     impl DBTest {
         fn new(opt: Options<BytewiseComparator>) -> Self {
             let store = MemStorage::default();
@@ -1686,8 +1688,11 @@ mod tests {
             result
         }
 
-        fn compact(&self, begin: Option<&[u8]>, end: Option<&[u8]>) {
-            self.db.inner.compact_range(begin, end).unwrap()
+        fn compact(&self, begin: Option<&str>, end: Option<&str>) {
+            self.db
+                .inner
+                .compact_range(begin.map(|s| s.as_bytes()), end.map(|s| s.as_bytes()))
+                .unwrap()
         }
 
         // Do `n` memtable compactions, each of which produces an sstable
@@ -1940,7 +1945,7 @@ mod tests {
     fn test_get_ordered_by_levels() {
         for t in default_cases() {
             t.put("foo", "v1").unwrap();
-            t.compact(Some(b"a"), Some(b"z"));
+            t.compact(Some("a"), Some("z"));
             assert_eq!(t.get("foo", None).unwrap(), "v1");
             t.put("foo", "v2").unwrap();
             t.inner.force_compact_mem_table().unwrap();
@@ -1952,11 +1957,11 @@ mod tests {
     fn test_pick_correct_file() {
         for t in default_cases() {
             t.put("a", "va").unwrap();
-            t.compact(Some(b"a"), Some(b"b"));
+            t.compact(Some("a"), Some("b"));
             t.put("x", "vx").unwrap();
-            t.compact(Some(b"x"), Some(b"y"));
+            t.compact(Some("x"), Some("y"));
             t.put("f", "vf").unwrap();
-            t.compact(Some(b"f"), Some(b"g"));
+            t.compact(Some("f"), Some("g"));
             // Each sst file's key range doesn't overlap. So all the sst files are
             // placed at level 2
             t.assert_file_num_at_level(2, 3);
@@ -2773,5 +2778,115 @@ mod tests {
             );
             assert_eq!(None, db.get(ReadOptions::default(), b"f").unwrap());
         }
+    }
+
+    #[test]
+    fn test_manual_compaction() {
+        let mut opts = Options::default();
+        opts.logger_level = crate::LevelFilter::Debug;
+        let t = DBTest::new(opts);
+        t.make_sst_files(3, "p", "q");
+        assert_eq!("1,1,1", t.file_count_per_level());
+
+        // Compaction range falls before files
+        t.compact(Some(""), Some("c"));
+        assert_eq!("1,1,1", t.file_count_per_level());
+
+        // Compaction range falls after files
+        t.compact(Some("r"), Some("z"));
+        assert_eq!("1,1,1", t.file_count_per_level());
+
+        t.compact(Some("p1"), Some("p9"));
+        assert_eq!("0,0,1", t.file_count_per_level());
+
+        // Populate a different range
+        t.make_sst_files(3, "c", "e");
+        assert_eq!("1,1,2", t.file_count_per_level());
+
+        t.compact(Some("b"), Some("f"));
+        assert_eq!("0,0,2", t.file_count_per_level());
+
+        // Compact all
+        t.make_sst_files(1, "a", "z");
+        assert_eq!("0,1,2", t.file_count_per_level());
+        t.compact(None, None);
+        assert_eq!("0,0,1", t.file_count_per_level());
+    }
+
+    #[test]
+    fn test_dbopen_options() {
+        let store = MemStorage::default();
+        let mut opts = Options::<BytewiseComparator>::default();
+        let dbname = "db_options_test";
+        // Does not exist, and create_if_missing == false
+        opts.create_if_missing = false;
+        match WickDB::open_db(opts.clone(), dbname, store.clone()) {
+            Ok(_) => panic!("create_if_missing false should return error"),
+            Err(e) => assert!(e.to_string().contains("does not exist")),
+        }
+
+        // Does not exist, and create_if_missing == true
+        opts.create_if_missing = true;
+        let _ = WickDB::open_db(opts.clone(), dbname, store.clone()).unwrap();
+
+        // Does exist, and error_if_exists == true
+        opts.create_if_missing = false;
+        opts.error_if_exists = true;
+        match WickDB::open_db(opts.clone(), dbname, store.clone()) {
+            Ok(_) => panic!("error_if_exists true should return error"),
+            Err(e) => assert!(e.to_string().contains("exists")),
+        }
+
+        // Does exist, and error_if_exists == true
+        opts.create_if_missing = true;
+        opts.error_if_exists = false;
+        let _ = WickDB::open_db(opts, dbname, store.clone()).unwrap();
+    }
+
+    #[test]
+    fn test_destroy_empty_dir() {
+        let store = MemStorage::default();
+        let opts = Options::<BytewiseComparator>::default();
+        let dbname = "db_empty_dir";
+        let mut db = WickDB::open_db(opts, dbname, store.clone()).unwrap();
+        assert_eq!(4, store.list(dbname).unwrap().len());
+        // clean up dir
+        db.destroy().unwrap();
+        assert!(!store.exists(dbname));
+        assert!(db.destroy().is_err());
+        assert!(db.destroy().is_err());
+    }
+
+    #[test]
+    fn test_db_file_lock() {
+        let store = MemStorage::default();
+        let opts = Options::<BytewiseComparator>::default();
+        let dbname = "db_file_lock";
+        let _ = WickDB::open_db(opts.clone(), dbname, store.clone()).unwrap();
+        match WickDB::open_db(opts, dbname, store.clone()) {
+            Ok(_) => panic!("should return error try to create an opened db"),
+            Err(e) => assert!(e.to_string().contains("Already locked")),
+        }
+    }
+
+    // ***** Fail Injection Tests ***** //
+    #[test]
+    fn test_no_storage_space() {
+        // TODO(fullstop000)
+    }
+
+    #[test]
+    fn test_fs_sync_error() {
+        // TODO(fullstop000)
+    }
+
+    #[test]
+    fn test_fs_non_writable() {
+        // TODO(fullstop000)
+    }
+
+    #[test]
+    fn test_manifest_write_error() {
+        // TODO(fullstop000)
     }
 }
