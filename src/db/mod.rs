@@ -2827,7 +2827,8 @@ mod tests {
 
         // Does not exist, and create_if_missing == true
         opts.create_if_missing = true;
-        let _ = WickDB::open_db(opts.clone(), dbname, store.clone()).unwrap();
+        let mut db = WickDB::open_db(opts.clone(), dbname, store.clone()).unwrap();
+        db.close().unwrap();
 
         // Does exist, and error_if_exists == true
         opts.create_if_missing = false;
