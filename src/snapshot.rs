@@ -22,7 +22,7 @@ const MIN_SNAPSHOT: u64 = 0;
 /// Abstract handle to particular state of a DB.
 /// A `Snapshot` is an immutable object and can therefore be safely
 /// accessed from multiple threads without any external synchronization.
-#[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Copy)]
+#[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Copy, Debug)]
 pub struct Snapshot {
     // The sequence number pointing to the view of db
     sequence_number: u64,
