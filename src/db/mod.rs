@@ -142,7 +142,10 @@ impl<S: Storage + Clone, C: Comparator + 'static> DB for WickDB<S, C> {
     }
 
     fn close(&mut self) -> Result<()> {
-        self.inner.is_shutting_down.store(true, Ordering::Release);
+        if self.inner.is_shutting_down.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        self.inner.is_shutting_down.store(true, Ordering::Relaxed);
         self.inner.schedule_close_batch();
         let _ = self.shutdown_batch_processing_thread.1.recv();
         // Send a signal to avoid blocking forever
@@ -1447,7 +1450,6 @@ mod tests {
             res
         }
 
-        #[allow(dead_code)]
         fn file_count_per_level(&self) -> String {
             let mut res = String::new();
             let versions = self.inner.versions.lock().unwrap();
@@ -1510,7 +1512,11 @@ mod tests {
 
     fn iter_to_string(iter: &dyn Iterator) -> String {
         if iter.valid() {
-            format!("{:?}->{:?}", iter.key(), iter.value())
+            format!(
+                "{}->{}",
+                str::from_utf8(iter.key()).unwrap(),
+                str::from_utf8(iter.value()).unwrap()
+            )
         } else {
             "(invalid)".to_owned()
         }
@@ -1538,7 +1544,6 @@ mod tests {
         .collect()
     }
 
-    #[allow(dead_code)]
     impl DBTest {
         fn new(opt: Options<BytewiseComparator>) -> Self {
             let store = MemStorage::default();
@@ -1683,8 +1688,11 @@ mod tests {
             result
         }
 
-        fn compact(&self, begin: Option<&[u8]>, end: Option<&[u8]>) {
-            self.db.inner.compact_range(begin, end).unwrap()
+        fn compact(&self, begin: Option<&str>, end: Option<&str>) {
+            self.db
+                .inner
+                .compact_range(begin.map(|s| s.as_bytes()), end.map(|s| s.as_bytes()))
+                .unwrap()
         }
 
         // Do `n` memtable compactions, each of which produces an sstable
@@ -1937,7 +1945,7 @@ mod tests {
     fn test_get_ordered_by_levels() {
         for t in default_cases() {
             t.put("foo", "v1").unwrap();
-            t.compact(Some(b"a"), Some(b"z"));
+            t.compact(Some("a"), Some("z"));
             assert_eq!(t.get("foo", None).unwrap(), "v1");
             t.put("foo", "v2").unwrap();
             t.inner.force_compact_mem_table().unwrap();
@@ -1949,11 +1957,11 @@ mod tests {
     fn test_pick_correct_file() {
         for t in default_cases() {
             t.put("a", "va").unwrap();
-            t.compact(Some(b"a"), Some(b"b"));
+            t.compact(Some("a"), Some("b"));
             t.put("x", "vx").unwrap();
-            t.compact(Some(b"x"), Some(b"y"));
+            t.compact(Some("x"), Some("y"));
             t.put("f", "vf").unwrap();
-            t.compact(Some(b"f"), Some(b"g"));
+            t.compact(Some("f"), Some("g"));
             // Each sst file's key range doesn't overlap. So all the sst files are
             // placed at level 2
             t.assert_file_num_at_level(2, 3);
@@ -2579,5 +2587,307 @@ mod tests {
         t.inner.force_compact_mem_table().unwrap();
         t.assert_file_num_at_level(t.opt.max_mem_compact_level, 1);
         t.assert_file_num_at_level(t.opt.max_mem_compact_level - 1, 1);
+    }
+
+    #[test]
+    fn test_deletion_marker1() {
+        let t = DBTest::default();
+        t.put("foo", "v1").unwrap();
+        t.inner.force_compact_mem_table().unwrap();
+        t.put("a", "begin").unwrap();
+        t.put("z", "end").unwrap();
+        t.inner.force_compact_mem_table().unwrap();
+        t.delete("foo").unwrap();
+        t.put("foo", "v2").unwrap();
+        assert_eq!(t.all_entires_for(b"foo"), "[ v2, DEL, v1 ]");
+        t.inner.force_compact_mem_table().unwrap();
+        assert_eq!(t.all_entires_for(b"foo"), "[ v2, DEL, v1 ]");
+        let level = t.opt.max_mem_compact_level; // default is 2
+        t.compact_range_at(level - 2, None, Some(b"z")).unwrap();
+        // DELE eliminated, but v1 remains because we aren't compaction that level
+        assert_eq!(t.all_entires_for(b"foo"), "[ v2, v1 ]");
+        t.compact_range_at(level - 1, None, None).unwrap();
+        // Mergeing last-1 with last, so we are the base level for "foo"
+        assert_eq!(t.all_entires_for(b"foo"), "[ v2 ]");
+    }
+
+    #[test]
+    fn test_deletion_marker2() {
+        let t = DBTest::default();
+        t.put("foo", "v1").unwrap();
+        t.inner.force_compact_mem_table().unwrap();
+        t.put("a", "begin").unwrap();
+        t.put("z", "end").unwrap();
+        t.inner.force_compact_mem_table().unwrap();
+
+        t.delete("foo").unwrap();
+        assert_eq!(t.all_entires_for(b"foo"), "[ DEL, v1 ]");
+        t.inner.force_compact_mem_table().unwrap();
+        assert_eq!(t.all_entires_for(b"foo"), "[ DEL, v1 ]");
+        let level = t.opt.max_mem_compact_level; // default is 2
+        t.compact_range_at(level - 2, None, None).unwrap();
+        assert_eq!(t.all_entires_for(b"foo"), "[ DEL, v1 ]");
+        t.compact_range_at(level - 1, None, None).unwrap();
+        assert_eq!(t.all_entires_for(b"foo"), "[ ]");
+    }
+
+    #[test]
+    fn test_overlap_in_level0() {
+        for t in default_cases() {
+            // Fill levels 1 and 2 to disable the pushing or new memtables to levels > 0
+            t.put("100", "v100").unwrap();
+            t.put("999", "v999").unwrap();
+            t.inner.force_compact_mem_table().unwrap();
+            t.delete("100").unwrap();
+            t.delete("999").unwrap();
+            t.inner.force_compact_mem_table().unwrap();
+            assert_eq!("0,1,1", t.file_count_per_level());
+
+            // Make files spanning the following ranges in level-0:
+            //  files[0]  200 .. 900
+            //  files[1]  300 .. 500
+            // Note that filtes are sorted by smallest key
+            t.put("300", "v300").unwrap();
+            t.put("500", "v500").unwrap();
+            t.inner.force_compact_mem_table().unwrap();
+            t.put("200", "v200").unwrap();
+            t.put("600", "v600").unwrap();
+            t.put("900", "v000").unwrap();
+            t.inner.force_compact_mem_table().unwrap();
+            assert_eq!("2,1,1", t.file_count_per_level());
+
+            // Compact away the placeholder files we created initially
+            t.compact_range_at(1, None, None).unwrap();
+            t.compact_range_at(2, None, None).unwrap();
+            assert_eq!("2", t.file_count_per_level());
+
+            // Do a memtable compaction
+            t.delete("600").unwrap();
+            t.inner.force_compact_mem_table().unwrap();
+            assert_eq!("3", t.file_count_per_level());
+            t.assert_get("600", None);
+        }
+    }
+
+    #[test]
+    fn test_l0_compaction_when_reopen() {
+        let mut t = DBTest::default();
+        assert_eq!("", t.assert_contents());
+        t.put("b", "v").unwrap();
+        t.reopen().unwrap();
+        t.delete("b").unwrap();
+        t.delete("a").unwrap();
+        t.reopen().unwrap();
+        t.delete("a").unwrap();
+        t.reopen().unwrap();
+        t.put("a", "v").unwrap();
+        t.reopen().unwrap();
+        t.reopen().unwrap();
+        assert_eq!("(a->v)", t.assert_contents());
+        t.delete("a").unwrap();
+        t.put("", "").unwrap();
+        t.delete("e").unwrap();
+        t.reopen().unwrap();
+        t.put("c", "cv").unwrap();
+        t.reopen().unwrap();
+        t.put("", "").unwrap();
+        t.reopen().unwrap();
+        t.put("", "").unwrap();
+        t.reopen().unwrap();
+        t.put("d", "dv").unwrap();
+        t.reopen().unwrap();
+        t.delete("d").unwrap();
+        t.delete("b").unwrap();
+        t.reopen().unwrap();
+        assert_eq!("(->)(c->cv)", t.assert_contents());
+    }
+
+    #[test]
+    fn test_comparator_check() {
+        use std::cmp::Ordering;
+        #[derive(Clone, Default)]
+        struct NewComparator(BytewiseComparator);
+        impl Comparator for NewComparator {
+            fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
+                self.0.compare(a, b)
+            }
+            fn name(&self) -> &str {
+                return "wickdb.NewComparator";
+            }
+            fn separator(&self, a: &[u8], b: &[u8]) -> Vec<u8> {
+                self.0.separator(a, b)
+            }
+            fn successor(&self, key: &[u8]) -> Vec<u8> {
+                self.0.successor(key)
+            }
+        }
+        let mut opts = Options::default();
+        opts.comparator = NewComparator(BytewiseComparator {});
+        let storage = MemStorage::default();
+        let mut db = WickDB::open_db(opts, "test", storage.clone()).unwrap();
+        db.close().unwrap();
+        let opts = Options::<BytewiseComparator>::default();
+        let res = WickDB::open_db(opts, "test", storage.clone());
+        match res {
+            Ok(_) => panic!("should panic"),
+            Err(e) => assert!(e.to_string().contains("does not match existing compactor")),
+        };
+    }
+
+    #[test]
+    fn test_custom_comparator() {
+        use std::cmp::Ordering;
+        use std::str;
+        use std::usize;
+        #[derive(Clone, Default)]
+        struct NumberComparator {};
+        fn to_number(n: &[u8]) -> usize {
+            usize::from_str_radix(str::from_utf8(n).unwrap(), 16).unwrap()
+        }
+        impl Comparator for NumberComparator {
+            fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
+                to_number(a).cmp(&to_number(b))
+            }
+            fn name(&self) -> &str {
+                return "test.NumberComparator";
+            }
+            fn separator(&self, _a: &[u8], b: &[u8]) -> Vec<u8> {
+                b.to_vec()
+            }
+            fn successor(&self, key: &[u8]) -> Vec<u8> {
+                key.to_vec()
+            }
+        }
+        let mut opts = Options::default();
+        opts.comparator = NumberComparator {};
+        opts.create_if_missing = true;
+        opts.filter_policy = None;
+        opts.write_buffer_size = 1000;
+        let store = MemStorage::default();
+        let db = WickDB::open_db(opts, "test", store).unwrap();
+        db.put(WriteOptions::default(), b"a", b"ten").unwrap();
+        db.put(WriteOptions::default(), b"14", b"twenty").unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                Some("ten".as_bytes().to_vec()),
+                db.get(ReadOptions::default(), b"a").unwrap()
+            );
+            assert_eq!(
+                Some("twenty".as_bytes().to_vec()),
+                db.get(ReadOptions::default(), b"14").unwrap()
+            );
+            assert_eq!(None, db.get(ReadOptions::default(), b"f").unwrap());
+        }
+    }
+
+    #[test]
+    fn test_manual_compaction() {
+        let mut opts = Options::default();
+        opts.logger_level = crate::LevelFilter::Debug;
+        let t = DBTest::new(opts);
+        t.make_sst_files(3, "p", "q");
+        assert_eq!("1,1,1", t.file_count_per_level());
+
+        // Compaction range falls before files
+        t.compact(Some(""), Some("c"));
+        assert_eq!("1,1,1", t.file_count_per_level());
+
+        // Compaction range falls after files
+        t.compact(Some("r"), Some("z"));
+        assert_eq!("1,1,1", t.file_count_per_level());
+
+        t.compact(Some("p1"), Some("p9"));
+        assert_eq!("0,0,1", t.file_count_per_level());
+
+        // Populate a different range
+        t.make_sst_files(3, "c", "e");
+        assert_eq!("1,1,2", t.file_count_per_level());
+
+        t.compact(Some("b"), Some("f"));
+        assert_eq!("0,0,2", t.file_count_per_level());
+
+        // Compact all
+        t.make_sst_files(1, "a", "z");
+        assert_eq!("0,1,2", t.file_count_per_level());
+        t.compact(None, None);
+        assert_eq!("0,0,1", t.file_count_per_level());
+    }
+
+    #[test]
+    fn test_dbopen_options() {
+        let store = MemStorage::default();
+        let mut opts = Options::<BytewiseComparator>::default();
+        let dbname = "db_options_test";
+        // Does not exist, and create_if_missing == false
+        opts.create_if_missing = false;
+        match WickDB::open_db(opts.clone(), dbname, store.clone()) {
+            Ok(_) => panic!("create_if_missing false should return error"),
+            Err(e) => assert!(e.to_string().contains("does not exist")),
+        }
+
+        // Does not exist, and create_if_missing == true
+        opts.create_if_missing = true;
+        let mut db = WickDB::open_db(opts.clone(), dbname, store.clone()).unwrap();
+        db.close().unwrap();
+
+        // Does exist, and error_if_exists == true
+        opts.create_if_missing = false;
+        opts.error_if_exists = true;
+        match WickDB::open_db(opts.clone(), dbname, store.clone()) {
+            Ok(_) => panic!("error_if_exists true should return error"),
+            Err(e) => assert!(e.to_string().contains("exists")),
+        }
+
+        // Does exist, and error_if_exists == true
+        opts.create_if_missing = true;
+        opts.error_if_exists = false;
+        let _ = WickDB::open_db(opts, dbname, store.clone()).unwrap();
+    }
+
+    #[test]
+    fn test_destroy_empty_dir() {
+        let store = MemStorage::default();
+        let opts = Options::<BytewiseComparator>::default();
+        let dbname = "db_empty_dir";
+        let mut db = WickDB::open_db(opts, dbname, store.clone()).unwrap();
+        assert_eq!(4, store.list(dbname).unwrap().len());
+        // clean up dir
+        db.destroy().unwrap();
+        assert!(!store.exists(dbname));
+        assert!(db.destroy().is_err());
+        assert!(db.destroy().is_err());
+    }
+
+    #[test]
+    fn test_db_file_lock() {
+        let store = MemStorage::default();
+        let opts = Options::<BytewiseComparator>::default();
+        let dbname = "db_file_lock";
+        let _ = WickDB::open_db(opts.clone(), dbname, store.clone()).unwrap();
+        match WickDB::open_db(opts, dbname, store.clone()) {
+            Ok(_) => panic!("should return error try to create an opened db"),
+            Err(e) => assert!(e.to_string().contains("Already locked")),
+        }
+    }
+
+    // ***** Fail Injection Tests ***** //
+    #[test]
+    fn test_no_storage_space() {
+        // TODO(fullstop000)
+    }
+
+    #[test]
+    fn test_fs_sync_error() {
+        // TODO(fullstop000)
+    }
+
+    #[test]
+    fn test_fs_non_writable() {
+        // TODO(fullstop000)
+    }
+
+    #[test]
+    fn test_manifest_write_error() {
+        // TODO(fullstop000)
     }
 }

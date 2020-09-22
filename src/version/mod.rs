@@ -489,11 +489,13 @@ impl<C: Comparator + 'static> Version<C> {
                     && cmp.compare(file_end, user_begin.unwrap()) == CmpOrdering::Less
                 {
                     // 'file' is completely before the specified range; skip it
+                    continue;
                 }
                 if user_end.is_some()
                     && cmp.compare(file_begin, user_end.unwrap()) == CmpOrdering::Greater
                 {
                     // 'file' is completely after the specified range; skip it
+                    continue;
                 }
                 result.push(file.clone());
                 if level == 0 {

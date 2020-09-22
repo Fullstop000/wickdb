@@ -14,6 +14,7 @@
 use crate::storage::{File, Storage};
 use crate::util::collection::HashMap;
 use crate::{Error, Result};
+use std::collections::hash_map::Entry;
 use std::io::{Cursor, Error as IOError, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf, MAIN_SEPARATOR};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -37,7 +38,6 @@ use std::time::Duration;
 ///
 #[derive(Clone)]
 pub struct MemStorage {
-    // TODO: Maybe we can improve this by a trie tree?
     inner: Arc<RwLock<HashMap<String, Node>>>,
 
     // ---- Parameters for fault injection
@@ -160,10 +160,18 @@ impl Storage for MemStorage {
         file_node.no_space = self.no_space.clone();
         file_node.manifest_sync_error = self.manifest_sync_error.clone();
         file_node.manifest_write_error = self.manifest_write_error.clone();
-        self.inner
-            .write()
-            .unwrap()
-            .insert(name, Node::File(file_node.clone()));
+        match self.inner.write().unwrap().entry(name) {
+            Entry::Occupied(n) => match n.get() {
+                Node::File(f) => return Ok(f.clone()),
+                Node::Dir => {
+                    return Err(Error::IO(IOError::new(
+                        ErrorKind::Other,
+                        format!("{} is a directory", n.key()),
+                    )))
+                }
+            },
+            Entry::Vacant(v) => v.insert(Node::File(file_node.clone())),
+        };
         Ok(file_node)
     }
 
@@ -634,15 +642,13 @@ mod tests {
     #[test]
     fn test_mem_file_lock_unlock() {
         let f = InmemFile::default();
-        assert!(f.lock().is_ok());
-        assert!(f.unlock().is_ok());
-        f.lock().expect("");
+        f.lock().unwrap();
+        f.unlock().unwrap();
+        f.lock().unwrap();
         assert_eq!(
             f.lock().unwrap_err().to_string(),
             "I/O operation error: Already locked"
         );
-        f.unlock().expect("");
-        assert!(f.unlock().is_ok());
     }
 
     #[test]
