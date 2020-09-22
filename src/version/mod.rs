@@ -30,6 +30,7 @@ use crate::version::version_set::total_file_size;
 use crate::{Error, Result};
 use std::cell::RefCell;
 use std::cmp::Ordering as CmpOrdering;
+use std::fmt;
 use std::mem;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -38,6 +39,22 @@ use std::sync::{Arc, RwLock};
 pub mod version_edit;
 pub mod version_set;
 
+/// A helper for representing the file has been seeked
+pub struct SeekStats {
+    // the file has been seeked
+    pub seek_file: Option<Arc<FileMetaData>>,
+    // the level the 'seek_file' is at
+    pub seek_file_level: Option<usize>,
+}
+impl SeekStats {
+    #[inline]
+    pub fn new() -> Self {
+        Self {
+            seek_file: None,
+            seek_file_level: None,
+        }
+    }
+}
 /// `Version` is a collection of file metadata for on-disk tables at various
 /// levels. In-memory DBs are written to level-0 tables, and compactions
 /// migrate data from level N to level N+1. The tables map internal keys (which
@@ -59,6 +76,7 @@ pub mod version_set;
 /// key in a higher level table that has both the same user key and a higher
 /// sequence number.
 pub struct Version<C: Comparator> {
+    vnum: usize, // For debug
     options: Arc<Options<C>>,
     icmp: InternalKeyComparator<C>,
     // files per level in this version
@@ -78,20 +96,17 @@ pub struct Version<C: Comparator> {
     compaction_level: usize,
 }
 
-/// A helper for representing the file has been seeked
-pub struct SeekStats {
-    // the file has been seeked
-    pub seek_file: Option<Arc<FileMetaData>>,
-    // the level the 'seek_file' is at
-    pub seek_file_level: Option<usize>,
-}
-impl SeekStats {
-    #[inline]
-    pub fn new() -> Self {
-        Self {
-            seek_file: None,
-            seek_file_level: None,
+impl<C: Comparator> fmt::Debug for Version<C> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "vnum: {} \n", &self.vnum)?;
+        for (level, files) in self.files.iter().enumerate() {
+            write!(f, "level {}: [ ", level)?;
+            for file in files {
+                write!(f, "{}, ", file.number)?;
+            }
+            write!(f, " ]\n")?;
         }
+        Ok(())
     }
 }
 
@@ -103,6 +118,7 @@ impl<C: Comparator + 'static> Version<C> {
             files.push(Vec::new());
         }
         Self {
+            vnum: 0,
             options,
             icmp,
             files,

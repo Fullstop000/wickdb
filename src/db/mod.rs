@@ -596,15 +596,23 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         // produced by an older version of leveldb.
         let min_log = versions.log_number();
         let prev_log = versions.prev_log_number();
+        let mut expected_files = versions.live_files();
         let all_files = self.env.list(self.db_name)?;
         let mut logs_to_recover = vec![];
         for filename in all_files {
             if let Some((file_type, file_number)) = parse_filename(filename) {
+                expected_files.remove(&file_number);
                 if file_type == FileType::Log && (file_number >= min_log || file_number == prev_log)
                 {
                     logs_to_recover.push(file_number);
                 }
             }
+        }
+        if !expected_files.is_empty() && self.options.paranoid_checks {
+            return Err(Error::Corruption(format!(
+                "missing files {:?}",
+                expected_files
+            )));
         }
 
         // Recover in the order in which the logs were generated
@@ -741,7 +749,9 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
     // Delete any unneeded files and stale in-memory entries.
     // This func could delete generated compaction files when the compaction is failed due some reasons (e.g. block entry currupted)
     fn delete_obsolete_files(&self, mut versions: MutexGuard<VersionSet<S, C>>) -> Result<()> {
+        warn!("before lock: {:?}", &versions.pending_outputs);
         versions.lock_live_files();
+        warn!("after lock: {:?}", &versions.pending_outputs);
         // ignore IO error on purpose
         let files = self.env.list(self.db_name)?;
         for file in files.iter() {
@@ -772,6 +782,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                 }
             }
         }
+        versions.pending_outputs.clear();
         Ok(())
     }
 
@@ -1432,7 +1443,7 @@ mod tests {
     use crate::{BloomFilter, BytewiseComparator, CompressionType, Options};
     use rand::distributions::Alphanumeric;
     use rand::{thread_rng, Rng};
-    use std::ops::Deref;
+    use std::ops::{Deref, DerefMut};
     use std::rc::Rc;
     use std::str;
 
@@ -1502,14 +1513,6 @@ mod tests {
         opt
     }
 
-    struct DBTest {
-        // Used as the db's inner storage
-        store: MemStorage,
-        // Used as the db's options
-        opt: Options<BytewiseComparator>,
-        db: WickDB<MemStorage, BytewiseComparator>,
-    }
-
     fn iter_to_string(iter: &dyn Iterator) -> String {
         if iter.valid() {
             format!(
@@ -1542,6 +1545,14 @@ mod tests {
             DBTest::new(options)
         })
         .collect()
+    }
+
+    struct DBTest {
+        // Used as the db's inner storage
+        store: MemStorage,
+        // Used as the db's options
+        opt: Options<BytewiseComparator>,
+        db: WickDB<MemStorage, BytewiseComparator>,
     }
 
     impl DBTest {
@@ -1756,6 +1767,21 @@ mod tests {
                 s
             );
         }
+
+        // Delete a sst file randomly
+        fn delete_one_sst_file(&self) -> Result<bool> {
+            let dbname = self.inner.db_name;
+            let files = self.store.list(dbname)?;
+            for f in files {
+                if let Some((tp, _)) = parse_filename(&f) {
+                    if tp == FileType::Table {
+                        self.store.remove(&f)?;
+                        return Ok(true);
+                    }
+                }
+            }
+            Ok(false)
+        }
     }
 
     impl Default for DBTest {
@@ -1772,6 +1798,12 @@ mod tests {
         type Target = WickDB<MemStorage, BytewiseComparator>;
         fn deref(&self) -> &Self::Target {
             &self.db
+        }
+    }
+
+    impl DerefMut for DBTest {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.db
         }
     }
 
@@ -2544,6 +2576,14 @@ mod tests {
                 t.get("foo", Some(s3.sequence().into()))
             );
             assert_eq!(Some("v4".to_owned()), t.get("foo", None));
+            let mut versions = t.inner.versions.lock().unwrap();
+            versions.snapshots.gc();
+            assert!(!versions.snapshots.is_empty());
+            mem::drop(s1);
+            mem::drop(s2);
+            mem::drop(s3);
+            versions.snapshots.gc();
+            assert!(versions.snapshots.is_empty());
         }
     }
 
@@ -2870,7 +2910,7 @@ mod tests {
         }
     }
 
-    // ***** Fail Injection Tests ***** //
+    // ***** Fail Injection Tests Start ***** //
     #[test]
     fn test_no_storage_space() {
         // TODO(fullstop000)
@@ -2889,5 +2929,37 @@ mod tests {
     #[test]
     fn test_manifest_write_error() {
         // TODO(fullstop000)
+    }
+    // ***** Fail Injection Tests End ***** //
+
+    #[test]
+    fn test_missing_sstfile() {
+        let mut t = DBTest::default();
+        t.put("foo", "bar").unwrap();
+        t.inner.force_compact_mem_table().unwrap();
+        t.assert_get("foo", Some("bar"));
+        t.close().unwrap();
+        assert!(t.delete_one_sst_file().unwrap());
+        t.opt.paranoid_checks = true;
+        match t.reopen() {
+            Ok(_) => panic!("Should report missing files"),
+            Err(e) => assert!(e.to_string().contains("missing files")),
+        }
+    }
+
+    #[test]
+    fn test_file_deleted_after_compaction() {
+        let t = DBTest::default();
+        t.put("foo", "v2").unwrap();
+        t.compact(Some("a"), Some("z"));
+        let file_counts = dbg!(t.store.list(t.inner.db_name).unwrap()).len();
+        for _ in 0..10 {
+            t.put("foo", "v2").unwrap();
+            t.compact(Some("a"), Some("z"))
+        }
+        assert_eq!(
+            dbg!(t.store.list(t.inner.db_name).unwrap()).len(),
+            file_counts
+        );
     }
 }

@@ -37,7 +37,6 @@ use crate::version::{LevelFileNumIterator, Version, FILE_META_LENGTH};
 use crate::ReadOptions;
 use crate::{Error, Result};
 use std::cmp::Ordering as CmpOrdering;
-use std::collections::vec_deque::VecDeque;
 use std::ops::Add;
 use std::path::MAIN_SEPARATOR;
 use std::sync::atomic::Ordering;
@@ -118,6 +117,7 @@ impl<'a, C: Comparator + 'static> VersionBuilder<'a, C> {
     // same as `SaveTo` in C++ implementation
     fn apply_to_new(self, icmp: &InternalKeyComparator<C>) -> Version<C> {
         let mut v = Version::new(self.base.options.clone(), icmp.clone());
+        v.vnum = self.base.vnum + 1;
         for (level, (base_files, delta)) in self
             .base
             .files
@@ -199,7 +199,7 @@ pub struct VersionSet<S: Storage + Clone, C: Comparator> {
     manifest_file_number: u64,
     manifest_writer: Option<Writer<S::F>>,
 
-    versions: VecDeque<Arc<Version<C>>>,
+    versions: Vec<Arc<Version<C>>>,
 
     // Indicates that every level's compaction progress of last compaction.
     compaction_pointer: Vec<InternalKey>,
@@ -217,8 +217,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
         let icmp = InternalKeyComparator::new(options.comparator.clone());
         // Create an empty version as the first
         let first_v = Arc::new(Version::new(options.clone(), icmp.clone()));
-        let mut versions = VecDeque::new();
-        versions.push_front(first_v);
+        let versions = vec![first_v];
         Self {
             snapshots: SnapshotList::default(),
             pending_outputs: HashSet::default(),
@@ -241,7 +240,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
     #[inline]
     pub fn level_files_count(&self, level: usize) -> usize {
         assert!(level < self.options.max_levels as usize);
-        let level_files = &self.versions.front().unwrap().files;
+        let level_files = &self.versions.last().unwrap().files;
         level_files.get(level).map_or(0, |files| files.len())
     }
 
@@ -304,9 +303,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
     /// Get the current newest version.
     #[inline]
     pub fn current(&self) -> Arc<Version<C>> {
-        // In `VersionSet::new()`, we always create a empty version as the first one so
-        // that the `unwrap()` here is safe
-        self.versions.front().unwrap().clone()
+        self.versions.last().unwrap().clone()
     }
 
     /// Create new snapshot with `last_sequence`
@@ -362,50 +359,51 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
     ///     * After trivial compaction (only file move)
     ///     * After major compaction
     pub fn log_and_apply(&mut self, edit: &mut VersionEdit) -> Result<()> {
-        let level_summary_before = self.current().level_summary();
-        if let Some(target_log) = edit.log_number {
-            assert!(target_log >= self.log_number && target_log < self.next_file_number,
+        let (v, encoded_edit) = {
+            let level_summary_before = self.current().level_summary();
+            if let Some(target_log) = edit.log_number {
+                assert!(target_log >= self.log_number && target_log < self.next_file_number,
                     "[version set] applying VersionEdit use a invalid log number {}, expect to be at [{}, {})", target_log, self.log_number, self.next_file_number);
-        } else {
-            edit.set_log_number(self.log_number);
-        }
+            } else {
+                edit.set_log_number(self.log_number);
+            }
 
-        if edit.prev_log_number.is_none() {
-            edit.set_prev_log_number(self.prev_log_number);
-        }
+            if edit.prev_log_number.is_none() {
+                edit.set_prev_log_number(self.prev_log_number);
+            }
 
-        edit.set_next_file(self.next_file_number);
-        edit.set_last_sequence(self.last_sequence);
+            edit.set_next_file(self.next_file_number);
+            edit.set_last_sequence(self.last_sequence);
 
-        let mut record = vec![];
-        edit.encode_to(&mut record);
+            let mut record = vec![];
+            edit.encode_to(&mut record);
 
-        let this = self.current();
-        let mut builder = VersionBuilder::new(self.options.max_levels as usize, this.as_ref());
-        let file_delta = edit.take_file_delta();
-        builder.accumulate(file_delta, self);
-        let mut v = builder.apply_to_new(&self.icmp);
-        v.finalize();
-        let summary = v.level_summary();
-        info!(
-            "Compaction result summary : \n\t before {} \n\t now {}",
-            level_summary_before, summary
-        );
-        // cleanup all the old versions
-        self.gc();
+            let this = self.current();
+            let mut builder = VersionBuilder::new(self.options.max_levels as usize, &this);
+            let file_delta = edit.take_file_delta();
+            builder.accumulate(file_delta, self);
+            let mut v = builder.apply_to_new(&self.icmp);
+            v.finalize();
+            let summary = v.level_summary();
+            info!(
+                "Compaction result summary : \n\t before {} \n\t now {}",
+                level_summary_before, summary
+            );
+            (v, record)
+        };
 
         // Initialize new manifest file if necessary by creating a temporary file that contains a snapshot of the current version.
         let mut new_manifest_file = String::new();
         if self.manifest_writer.is_none() {
             new_manifest_file =
                 generate_filename(self.db_name, FileType::Manifest, self.manifest_file_number);
-            let f = self.storage.create(new_manifest_file.as_str())?;
+            let f = self.storage.create(&new_manifest_file)?;
             debug!("Create new manifest file #{}", self.manifest_file_number);
             let mut writer = Writer::new(f);
             match self.write_snapshot(&mut writer) {
                 Ok(()) => self.manifest_writer = Some(writer),
                 Err(_) => {
-                    return self.storage.remove(new_manifest_file.as_str());
+                    return self.storage.remove(&new_manifest_file);
                 }
             }
         }
@@ -414,7 +412,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
         // In origin C++ implementation, the relative part unlocks the global mutex. But we dont need
         // to do this in wickdb since we split the mutex into several ones for more subtle controlling.
         if let Some(writer) = self.manifest_writer.as_mut() {
-            match writer.add_record(&record) {
+            match writer.add_record(&encoded_edit) {
                 Ok(()) => {
                     debug!("Append new VersionEdit: {:?}", &edit);
                     match writer.sync() {
@@ -433,9 +431,9 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
                                 return self.storage.remove(new_manifest_file.as_str());
                             }
                             // install new version
-                            self.versions.push_front(Arc::new(v));
                             self.log_number = edit.log_number.unwrap();
                             self.prev_log_number = edit.prev_log_number.unwrap();
+                            self.append_new_version(v);
                         }
                         // omit the sync error
                         Err(e) => {
@@ -452,6 +450,12 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
             }
         }
         Ok(())
+    }
+
+    #[inline]
+    fn append_new_version(&mut self, v: Version<C>) {
+        self.versions.push(Arc::new(v));
+        self.gc();
     }
 
     /// Return a `Compaction` for compacting the range `[begin,end]` in
@@ -640,8 +644,25 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
         }
     }
 
+    /// Returns the collection of current live files from version metadata
+    #[inline]
+    pub(crate) fn live_files(&self) -> HashSet<u64> {
+        let mut set = HashSet::default();
+        for version in self.versions.iter() {
+            for files in version.files.iter() {
+                for f in files.iter() {
+                    set.insert(f.number);
+                }
+            }
+        }
+        set
+    }
+
     /// Create new table builder and physical file for current output in Compaction
-    pub fn create_compaction_output_file(&mut self, c: &mut Compaction<S::F, C>) -> Result<()> {
+    pub(crate) fn create_compaction_output_file(
+        &mut self,
+        c: &mut Compaction<S::F, C>,
+    ) -> Result<()> {
         assert!(c.builder.is_none());
         let file_number = self.inc_next_file_number();
         self.pending_outputs.insert(file_number);
@@ -757,7 +778,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
 
         let mut new_v = builder.apply_to_new(&self.icmp);
         new_v.finalize();
-        self.versions.push_front(Arc::new(new_v));
+        self.versions.push(Arc::new(new_v));
         self.manifest_file_number = next_file_number;
         self.next_file_number = next_file_number + 1;
         self.last_sequence = last_sequence;
@@ -793,8 +814,15 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
     }
 
     // Remove all the old versions
+    // NOTE: This func always keeps the last element in `versions`
     fn gc(&mut self) {
-        self.versions.retain(|v| Arc::strong_count(v) > 1)
+        let mut i = 0;
+        let last = self.versions.len() - 1;
+        self.versions.retain(|v| {
+            let keep = i == last || Arc::strong_count(v) > 1;
+            i += 1;
+            keep
+        })
     }
 
     // Create snapshot of current version and persistent to manifest file.
@@ -1027,7 +1055,6 @@ fn find_smallest_boundary_file<C: Comparator>(
     smallest_boundary_file.cloned()
 }
 
-///
 pub struct FileIterFactory<S: Storage + Clone, C: Comparator> {
     options: ReadOptions,
     table_cache: TableCache<S, C>,

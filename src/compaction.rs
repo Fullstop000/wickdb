@@ -123,11 +123,6 @@ pub struct Compaction<F: File, C: Comparator> {
 
 impl<O: File, C: Comparator + 'static> Compaction<O, C> {
     pub fn new(options: Arc<Options<C>>, level: usize) -> Self {
-        let max_levels = options.max_levels as usize;
-        let mut level_ptrs = Vec::with_capacity(max_levels);
-        for _ in 0..max_levels {
-            level_ptrs.push(0)
-        }
         Self {
             options: options.clone(),
             level,
