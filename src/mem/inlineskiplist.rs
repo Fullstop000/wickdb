@@ -3,7 +3,7 @@ use crate::Comparator;
 use rand::random;
 use std::mem;
 use std::ptr;
-use std::ptr::NonNull;
+use std::ptr::{null_mut, NonNull};
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 const MAX_HEIGHT: usize = 20;
@@ -50,6 +50,21 @@ impl Node {
     }
 
     #[inline]
+    // height, 0-based index
+    unsafe fn set_next(&self, height: usize, node: Option<NonNull<Node>>) {
+        match node {
+            Some(node) => self
+                .next_nodes
+                .get_unchecked(height)
+                .store(node.as_ptr(), Ordering::Release),
+            None => self
+                .next_nodes
+                .get_unchecked(height)
+                .store(null_mut(), Ordering::Release),
+        }
+    }
+
+    #[inline]
     fn key(&self) -> &[u8] {
         self.key.as_slice()
     }
@@ -83,16 +98,20 @@ where
 
     pub fn insert(&self, key: &[u8]) {
         let height = self.get_height();
-        let mut prev: Vec<Option<NonNull<Node>>> = vec![None; MAX_HEIGHT + 1];
-        let mut next: Vec<Option<NonNull<Node>>> = vec![None; MAX_HEIGHT + 1];
-        prev[height] = self.head;
+        let mut prevs: Vec<Option<NonNull<Node>>> = vec![None; MAX_HEIGHT + 1];
+        let mut nexts: Vec<Option<NonNull<Node>>> = vec![None; MAX_HEIGHT + 1];
+        prevs[height] = self.head;
         for i in (0..height).rev() {
             // Use higher level to speed up for current level.
-            let (prev, next) = self.find_splice_for_level(key, prev[i + 1], i);
+            let (prev, next) = self.find_splice_for_level(key, prevs[i + 1], i);
             if prev.is_some() && next.is_some() && prev.unwrap() == next.unwrap() {
                 // key is duplicated, do nothing.
                 return;
             }
+            prevs[i] = prev;
+            nexts[i] = next;
+            // prevs[i] = Some(prev.unwrap());
+            // nexts[i] = Some(next.unwrap());
         }
         let height = random_height();
         let x = Node::new(key, height, &self.arena);
@@ -109,6 +128,33 @@ where
 
         // We always insert from the base level and up. After you add a node in base level, we cannot
         // create a node in the level above because it would have discovered the node in the base level.
+        for i in 0..height {
+            loop {
+                if prevs[i].is_none() {
+                    assert!(i > 1);
+                }
+                unsafe {
+                    (*x).set_next(i, nexts[i]);
+                    let old = (*prevs[i].unwrap().as_ptr()).next_nodes[i].compare_and_swap(
+                        nexts[i].unwrap().as_ptr(),
+                        x as *mut Node,
+                        Ordering::Relaxed,
+                    );
+                    if old == x {
+                        break;
+                    }
+                }
+                // CAS Failed.
+                let (prev, next) = self.find_splice_for_level(key, prevs[i], i);
+                if prev.is_some()
+                    && next.is_some()
+                    && prev.unwrap().as_ptr() == next.unwrap().as_ptr()
+                {
+                    assert_eq!(i, 0);
+                    return;
+                }
+            }
+        }
     }
 
     fn find_splice_for_level(
@@ -146,6 +192,9 @@ where
         self.height.load(Ordering::Relaxed)
     }
 }
+
+// TODO(accelsao): Iterator
+struct Iterator {}
 
 fn random_height() -> usize {
     let mut height = 1;
