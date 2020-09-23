@@ -80,9 +80,17 @@ impl CompactionInputs {
     }
 }
 
+#[derive(Debug)]
+pub enum CompactionReason {
+    MaxSize,
+    SeekLimit,
+    Manual,
+}
+
 /// A Compaction encapsulates information about a compaction
 pub struct Compaction<F: File, C: Comparator> {
     options: Arc<Options<C>>,
+    pub reason: CompactionReason,
     // Target level to be compacted
     pub level: usize,
     pub input_version: Option<Arc<Version<C>>>,
@@ -122,12 +130,14 @@ pub struct Compaction<F: File, C: Comparator> {
 }
 
 impl<O: File, C: Comparator + 'static> Compaction<O, C> {
-    pub fn new(options: Arc<Options<C>>, level: usize) -> Self {
+    pub fn new(options: Arc<Options<C>>, level: usize, reason: CompactionReason) -> Self {
+        let max_levels = options.max_levels;
         Self {
-            options: options.clone(),
+            reason,
+            options,
             level,
             input_version: None,
-            edit: VersionEdit::new(options.max_levels),
+            edit: VersionEdit::new(max_levels),
             inputs: CompactionInputs::default(),
             grand_parents: vec![],
             grand_parent_index: 0,

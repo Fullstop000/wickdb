@@ -24,7 +24,6 @@ use crate::version::version_edit::Tag::{
 };
 use crate::{Error, Result};
 use std::fmt::{Debug, Formatter};
-use std::mem;
 use std::sync::atomic::AtomicUsize;
 
 // Tags for the VersionEdit disk format.
@@ -158,11 +157,6 @@ impl VersionEdit {
         self.file_delta.deleted_files.clear();
         self.file_delta.new_files.clear();
         // NOTICE: compaction pointers are not cleared here
-    }
-
-    #[inline]
-    pub fn take_file_delta(&mut self) -> FileDelta {
-        mem::take(&mut self.file_delta)
     }
 
     /// Add the specified file at the specified number

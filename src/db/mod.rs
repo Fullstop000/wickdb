@@ -187,7 +187,7 @@ impl<S: Storage + Clone, C: Comparator + 'static> WickDB<S, C> {
         if should_save_manifest {
             edit.set_prev_log_number(0);
             edit.set_log_number(versions.log_number());
-            versions.log_and_apply(&mut edit)?;
+            versions.log_and_apply(edit)?;
         }
 
         let current = versions.current();
@@ -261,7 +261,6 @@ impl<S: Storage + Clone, C: Comparator + 'static> WickDB<S, C> {
                     break;
                 }
                 let force = first.force_mem_compaction;
-                // TODO: The VersionSet is locked when processing `make_room_for_write`
                 match db.make_room_for_write(force) {
                     Ok(mut versions) => {
                         let (mut grouped, signals) = db.group_batches(first);
@@ -517,7 +516,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         let current = self.versions.lock().unwrap().current();
         let (value, seek_stats) = current.get(options, lookup_key, &self.table_cache)?;
         if current.update_stats(seek_stats) {
-            self.maybe_schedule_compaction(current)
+            self.maybe_schedule_compaction(current);
         }
         Ok(value)
     }
@@ -527,7 +526,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
     fn record_read_sample(&self, internal_key: &[u8]) {
         let current = self.versions.lock().unwrap().current();
         if current.record_read_sample(internal_key) {
-            self.maybe_schedule_compaction(current)
+            self.maybe_schedule_compaction(current);
         }
     }
 
@@ -749,9 +748,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
     // Delete any unneeded files and stale in-memory entries.
     // This func could delete generated compaction files when the compaction is failed due some reasons (e.g. block entry currupted)
     fn delete_obsolete_files(&self, mut versions: MutexGuard<VersionSet<S, C>>) -> Result<()> {
-        warn!("before lock: {:?}", &versions.pending_outputs);
         versions.lock_live_files();
-        warn!("after lock: {:?}", &versions.pending_outputs);
         // ignore IO error on purpose
         let files = self.env.list(self.db_name)?;
         for file in files.iter() {
@@ -937,7 +934,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         } else {
             edit.prev_log_number = Some(0);
             edit.log_number = Some(versions.log_number()); // earlier logs no longer needed
-            let res = versions.log_and_apply(&mut edit);
+            let res = versions.log_and_apply(edit);
             *im_mem = None;
             self.delete_obsolete_files(versions)?;
             res
@@ -1061,6 +1058,15 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                 }
             };
             if let Some(mut compaction) = compaction {
+                let level = compaction.level;
+                info!(
+                    "[{:?}] Compacting [{}]@{} + [{}]@{} files",
+                    compaction.reason,
+                    compaction.inputs.desc_base_files(),
+                    level,
+                    compaction.inputs.desc_parent_files(),
+                    level + 1
+                );
                 if !is_manual && compaction.is_trivial_move() {
                     // just move file to next level
                     let f = compaction.inputs.base.first().unwrap();
@@ -1072,7 +1078,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                         f.smallest.clone(),
                         f.largest.clone(),
                     );
-                    let res = versions.log_and_apply(&mut compaction.edit);
+                    let res = versions.log_and_apply(compaction.edit);
                     if let Err(e) = res.as_ref() {
                         error!("Compaction error: {}", e);
                     }
@@ -1091,14 +1097,6 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                         error!("Delete obsolete files error: {}", e);
                     }
                 } else {
-                    let level = compaction.level;
-                    info!(
-                        "Compacting [{}]@{} + [{}]@{} files",
-                        compaction.inputs.desc_base_files(),
-                        level,
-                        compaction.inputs.desc_parent_files(),
-                        level + 1
-                    );
                     {
                         let snapshots = &mut versions.snapshots;
                         // Cleanup all redundant snapshots first
@@ -1111,7 +1109,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                     }
                     // Unlock VersionSet here to avoid dead lock
                     mem::drop(versions);
-                    match self.do_compaction(&mut compaction) {
+                    match self.do_compaction(compaction) {
                         Ok(versions) => {
                             let res = self.delete_obsolete_files(versions);
                             if let Some(done) = done {
@@ -1137,7 +1135,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
     // Merging files in level n into file in level n + 1 and keep the still-in-use files
     // This func could compact memtable first if the writing is still on-going
     // `delete_obsolete_files` must be called even if this returns an error
-    fn do_compaction(&self, c: &mut Compaction<S::F, C>) -> Result<MutexGuard<VersionSet<S, C>>> {
+    fn do_compaction(&self, mut c: Compaction<S::F, C>) -> Result<MutexGuard<VersionSet<S, C>>> {
         let now = Instant::now();
         let mut input_iter =
             c.new_input_iterator(self.internal_comparator.clone(), self.table_cache.clone())?;
@@ -1157,7 +1155,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
             let ikey = input_iter.key();
             // Checkout whether we need rotate a new output file
             if c.should_stop_before(ikey, &self.internal_comparator) && c.builder.is_some() {
-                self.finish_output_file(c, iter_status)?
+                self.finish_output_file(&mut c, iter_status)?
             }
             let mut drop = false;
             let ucmp = &self.internal_comparator.user_comparator;
@@ -1194,7 +1192,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                             self.versions
                                 .lock()
                                 .unwrap()
-                                .create_compaction_output_file(c)?;
+                                .create_compaction_output_file(&mut c)?;
                         }
                         let last = c.outputs.len() - 1;
                         if c.builder.as_ref().unwrap().num_entries() == 0 {
@@ -1207,7 +1205,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                         let builder = c.builder.as_ref().unwrap();
                         // Rotate a new output file if the current one is big enough
                         if builder.file_size() >= self.options.max_file_size {
-                            self.finish_output_file(c, input_iter.status())?;
+                            self.finish_output_file(&mut c, input_iter.status())?;
                         }
                     }
                 }
@@ -1222,7 +1220,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
             return Err(Error::DBClosed("major compaction".to_owned()));
         }
         if c.builder.is_some() {
-            self.finish_output_file(c, input_iter.status())?;
+            self.finish_output_file(&mut c, input_iter.status())?;
         }
         // Close unclosed table builder and remove files in `pending_outputs`
         if let Some(builder) = c.builder.as_mut() {
@@ -1251,7 +1249,8 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                 c.total_bytes,
             );
             c.apply_to_edit();
-            versions.log_and_apply(&mut c.edit)?;
+            mem::drop(c.input_version);
+            versions.log_and_apply(c.edit)?;
         }
         Ok(versions)
     }
@@ -1278,7 +1277,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
     // 2. DB is not shutting down
     // 3. no error has been encountered
     // 4. there is an immutable table or a manual compaction request or current version needs to be compacted
-    fn maybe_schedule_compaction(&self, version: Arc<Version<C>>) {
+    fn maybe_schedule_compaction(&self, version: Arc<Version<C>>) -> bool {
         if self.background_compaction_scheduled.load(Ordering::Acquire)
             // Already scheduled
             || self.is_shutting_down.load(Ordering::Acquire)
@@ -1289,6 +1288,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
             && self.manual_compaction_queue.lock().unwrap().is_empty() && !version.needs_compaction())
         {
             // No work needs to be done
+            false
         } else {
             self.background_compaction_scheduled
                 .store(true, Ordering::Release);
@@ -1298,6 +1298,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                     e
                 )
             }
+            true
         }
     }
 
@@ -2952,14 +2953,59 @@ mod tests {
         let t = DBTest::default();
         t.put("foo", "v2").unwrap();
         t.compact(Some("a"), Some("z"));
-        let file_counts = dbg!(t.store.list(t.inner.db_name).unwrap()).len();
+        let file_counts = t.store.list(t.inner.db_name).unwrap().len();
         for _ in 0..10 {
             t.put("foo", "v2").unwrap();
             t.compact(Some("a"), Some("z"))
         }
-        assert_eq!(
-            dbg!(t.store.list(t.inner.db_name).unwrap()).len(),
-            file_counts
-        );
+        assert_eq!(t.store.list(t.inner.db_name).unwrap().len(), file_counts);
+    }
+
+    #[test]
+    fn test_db_reads_using_bloom_filter() {
+        use crate::cache::lru::LRUCache;
+        let mut store = MemStorage::default();
+        store.count_random_reads = true;
+        let mut opts = Options::<BytewiseComparator>::default();
+        opts.logger_level = crate::LevelFilter::Debug;
+        opts.block_cache = Some(Arc::new(LRUCache::new(0, None)));
+        let db = WickDB::open_db(opts, "bloom_filter_test", store.clone()).unwrap();
+        // Populate multiple layers
+        let n = 10000;
+        for i in 0..n {
+            db.put(
+                WriteOptions::default(),
+                key(i).as_bytes(),
+                key(i).as_bytes(),
+            )
+            .unwrap();
+        }
+        db.compact_range(Some(b"a"), Some(b"z")).unwrap();
+        for i in (0..n).into_iter().step_by(100) {
+            db.put(
+                WriteOptions::default(),
+                key(i).as_bytes(),
+                key(i).as_bytes(),
+            )
+            .unwrap();
+        }
+        db.inner.force_compact_mem_table().unwrap();
+        store.delay_data_sync.store(true, Ordering::Release);
+        for i in 0..n {
+            let v = db.get(ReadOptions::default(), key(i).as_bytes()).unwrap();
+            assert_eq!(v, Some(key(i).into_bytes()), "key {}", key(i));
+        }
+        let reads = store.random_read_counter.load(Ordering::Relaxed);
+        assert!(reads >= n && reads <= n + 2 * n / 100);
+        store.random_read_counter.store(0, Ordering::Relaxed);
+        for i in 0..n {
+            assert_eq!(
+                None,
+                db.get(ReadOptions::default(), (key(i) + ".missing").as_bytes())
+                    .unwrap()
+            )
+        }
+        let reads = store.random_read_counter.load(Ordering::Relaxed);
+        assert!(reads <= 3 * n / 100);
     }
 }

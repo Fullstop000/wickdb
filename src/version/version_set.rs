@@ -15,7 +15,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use crate::compaction::{base_range, total_range, Compaction, CompactionInputs, CompactionStats};
+use crate::compaction::{
+    base_range, total_range, Compaction, CompactionInputs, CompactionReason, CompactionStats,
+};
 use crate::db::build_table;
 use crate::db::filename::{generate_filename, parse_filename, update_current, FileType};
 use crate::db::format::{InternalKey, InternalKeyComparator};
@@ -358,7 +360,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
     ///     * After minor compaction
     ///     * After trivial compaction (only file move)
     ///     * After major compaction
-    pub fn log_and_apply(&mut self, edit: &mut VersionEdit) -> Result<()> {
+    pub fn log_and_apply(&mut self, mut edit: VersionEdit) -> Result<()> {
         let (v, encoded_edit) = {
             let level_summary_before = self.current().level_summary();
             if let Some(target_log) = edit.log_number {
@@ -380,8 +382,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
 
             let this = self.current();
             let mut builder = VersionBuilder::new(self.options.max_levels as usize, &this);
-            let file_delta = edit.take_file_delta();
-            builder.accumulate(file_delta, self);
+            builder.accumulate(edit.file_delta, self);
             let mut v = builder.apply_to_new(&self.icmp);
             v.finalize();
             let summary = v.level_summary();
@@ -414,7 +415,6 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
         if let Some(writer) = self.manifest_writer.as_mut() {
             match writer.add_record(&encoded_edit) {
                 Ok(()) => {
-                    debug!("Append new VersionEdit: {:?}", &edit);
                     match writer.sync() {
                         Ok(()) => {
                             // If we just created a MANIFEST file, install it by writing a
@@ -487,7 +487,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
                 }
             }
         }
-        let mut c = Compaction::new(self.options.clone(), level);
+        let mut c = Compaction::new(self.options.clone(), level, CompactionReason::Manual);
         c.input_version = Some(version);
         c.inputs.base = overlapping_inputs;
         Some(self.setup_other_inputs(c))
@@ -520,7 +520,8 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
                     level,
                     self.options.max_levels as usize
                 );
-                let mut compaction = Compaction::new(self.options.clone(), level);
+                let mut compaction =
+                    Compaction::new(self.options.clone(), level, CompactionReason::MaxSize);
                 // Pick the first file that comes after compact_pointer[level]
                 for file in current.files[level].iter() {
                     if self.compaction_pointer[level].is_empty()
@@ -543,7 +544,8 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
             } else if seek_compaction {
                 let level = current.file_to_compact_level.load(Ordering::Acquire);
                 if level < self.options.max_levels as usize - 1 {
-                    let mut compaction = Compaction::new(self.options.clone(), level);
+                    let mut compaction =
+                        Compaction::new(self.options.clone(), level, CompactionReason::SeekLimit);
                     compaction.inputs.add_base(file_to_compact);
                     compaction
                 } else {
@@ -567,7 +569,13 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
             assert!(!compaction.inputs.base.is_empty());
         }
 
-        Some(self.setup_other_inputs(compaction))
+        compaction = self.setup_other_inputs(compaction);
+        // Avoid trivial moving when target level is empty recursively
+        if compaction.level > 1 && seek_compaction && current.files[compaction.level + 1].is_empty()
+        {
+            return None;
+        }
+        Some(compaction)
     }
 
     /// Persistent given memtable into a single sst file to level0.
@@ -729,8 +737,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
                     ));
                 }
             }
-            let file_delta = edit.take_file_delta();
-            builder.accumulate(file_delta, self);
+            builder.accumulate(edit.file_delta, self);
             if let Some(n) = edit.next_file_number {
                 next_file_number = n;
                 has_next_file_number = true;
