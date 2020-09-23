@@ -349,6 +349,7 @@ impl<S: Storage + Clone, C: Comparator + 'static> WickDB<S, C> {
         thread::Builder::new()
             .name("compaction".to_owned())
             .spawn(move || {
+                let mut done_compaction = false;
                 while let Ok(()) = db.do_compaction.1.recv() {
                     if db.is_shutting_down.load(Ordering::Acquire) {
                         // No more background work when shutting down
@@ -356,16 +357,18 @@ impl<S: Storage + Clone, C: Comparator + 'static> WickDB<S, C> {
                     } else if db.bg_error.read().unwrap().is_some() {
                         // Non more background work after a background error
                     } else {
-                        db.background_compaction();
+                        done_compaction = db.background_compaction();
                         db.background_work_finished_signal.notify_all();
                     }
                     db.background_compaction_scheduled
                         .store(false, Ordering::Release);
 
-                    // Previous compaction may have produced too many files in a level,
-                    // so reschedule another compaction if needed
-                    let current = db.versions.lock().unwrap().current();
-                    db.maybe_schedule_compaction(current);
+                    if done_compaction {
+                        // Previous compaction may have produced too many files in a level,
+                        // so reschedule another compaction if needed
+                        let current = db.versions.lock().unwrap().current();
+                        db.maybe_schedule_compaction(current);
+                    }
                 }
                 shutdown.send(()).unwrap();
                 debug!("compaction thread shut down");
@@ -516,7 +519,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         let current = self.versions.lock().unwrap().current();
         let (value, seek_stats) = current.get(options, lookup_key, &self.table_cache)?;
         if current.update_stats(seek_stats) {
-            self.maybe_schedule_compaction(current);
+            dbg!(self.maybe_schedule_compaction(current));
         }
         Ok(value)
     }
@@ -1013,12 +1016,13 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
     }
 
     // The complete compaction process
-    // This is a sync function call and any error will be
-    fn background_compaction(&self) {
+    // Returns true if a compaction is actually scheduled
+    fn background_compaction(&self) -> bool {
         if self.im_mem.read().unwrap().is_some() {
             if let Err(e) = self.compact_mem_table() {
                 warn!("Compact memtable error: {:?}", e);
             }
+            true
         } else {
             let mut versions = self.versions.lock().unwrap();
             let mut is_manual = false;
@@ -1057,6 +1061,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                     (versions.pick_compaction(), None)
                 }
             };
+            let has_compaction = compaction.is_some();
             if let Some(mut compaction) = compaction {
                 let level = compaction.level;
                 info!(
@@ -1129,6 +1134,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                     }
                 };
             }
+            has_compaction
         }
     }
 
@@ -2028,6 +2034,7 @@ mod tests {
             t.assert_file_num_at_level(1, 0);
             t.assert_file_num_at_level(2, 1);
 
+            dbg!("read start");
             // Read a bunch of times to trigger compaction (drain `allow_seek`)
             for _ in 0..1000 {
                 assert_eq!(t.get("missing", None), None);

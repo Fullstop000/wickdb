@@ -237,7 +237,7 @@ impl<C: Comparator> Options<C> {
         let user_logger = std::mem::replace(&mut self.logger, None);
         let logger = Logger::new(user_logger, self.logger_level, storage, db_path);
         let static_logger: &'static dyn Log = Box::leak(Box::new(logger));
-        log::set_logger(static_logger).unwrap();
+        let _ = log::set_logger(static_logger); // global logger could be set
         log::set_max_level(self.logger_level);
         info!("Logger initialized: [level {:?}]", &self.logger_level);
     }

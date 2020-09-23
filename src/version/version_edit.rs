@@ -24,7 +24,7 @@ use crate::version::version_edit::Tag::{
 };
 use crate::{Error, Result};
 use std::fmt::{Debug, Formatter};
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 // Tags for the VersionEdit disk format.
 // Tag 8 is no longer used.
@@ -78,6 +78,18 @@ pub struct FileMetaData {
     pub smallest: InternalKey,
     // Largest internal key served by table
     pub largest: InternalKey,
+}
+
+impl FileMetaData {
+    /// Calculate allow_seeks for the file from the size
+    pub fn init_allowed_seeks(&self) {
+        // TODO: config 16 * 1024 as an option
+        let mut allowed_seeks = self.file_size as usize / (16 * 1024);
+        if allowed_seeks < 100 {
+            allowed_seeks = 100 // the min seeks allowed
+        }
+        self.allowed_seeks.store(allowed_seeks, Ordering::Release);
+    }
 }
 
 impl PartialEq for FileMetaData {

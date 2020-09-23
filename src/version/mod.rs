@@ -40,6 +40,7 @@ pub mod version_edit;
 pub mod version_set;
 
 /// A helper for representing the file has been seeked
+#[derive(Debug)]
 pub struct SeekStats {
     // the file has been seeked
     pub seek_file: Option<Arc<FileMetaData>>,
@@ -219,7 +220,7 @@ impl<C: Comparator + 'static> Version<C> {
     /// mark it as a pending compaction file and returns true.
     pub fn update_stats(&self, stats: SeekStats) -> bool {
         if let Some(f) = stats.seek_file {
-            let old = f.allowed_seeks.fetch_sub(1, Ordering::Relaxed);
+            let old = f.allowed_seeks.fetch_sub(1, Ordering::SeqCst);
             let mut file_to_compact = self.file_to_compact.write().unwrap();
             if file_to_compact.is_none() && old == 1 {
                 *file_to_compact = Some(f);

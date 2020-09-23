@@ -102,14 +102,7 @@ impl<'a, C: Comparator + 'static> VersionBuilder<'a, C> {
             // same as the compaction of 40KB of data.  We are a little
             // conservative and allow approximately one seek for every 16KB
             // of data before triggering a compaction.
-            // TODO: config 16 * 1024 as an option
-            let mut allowed_seeks = new_file.file_size as usize / (16 * 1024);
-            if allowed_seeks < 100 {
-                allowed_seeks = 100 // the min seeks allowed
-            }
-            new_file
-                .allowed_seeks
-                .store(allowed_seeks, Ordering::Relaxed);
+            new_file.init_allowed_seeks();
             self.levels[level].deleted_files.remove(&new_file.number);
             self.levels[level].added_files.push(new_file);
         }
@@ -570,9 +563,15 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
         }
 
         compaction = self.setup_other_inputs(compaction);
-        // Avoid trivial moving when target level is empty recursively
-        if compaction.level > 1 && seek_compaction && current.files[compaction.level + 1].is_empty()
+        // Avoid recursively trivial sst moving when target level is empty
+        if compaction.level > 1
+            && seek_compaction
+            && compaction.is_trivial_move()
+            && current.files[compaction.level + 1].is_empty()
         {
+            for f in compaction.inputs.base {
+                f.init_allowed_seeks()
+            }
             return None;
         }
         Some(compaction)
