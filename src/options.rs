@@ -25,8 +25,7 @@ use crate::snapshot::Snapshot;
 use crate::sstable::block::Block;
 use crate::storage::{File, Storage};
 use crate::util::comparator::Comparator;
-use crate::LevelFilter;
-use crate::Log;
+use crate::{BloomFilter, LevelFilter, Log};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -160,8 +159,6 @@ pub struct Options<C: Comparator> {
     pub reuse_logs: bool,
 
     /// If non-null, use the specified filter policy to reduce disk reads.
-    /// Many applications will benefit from passing the result of
-    /// NewBloomFilterPolicy() here.
     pub filter_policy: Option<Rc<dyn FilterPolicy>>,
 
     /// The underlying logger
@@ -230,15 +227,17 @@ impl<C: Comparator> Options<C> {
         }
         if let Some(fp) = std::mem::replace(&mut self.filter_policy, None) {
             self.filter_policy = Some(Rc::new(InternalFilterPolicy::new(fp)));
+        } else {
+            let bf = BloomFilter::new(10);
+            self.filter_policy = Some(Rc::new(InternalFilterPolicy::new(Rc::new(bf))))
         }
     }
 
-    #[allow(unused_must_use)]
     fn apply_logger<S: Storage>(&mut self, storage: &S, db_path: &str) {
         let user_logger = std::mem::replace(&mut self.logger, None);
         let logger = Logger::new(user_logger, self.logger_level, storage, db_path);
         let static_logger: &'static dyn Log = Box::leak(Box::new(logger));
-        log::set_logger(static_logger);
+        let _ = log::set_logger(static_logger); // global logger could be set
         log::set_max_level(self.logger_level);
         info!("Logger initialized: [level {:?}]", &self.logger_level);
     }

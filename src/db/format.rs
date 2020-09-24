@@ -368,7 +368,7 @@ impl FilterPolicy for InternalFilterPolicy {
     }
 }
 
-// use a `Slice` to represent only the user key in a internal key slice
+/// Returns the encoded user key from encoded internal key
 #[inline]
 pub fn extract_user_key(key: &[u8]) -> &[u8] {
     let size = key.len();

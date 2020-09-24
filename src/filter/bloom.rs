@@ -45,7 +45,7 @@ impl BloomFilter {
 
 impl FilterPolicy for BloomFilter {
     fn name(&self) -> &str {
-        "leveldb.BuiltinBloomFilter"
+        "wickdb.BuiltinBloomFilter"
     }
 
     fn may_contain(&self, filter: &[u8], key: &[u8]) -> bool {

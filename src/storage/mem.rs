@@ -17,7 +17,7 @@ use crate::{Error, Result};
 use std::collections::hash_map::Entry;
 use std::io::{Cursor, Error as IOError, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf, MAIN_SEPARATOR};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Duration;
@@ -59,7 +59,10 @@ pub struct MemStorage {
     /// Force write to manifest files to fail
     pub manifest_write_error: Arc<AtomicBool>,
 
+    /// Whether enable to record the count of random reads to files
     pub count_random_reads: bool,
+
+    pub random_read_counter: Arc<AtomicUsize>,
 }
 
 impl Default for MemStorage {
@@ -76,6 +79,7 @@ impl Default for MemStorage {
             manifest_sync_error: Arc::new(AtomicBool::new(false)),
             manifest_write_error: Arc::new(AtomicBool::new(false)),
             count_random_reads: false,
+            random_read_counter: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
@@ -160,6 +164,8 @@ impl Storage for MemStorage {
         file_node.no_space = self.no_space.clone();
         file_node.manifest_sync_error = self.manifest_sync_error.clone();
         file_node.manifest_write_error = self.manifest_write_error.clone();
+        file_node.count_random_reads = Arc::new(AtomicBool::new(self.count_random_reads));
+        file_node.random_read_counter = self.random_read_counter.clone();
         match self.inner.write().unwrap().entry(name) {
             Entry::Occupied(n) => match n.get() {
                 Node::File(f) => return Ok(f.clone()),
@@ -385,7 +391,7 @@ pub struct FileNode {
     manifest_write_error: Arc<AtomicBool>,
 
     count_random_reads: Arc<AtomicBool>,
-    random_read_counter: Arc<AtomicU64>,
+    random_read_counter: Arc<AtomicUsize>,
 
     inner: Arc<RwLock<InmemFile>>,
 }
