@@ -82,6 +82,7 @@ pub struct FileMetaData {
 
 impl FileMetaData {
     /// Calculate allow_seeks for the file from the size
+    #[inline]
     pub fn init_allowed_seeks(&self) {
         // TODO: config 16 * 1024 as an option
         let mut allowed_seeks = self.file_size as usize / (16 * 1024);

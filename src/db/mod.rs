@@ -519,7 +519,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         let current = self.versions.lock().unwrap().current();
         let (value, seek_stats) = current.get(options, lookup_key, &self.table_cache)?;
         if current.update_stats(seek_stats) {
-            dbg!(self.maybe_schedule_compaction(current));
+            self.maybe_schedule_compaction(current);
         }
         Ok(value)
     }
@@ -1046,13 +1046,13 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                     ) {
                         Some(c) => {
                             info!(
-                                "Received manual compaction at level-{} from {} .. {}; will stop at {:?}",
+                                "Received manual compaction at level {} from {} .. {}; will stop at {:?}",
                                 manual.level, begin, end, &c.inputs.base.last().unwrap().largest
                             );
                             (Some(c), Some(manual.done))
                         }
                         None => {
-                            info!("Received manual compaction at level-{} from {} .. {}; No compaction needs to be done", manual.level, begin, end);
+                            info!("Received manual compaction at level {} from {} .. {}; No compaction needs to be done", manual.level, begin, end);
                             manual.done.send(Ok(())).unwrap();
                             (None, None)
                         }
@@ -1482,13 +1482,13 @@ mod tests {
 
     #[derive(Debug, Clone, Copy, FromPrimitive)]
     enum TestOption {
-        Default = 1,
+        Default,
         // Enable `reuse_log`
-        Reuse = 2,
+        Reuse,
         // Use Bloom Filter as the filter policy
-        FilterPolicy = 3,
+        FilterPolicy,
         // No compression enabled
-        UnCompressed = 4,
+        UnCompressed,
     }
 
     impl From<u8> for TestOption {
@@ -1757,7 +1757,7 @@ mod tests {
         // Print all sst files at current version
         fn print_sst_files(&self) {
             let current = self.inner.versions.lock().unwrap().current();
-            println!("{}", current.level_summary());
+            println!("{:?}", current);
         }
 
         fn assert_approximate_size(&self, start: &str, end: &str, a: usize, b: usize) {
@@ -2028,13 +2028,10 @@ mod tests {
                 t.put("z", "end").unwrap();
                 t.inner.force_compact_mem_table().unwrap();
             }
-            // Clear level 1 if necessary
-            t.inner.manual_compact_range(1, None, None).unwrap();
             t.assert_file_num_at_level(0, 1);
-            t.assert_file_num_at_level(1, 0);
+            t.assert_file_num_at_level(1, 1);
             t.assert_file_num_at_level(2, 1);
 
-            dbg!("read start");
             // Read a bunch of times to trigger compaction (drain `allow_seek`)
             for _ in 0..1000 {
                 assert_eq!(t.get("missing", None), None);
@@ -2042,6 +2039,8 @@ mod tests {
             // Wait for compaction to finish
             thread::sleep(Duration::from_secs(1));
             t.assert_file_num_at_level(0, 0);
+            t.assert_file_num_at_level(1, 0);
+            t.assert_file_num_at_level(2, 1);
         }
     }
 

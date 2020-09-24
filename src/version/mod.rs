@@ -28,7 +28,7 @@ use crate::util::comparator::Comparator;
 use crate::version::version_edit::FileMetaData;
 use crate::version::version_set::total_file_size;
 use crate::{Error, Result};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::cmp::Ordering as CmpOrdering;
 use std::fmt;
 use std::mem;
@@ -43,19 +43,11 @@ pub mod version_set;
 #[derive(Debug)]
 pub struct SeekStats {
     // the file has been seeked
-    pub seek_file: Option<Arc<FileMetaData>>,
+    pub file: Arc<FileMetaData>,
     // the level the 'seek_file' is at
-    pub seek_file_level: Option<usize>,
+    pub level: usize,
 }
-impl SeekStats {
-    #[inline]
-    pub fn new() -> Self {
-        Self {
-            seek_file: None,
-            seek_file_level: None,
-        }
-    }
-}
+
 /// `Version` is a collection of file metadata for on-disk tables at various
 /// levels. In-memory DBs are written to level-0 tables, and compactions
 /// migrate data from level N to level N+1. The tables map internal keys (which
@@ -103,7 +95,11 @@ impl<C: Comparator> fmt::Debug for Version<C> {
         for (level, files) in self.files.iter().enumerate() {
             write!(f, "level {}: [ ", level)?;
             for file in files {
-                write!(f, "{}, ", file.number)?;
+                write!(
+                    f,
+                    "File {}({}): [{:?}..{:?}], ",
+                    file.number, file.file_size, file.smallest, file.largest
+                )?;
             }
             write!(f, " ]\n")?;
         }
@@ -136,13 +132,13 @@ impl<C: Comparator + 'static> Version<C> {
         options: ReadOptions,
         key: LookupKey,
         table_cache: &TableCache<S, C>,
-    ) -> Result<(Option<Vec<u8>>, SeekStats)> {
+    ) -> Result<(Option<Vec<u8>>, Option<SeekStats>)> {
         let ikey = key.internal_key();
         let ukey = key.user_key();
         let ucmp = &self.icmp.user_comparator;
-        let mut seek_stats = SeekStats::new();
+        let mut seek_stats = None;
+        let mut files_to_seek = vec![];
         for (level, files) in self.files.iter().enumerate() {
-            let mut files_to_seek = vec![];
             if files.is_empty() {
                 continue;
             }
@@ -154,58 +150,62 @@ impl<C: Comparator + 'static> Version<C> {
                     if ucmp.compare(ukey, f.largest.user_key()) != CmpOrdering::Greater
                         && ucmp.compare(ukey, f.smallest.user_key()) != CmpOrdering::Less
                     {
-                        files_to_seek.push(f);
+                        files_to_seek.push((f, 0));
                     }
                 }
-                files_to_seek.sort_by(|a, b| b.number.cmp(&a.number));
             } else {
-                let index = find_file(&self.icmp, &self.files[level], &ikey);
+                let index = find_file(&self.icmp, files, &ikey);
                 if index >= files.len() {
                     // we reach the end but not found a file matches
                 } else {
                     let target = &files[index];
                     // If what we found is the first file, it could still not includes the target
                     // so let's check the smallest ukey. We use `ukey` because of the given `LookupKey`
-                    // could has the same `ukey` as the `smallest` but a bigger `seq` number than it, which is smaller
+                    // may contains the same `ukey` as the `smallest` but a bigger `seq` number than it, which is smaller
                     // in a comparison by `icmp`.
                     if ucmp.compare(ukey, target.smallest.user_key()) != CmpOrdering::Less
                         && level + 1 < self.options.max_levels as usize
                     {
-                        files_to_seek.push(target)
+                        files_to_seek.push((target, level));
                     }
                 }
             }
-
-            for file in files_to_seek {
-                seek_stats.seek_file_level = Some(level);
-                seek_stats.seek_file = Some(file.clone());
-                match table_cache.get(
-                    self.icmp.clone(),
-                    options,
-                    &ikey,
-                    file.number,
-                    file.file_size,
-                )? {
-                    None => continue, // keep searching
-                    Some(block_iter) => {
-                        let encoded_key = block_iter.key();
-                        let value = block_iter.value();
-                        match ParsedInternalKey::decode_from(encoded_key) {
-                            None => return Err(Error::Corruption("bad internal key".to_owned())),
-                            Some(parsed_key) => {
-                                if self
-                                    .options
-                                    .comparator
-                                    .compare(&parsed_key.user_key, key.user_key())
-                                    == CmpOrdering::Equal
-                                {
-                                    match parsed_key.value_type {
-                                        ValueType::Value => {
-                                            return Ok((Some(value.to_vec()), seek_stats))
-                                        }
-                                        ValueType::Deletion => return Ok((None, seek_stats)),
-                                        _ => {}
+        }
+        files_to_seek.sort_by(|(a, _), (b, _)| b.number.cmp(&a.number));
+        for (file, level) in files_to_seek {
+            if seek_stats.is_none() {
+                // TODO(fullstop000): leveldb only charge the first file for seek compaction
+                seek_stats = Some(SeekStats {
+                    file: file.clone(),
+                    level,
+                });
+            }
+            match table_cache.get(
+                self.icmp.clone(),
+                options,
+                &ikey,
+                file.number,
+                file.file_size,
+            )? {
+                None => continue,
+                Some(block_iter) => {
+                    let encoded_key = block_iter.key();
+                    let value = block_iter.value();
+                    match ParsedInternalKey::decode_from(encoded_key) {
+                        None => return Err(Error::Corruption("bad internal key".to_owned())),
+                        Some(parsed_key) => {
+                            if self
+                                .options
+                                .comparator
+                                .compare(&parsed_key.user_key, key.user_key())
+                                == CmpOrdering::Equal
+                            {
+                                match parsed_key.value_type {
+                                    ValueType::Value => {
+                                        return Ok((Some(value.to_vec()), seek_stats))
                                     }
+                                    ValueType::Deletion => return Ok((None, seek_stats)),
+                                    _ => {}
                                 }
                             }
                         }
@@ -218,14 +218,20 @@ impl<C: Comparator + 'static> Version<C> {
 
     /// Update seek stats for a sstable file. If it runs out of `allow_seek`,
     /// mark it as a pending compaction file and returns true.
-    pub fn update_stats(&self, stats: SeekStats) -> bool {
-        if let Some(f) = stats.seek_file {
-            let old = f.allowed_seeks.fetch_sub(1, Ordering::SeqCst);
+    pub fn update_stats(&self, stats: Option<SeekStats>) -> bool {
+        if let Some(ss) = stats {
+            let old = ss
+                .file
+                .allowed_seeks
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
+                    Some(if v > 0 { v - 1 } else { 0 })
+                })
+                .unwrap();
             let mut file_to_compact = self.file_to_compact.write().unwrap();
             if file_to_compact.is_none() && old == 1 {
-                *file_to_compact = Some(f);
+                *file_to_compact = Some(ss.file);
                 self.file_to_compact_level
-                    .store(stats.seek_file_level.unwrap(), Ordering::Release);
+                    .store(ss.level, Ordering::Release);
                 return true;
             }
         }
@@ -395,7 +401,7 @@ impl<C: Comparator + 'static> Version<C> {
     /// Returns true if a new compaction may need to be triggered
     pub fn record_read_sample(&self, internal_key: &[u8]) -> bool {
         if let Some(pkey) = ParsedInternalKey::decode_from(internal_key) {
-            let stats = Rc::new(RefCell::new(SeekStats::new()));
+            let stats = Rc::new(Cell::new(None));
             let matches = Rc::new(RefCell::new(0));
             let stats_clone = stats.clone();
             let matches_clone = matches.clone();
@@ -406,8 +412,7 @@ impl<C: Comparator + 'static> Version<C> {
                     *matches_clone.borrow_mut() += 1;
                     if *matches_clone.borrow() == 1 {
                         // Remember first match
-                        stats_clone.borrow_mut().seek_file = Some(file);
-                        stats_clone.borrow_mut().seek_file_level = Some(level);
+                        stats_clone.set(Some(SeekStats { file, level }));
                     }
                     *matches_clone.borrow() < 2
                 }),
