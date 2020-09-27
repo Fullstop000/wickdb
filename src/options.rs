@@ -221,7 +221,7 @@ impl<C: Comparator> Options<C> {
         if self.block_cache.is_none() {
             let mut shards = vec![];
             for _ in 0..DEFAULT_CACHE_SHARDS {
-                shards.push(LRUCache::new(8 << 20, None));
+                shards.push(LRUCache::new(8 << 20));
             }
             self.block_cache = Some(Arc::new(ShardedCache::new(shards)))
         }

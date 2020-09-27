@@ -37,7 +37,6 @@ use std::sync::Arc;
 /// without external synchronization.
 pub struct Table<F: File> {
     file: F,
-    cache_id: u64,
     filter_reader: Option<FilterBlockReader>,
     // None iff we fail to read meta block
     meta_block_handle: Option<BlockHandle>,
@@ -74,15 +73,9 @@ impl<F: File> Table<F> {
         let index_block_contents =
             read_block(&file, &footer.index_handle, options.paranoid_checks)?;
         let index_block = Block::new(index_block_contents)?;
-        let cache_id = if let Some(cache) = &options.block_cache {
-            cache.new_id()
-        } else {
-            0
-        };
         let mut t = Self {
             block_cache: options.block_cache.clone(),
             file,
-            cache_id,
             filter_reader: None,
             meta_block_handle: None,
             index_block,
@@ -130,9 +123,9 @@ impl<F: File> Table<F> {
     ) -> Result<BlockIterator<CC>> {
         let iter = if let Some(cache) = &self.block_cache {
             let mut cache_key_buffer = vec![0; 16];
-            put_fixed_64(&mut cache_key_buffer, self.cache_id);
+            // put_fixed_64(&mut cache_key_buffer, self.cache_id);
             put_fixed_64(&mut cache_key_buffer, data_block_handle.offset);
-            if let Some(b) = cache.look_up(&cache_key_buffer) {
+            if let Some(b) = cache.get(&cache_key_buffer) {
                 b.iter(cmp)
             } else {
                 let data = read_block(&self.file, &data_block_handle, options.verify_checksums)?;

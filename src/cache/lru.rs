@@ -21,7 +21,7 @@ use std::hash::{Hash, Hasher};
 use std::mem;
 use std::mem::MaybeUninit;
 use std::ptr;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 #[derive(Copy, Clone)]
@@ -59,8 +59,7 @@ pub struct LRUHandle<K, V> {
 }
 
 impl<K, V> LRUHandle<K, V> {
-    /// Create new LRUHandle
-    pub fn new(key: K, value: V, charge: usize) -> LRUHandle<K, V> {
+    fn new(key: K, value: V, charge: usize) -> Self {
         LRUHandle {
             key: MaybeUninit::new(key),
             value: MaybeUninit::new(value),
@@ -69,77 +68,81 @@ impl<K, V> LRUHandle<K, V> {
             prev: ptr::null_mut(),
         }
     }
+    fn new_empty() -> Self {
+        LRUHandle {
+            key: MaybeUninit::uninit(),
+            value: MaybeUninit::uninit(),
+            charge: 0,
+            next: ptr::null_mut(),
+            prev: ptr::null_mut(),
+        }
+    }
 }
 
-// TODO: remove mutex
 /// LRU cache implementation
 pub struct LRUCache<K, V> {
     // The capacity of LRU
     capacity: usize,
-    mutex: Mutex<MutexFields<K, V>>,
+    inner: Mutex<LRUInner<K, V>>,
     // The size of space which have been allocated
     usage: AtomicUsize,
-    cache_id: AtomicU64,
-    callback: Option<Box<dyn Fn(&K, &V)>>,
+    // Only for tests
+    evict_hook: Option<Box<dyn Fn(&K, &V)>>,
 }
 
-struct MutexFields<K, V> {
-    // Dummy head of LRU list.
-    // lru.prev is newest entry, lru.next is oldest entry.
-    lru: *mut LRUHandle<K, V>,
+struct LRUInner<K, V> {
     table: HashMap<Key<K>, Box<LRUHandle<K, V>>>,
+    // head.next is the newest entry
+    head: *mut LRUHandle<K, V>,
+    tail: *mut LRUHandle<K, V>,
 }
 
-impl<K: Hash + Eq, V> LRUCache<K, V> {
-    pub fn new(cap: usize, callback: Option<Box<dyn Fn(&K, &V)>>) -> Self {
-        let mutex = unsafe {
-            MutexFields {
-                lru: Self::create_dummy_node(),
-                table: HashMap::default(),
-            }
-        };
-        LRUCache {
-            usage: AtomicUsize::new(0),
-            capacity: cap,
-            mutex: Mutex::new(mutex),
-            cache_id: AtomicU64::new(0),
-            callback,
-        }
-    }
-
-    // Unlink the node `n`
-    fn lru_remove(n: *mut LRUHandle<K, V>) {
+impl<K, V> LRUInner<K, V> {
+    fn detach(&mut self, n: *mut LRUHandle<K, V>) {
         unsafe {
             (*(*n).next).prev = (*n).prev;
             (*(*n).prev).next = (*n).next;
         }
     }
 
-    // Append the `new_node` to the head of given list `n`
-    fn lru_append(n: *mut LRUHandle<K, V>, new_node: *mut LRUHandle<K, V>) {
+    fn attach(&mut self, n: *mut LRUHandle<K, V>) {
         unsafe {
-            (*new_node).next = n;
-            (*new_node).prev = (*n).prev;
-            (*(*n).prev).next = new_node;
-            (*n).prev = new_node;
+            (*n).next = (*self.head).next;
+            (*n).prev = self.head;
+            (*self.head).next = n;
+            (*(*n).next).prev = n;
         }
     }
+}
 
-    // Create a dummy node whose 'next' and 'prev' are both itself
-    unsafe fn create_dummy_node() -> *mut LRUHandle<K, V> {
-        let n: *mut LRUHandle<K, V> =
-            Box::into_raw(Box::new(mem::MaybeUninit::uninit().assume_init()));
-        (*n).next = n;
-        (*n).prev = n;
-        n
+impl<K: Hash + Eq, V> LRUCache<K, V> {
+    pub fn new(cap: usize) -> Self {
+        let l = LRUInner {
+            // lru: Self::create_dummy_node(),
+            table: HashMap::default(),
+            head: Box::into_raw(Box::new(LRUHandle::new_empty())),
+            tail: Box::into_raw(Box::new(LRUHandle::new_empty())),
+        };
+
+        unsafe {
+            (*l.head).next = l.tail;
+            (*l.tail).prev = l.head;
+        }
+
+        LRUCache {
+            usage: AtomicUsize::new(0),
+            capacity: cap,
+            inner: Mutex::new(l),
+            evict_hook: None,
+        }
     }
 }
 
 impl<K: Hash + Eq, V> Cache<K, V> for LRUCache<K, V> {
     fn insert(&self, key: K, mut value: V, charge: usize) -> Option<V> {
-        let mut mutex_data = self.mutex.lock().unwrap();
+        let mut l = self.inner.lock().unwrap();
         if self.capacity > 0 {
-            match mutex_data.table.get_mut(&Key {
+            match l.table.get_mut(&Key {
                 k: &key as *const K,
             }) {
                 Some(h) => {
@@ -147,40 +150,46 @@ impl<K: Hash + Eq, V> Cache<K, V> for LRUCache<K, V> {
                     // swap the value and move handle to the head
                     unsafe { mem::swap(&mut value, &mut (*(*old_p).value.as_mut_ptr())) };
                     let p: *mut LRUHandle<K, V> = h.as_mut();
-                    Self::lru_remove(p);
-                    Self::lru_append(mutex_data.lru, p);
-                    if let Some(cb) = &self.callback {
-                        cb(&key, &value);
+                    l.detach(p);
+                    l.attach(p);
+                    if let Some(hk) = &self.evict_hook {
+                        hk(&key, &value);
                     }
                     Some(value)
                 }
                 None => {
-                    let handle = LRUHandle::new(key, value, charge);
-                    let mut v = Box::new(handle);
-                    let k: *const K = v.as_ref().key.as_ptr();
-                    let value_ptr: *mut LRUHandle<K, V> = v.as_mut();
-                    mutex_data.table.insert(Key { k }, v);
-                    Self::lru_append(mutex_data.lru, value_ptr);
-                    self.usage.fetch_add(charge, Ordering::Release);
-                    // evict last lru entries
-                    unsafe {
-                        while self.usage.load(Ordering::Acquire) > self.capacity
-                            && (*(*mutex_data).lru).next != mutex_data.lru
-                        // not the dummy head
-                        {
-                            let k = (*(*mutex_data.lru).next).key.as_ptr();
-                            let key = Key { k };
-                            if let Some(mut n) = mutex_data.table.remove(&key) {
-                                self.usage.fetch_sub(n.charge, Ordering::SeqCst);
-                                Self::lru_remove(n.as_mut());
-                                if let Some(cb) = &self.callback {
-                                    cb(&(*n.key.as_ptr()), &(*n.value.as_ptr()));
+                    let mut node = {
+                        if self.usage.load(Ordering::Acquire) >= self.capacity {
+                            let prev_key = Key {
+                                k: unsafe { (*(*l.tail).prev).key.as_ptr() },
+                            };
+                            let mut n = l.table.remove(&prev_key).unwrap();
+                            self.usage.fetch_sub(n.charge, Ordering::Relaxed);
+                            if let Some(hk) = &self.evict_hook {
+                                unsafe {
+                                    hk(&(*n.key.as_ptr()), &(*n.value.as_ptr()));
                                 }
+                            }
+                            unsafe {
                                 ptr::drop_in_place(n.key.as_mut_ptr());
                                 ptr::drop_in_place(n.value.as_mut_ptr());
                             }
+                            n.key = MaybeUninit::new(key);
+                            n.value = MaybeUninit::new(value);
+                            l.detach(n.as_mut());
+                            n
+                        } else {
+                            Box::new(LRUHandle::new(key, value, charge))
                         }
-                    }
+                    };
+                    self.usage.fetch_add(charge, Ordering::Relaxed);
+                    l.attach(node.as_mut());
+                    l.table.insert(
+                        Key {
+                            k: node.key.as_ptr(),
+                        },
+                        node,
+                    );
                     None
                 }
             }
@@ -189,35 +198,32 @@ impl<K: Hash + Eq, V> Cache<K, V> for LRUCache<K, V> {
         }
     }
 
-    fn look_up<'a>(&'a self, key: &K) -> Option<&'a V> {
+    fn get<'a>(&'a self, key: &K) -> Option<&'a V> {
         let k = Key { k: key as *const K };
-        let l = self.mutex.lock().unwrap();
-        l.table.get(&k).map(|h| {
-            let p = h.as_ref() as *const LRUHandle<K, V> as *mut LRUHandle<K, V>;
-            Self::lru_remove(p);
-            Self::lru_append(l.lru, p);
-            unsafe { &(*(*p).value.as_ptr()) as &V }
-        })
+        let mut l = self.inner.lock().unwrap();
+        if let Some(node) = l.table.get_mut(&k) {
+            let p = node.as_mut() as *mut LRUHandle<K, V>;
+            l.detach(p);
+            l.attach(p);
+            Some(unsafe { &(*(*p).value.as_ptr()) as &V })
+        } else {
+            None
+        }
     }
 
     fn erase(&self, key: &K) {
         let k = Key { k: key as *const K };
-        let mut mutex_data = self.mutex.lock().unwrap();
+        let mut l = self.inner.lock().unwrap();
         // remove the key in hashtable
-        if let Some(mut n) = mutex_data.table.remove(&k) {
+        if let Some(mut n) = l.table.remove(&k) {
             self.usage.fetch_sub(n.charge, Ordering::SeqCst);
-            Self::lru_remove(n.as_mut() as *mut LRUHandle<K, V>);
+            l.detach(n.as_mut() as *mut LRUHandle<K, V>);
             unsafe {
-                if let Some(cb) = &self.callback {
+                if let Some(cb) = &self.evict_hook {
                     cb(key, &(*n.value.as_ptr()));
                 }
             }
         }
-    }
-
-    #[inline]
-    fn new_id(&self) -> u64 {
-        self.cache_id.fetch_add(1, Ordering::SeqCst)
     }
 
     #[inline]
@@ -228,13 +234,14 @@ impl<K: Hash + Eq, V> Cache<K, V> for LRUCache<K, V> {
 
 impl<K, V> Drop for LRUCache<K, V> {
     fn drop(&mut self) {
-        let mut m = self.mutex.lock().unwrap();
-        (*m).table.values_mut().for_each(|e| unsafe {
+        let mut l = self.inner.lock().unwrap();
+        (*l).table.values_mut().for_each(|e| unsafe {
             ptr::drop_in_place(e.key.as_mut_ptr());
             ptr::drop_in_place(e.value.as_mut_ptr());
         });
         unsafe {
-            let _head = *Box::from_raw(m.lru);
+            let _head = *Box::from_raw(l.head);
+            let _tail = *Box::from_raw(l.tail);
         }
     }
 }
@@ -245,14 +252,13 @@ unsafe impl<K: Sync, V: Sync> Sync for LRUCache<K, V> {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::util::coding::{decode_fixed_32, put_fixed_32};
     use std::cell::RefCell;
     use std::rc::Rc;
 
     const CACHE_SIZE: usize = 100;
 
     struct CacheTest {
-        cache: LRUCache<Vec<u8>, u32>,
+        cache: LRUCache<u32, u32>,
         deleted_kv: Rc<RefCell<Vec<(u32, u32)>>>,
     }
 
@@ -260,34 +266,27 @@ mod tests {
         fn new(cap: usize) -> Self {
             let deleted_kv = Rc::new(RefCell::new(vec![]));
             let cloned = deleted_kv.clone();
-            let callback: Box<dyn Fn(&Vec<u8>, &u32)> = Box::new(move |k, v| {
-                let key = decode_fixed_32(k);
-                cloned.borrow_mut().push((key, *v));
-            });
-            Self {
-                cache: LRUCache::<Vec<u8>, u32>::new(cap, Some(callback)),
-                deleted_kv,
-            }
+            let mut cache = LRUCache::<u32, u32>::new(cap);
+            cache.evict_hook = Some(Box::new(move |k, v| {
+                cloned.borrow_mut().push((*k, *v));
+            }));
+            Self { cache, deleted_kv }
         }
 
-        fn look_up(&self, key: u32) -> Option<u32> {
-            let mut k = vec![];
-            put_fixed_32(&mut k, key);
-            self.cache.look_up(&k).and_then(|v| Some(*v))
+        fn get(&self, key: u32) -> Option<u32> {
+            self.cache.get(&key).and_then(|v| Some(*v))
         }
 
         fn insert(&self, key: u32, value: u32) {
-            self.cache.insert(encoded_u32(key), value, 1);
+            self.cache.insert(key, value, 1);
         }
 
         fn insert_with_charge(&self, key: u32, value: u32, charge: usize) {
-            self.cache.insert(encoded_u32(key), value, charge);
+            self.cache.insert(key, value, charge);
         }
 
         fn erase(&self, key: u32) {
-            let mut k = vec![];
-            put_fixed_32(&mut k, key);
-            self.cache.erase(&k);
+            self.cache.erase(&key);
         }
 
         fn assert_deleted_kv(&self, index: usize, (key, val): (u32, u32)) {
@@ -295,37 +294,30 @@ mod tests {
         }
 
         fn assert_get(&self, key: u32, want: u32) -> &u32 {
-            let encoded = encoded_u32(key);
-            let h = self.cache.look_up(&encoded).unwrap();
+            let h = self.cache.get(&key).unwrap();
             assert_eq!(want, *h);
             h
         }
     }
 
-    fn encoded_u32(i: u32) -> Vec<u8> {
-        let mut v = vec![];
-        put_fixed_32(&mut v, i);
-        v
-    }
-
     #[test]
     fn test_hit_and_miss() {
         let cache = CacheTest::new(CACHE_SIZE);
-        assert_eq!(None, cache.look_up(100));
+        assert_eq!(None, cache.get(100));
         cache.insert(100, 101);
-        assert_eq!(Some(101), cache.look_up(100));
-        assert_eq!(None, cache.look_up(200));
-        assert_eq!(None, cache.look_up(300));
+        assert_eq!(Some(101), cache.get(100));
+        assert_eq!(None, cache.get(200));
+        assert_eq!(None, cache.get(300));
 
         cache.insert(200, 201);
-        assert_eq!(Some(101), cache.look_up(100));
-        assert_eq!(Some(201), cache.look_up(200));
-        assert_eq!(None, cache.look_up(300));
+        assert_eq!(Some(101), cache.get(100));
+        assert_eq!(Some(201), cache.get(200));
+        assert_eq!(None, cache.get(300));
 
         cache.insert(100, 102);
-        assert_eq!(Some(102), cache.look_up(100));
-        assert_eq!(Some(201), cache.look_up(200));
-        assert_eq!(None, cache.look_up(300));
+        assert_eq!(Some(102), cache.get(100));
+        assert_eq!(Some(201), cache.get(200));
+        assert_eq!(None, cache.get(300));
 
         assert_eq!(1, cache.deleted_kv.borrow().len());
         cache.assert_deleted_kv(0, (100, 101));
@@ -341,14 +333,14 @@ mod tests {
         cache.insert(200, 201);
         cache.erase(100);
 
-        assert_eq!(None, cache.look_up(100));
-        assert_eq!(Some(201), cache.look_up(200));
+        assert_eq!(None, cache.get(100));
+        assert_eq!(Some(201), cache.get(200));
         assert_eq!(1, cache.deleted_kv.borrow().len());
         cache.assert_deleted_kv(0, (100, 101));
 
         cache.erase(100);
-        assert_eq!(None, cache.look_up(100));
-        assert_eq!(Some(201), cache.look_up(200));
+        assert_eq!(None, cache.get(100));
+        assert_eq!(Some(201), cache.get(200));
         assert_eq!(1, cache.deleted_kv.borrow().len());
     }
 
@@ -368,7 +360,7 @@ mod tests {
         cache.erase(100);
         assert_eq!(*v1, 102);
         assert_eq!(*v2, 102);
-        assert_eq!(None, cache.look_up(100));
+        assert_eq!(None, cache.get(100));
         assert_eq!(2, cache.deleted_kv.borrow().len());
         cache.assert_deleted_kv(1, (100, 102));
     }
@@ -383,13 +375,13 @@ mod tests {
         // frequently used entry must be kept around
         for i in 0..(CACHE_SIZE + 100) as u32 {
             cache.insert(1000 + i, 2000 + i);
-            assert_eq!(Some(2000 + i), cache.look_up(1000 + i));
-            assert_eq!(Some(101), cache.look_up(100));
+            assert_eq!(Some(2000 + i), cache.get(1000 + i));
+            assert_eq!(Some(101), cache.get(100));
         }
-        assert_eq!(cache.cache.mutex.lock().unwrap().table.len(), CACHE_SIZE);
-        assert_eq!(Some(101), cache.look_up(100));
-        assert_eq!(None, cache.look_up(200));
-        assert_eq!(None, cache.look_up(300));
+        assert_eq!(cache.cache.inner.lock().unwrap().table.len(), CACHE_SIZE);
+        assert_eq!(Some(101), cache.get(100));
+        assert_eq!(None, cache.get(200));
+        assert_eq!(None, cache.get(300));
     }
 
     #[test]
@@ -405,9 +397,9 @@ mod tests {
         // check that all the entries can be found in the cache
         for i in 0..total as u32 {
             if i < extra as u32 {
-                assert_eq!(None, cache.look_up(1000 + i))
+                assert_eq!(None, cache.get(1000 + i))
             } else {
-                assert_eq!(Some(2000 + i), cache.look_up(1000 + i))
+                assert_eq!(Some(2000 + i), cache.get(1000 + i))
             }
         }
     }
@@ -428,7 +420,7 @@ mod tests {
         let mut cache_weight = 0;
         for i in 0..index {
             let weight = if index & 1 == 0 { light } else { heavy };
-            if let Some(val) = cache.look_up(i) {
+            if let Some(val) = cache.get(i) {
                 cache_weight += weight;
                 assert_eq!(1000 + i, val);
             }
@@ -440,6 +432,6 @@ mod tests {
     fn test_zero_size_cache() {
         let cache = CacheTest::new(0);
         cache.insert(100, 101);
-        assert_eq!(None, cache.look_up(100));
+        assert_eq!(None, cache.get(100));
     }
 }

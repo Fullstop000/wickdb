@@ -38,7 +38,7 @@ pub struct TableCache<S: Storage + Clone, C: Comparator> {
 
 impl<S: Storage + Clone, C: Comparator + 'static> TableCache<S, C> {
     pub fn new(db_name: &'static str, options: Arc<Options<C>>, size: usize, storage: S) -> Self {
-        let cache = Arc::new(LRUCache::<Vec<u8>, Arc<Table<S::F>>>::new(size, None));
+        let cache = Arc::new(LRUCache::<Vec<u8>, Arc<Table<S::F>>>::new(size));
         Self {
             storage,
             db_name,
@@ -56,7 +56,7 @@ impl<S: Storage + Clone, C: Comparator + 'static> TableCache<S, C> {
     ) -> Result<Arc<Table<S::F>>> {
         let mut key = vec![];
         VarintU64::put_varint(&mut key, file_number);
-        match self.cache.look_up(&key) {
+        match self.cache.get(&key) {
             Some(v) => Ok(v.clone()),
             None => {
                 let filename = generate_filename(self.db_name, FileType::Table, file_number);

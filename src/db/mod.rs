@@ -2974,7 +2974,7 @@ mod tests {
         store.count_random_reads = true;
         let mut opts = Options::<BytewiseComparator>::default();
         opts.logger_level = crate::LevelFilter::Debug;
-        opts.block_cache = Some(Arc::new(LRUCache::new(0, None)));
+        opts.block_cache = Some(Arc::new(LRUCache::new(0)));
         let db = WickDB::open_db(opts, "bloom_filter_test", store.clone()).unwrap();
         // Populate multiple layers
         let n = 10000;
