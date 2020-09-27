@@ -1463,6 +1463,7 @@ mod tests {
     use std::ops::{Deref, DerefMut};
     use std::rc::Rc;
     use std::str;
+    use std::sync::atomic::AtomicUsize;
 
     impl<S: Storage + Clone, C: Comparator + 'static> WickDB<S, C> {
         fn options(&self) -> Arc<Options<C>> {
@@ -1552,9 +1553,9 @@ mod tests {
     {
         vec![
             TestOption::Default,
-            TestOption::Reuse,
-            TestOption::FilterPolicy,
-            TestOption::UnCompressed,
+            // TestOption::Reuse,
+            // TestOption::FilterPolicy,
+            // TestOption::UnCompressed,
         ]
         .into_iter()
         .map(|opt| {
@@ -3024,5 +3025,104 @@ mod tests {
         }
         let reads = store.random_read_counter.load(Ordering::Relaxed);
         assert!(reads <= 3 * n / 100);
+    }
+
+    const THREAD_COUNT: usize = 4;
+    const TEST_SECONDS: usize = 10;
+    const KEY_NUM: usize = 1000;
+
+    impl DBTest {
+        fn new_multi_thd_test(&self) -> MultiThreadTest {
+            MultiThreadTest {
+                db: self.db.clone(),
+                // store: self.store.clone(),
+                stop: Arc::new(AtomicBool::new(false)),
+                // options: self.opt.clone(),
+                states: Vec::with_capacity(THREAD_COUNT),
+            }
+        }
+    }
+    struct MultiThreadTest {
+        stop: Arc<AtomicBool>,
+        db: WickDB<MemStorage, BytewiseComparator>,
+        states: Vec<Arc<ThreadState>>,
+    }
+
+    struct ThreadState {
+        db: WickDB<MemStorage, BytewiseComparator>,
+        stop: Arc<AtomicBool>,
+        // The set-get runs
+        counter: AtomicUsize,
+        done: AtomicBool,
+    }
+
+    unsafe impl Send for ThreadState {}
+    unsafe impl Sync for ThreadState {}
+
+    impl MultiThreadTest {
+        fn start(&mut self, id: usize) {
+            let state = Arc::new(ThreadState {
+                db: self.db.clone(),
+                stop: self.stop.clone(),
+                counter: AtomicUsize::new(0),
+                done: AtomicBool::new(false),
+            });
+            self.states.push(state.clone());
+            thread::Builder::new()
+                .name(id.to_string())
+                .spawn(move || {
+                    println!("===== starting thread {}", id);
+                    let mut counter = 0;
+                    let mut rnd = rand::thread_rng();
+                    while !state.stop.load(Ordering::Acquire) {
+                        state.counter.store(counter, Ordering::Release);
+                        let key = rand::thread_rng().gen_range(0, KEY_NUM);
+                        if rnd.gen_range(1, 3) == 1 {
+                            // Write values of the form <key, id, counter>
+                            let value = format!("{}.{}.{}", key, id, counter);
+                            state
+                                .db
+                                .put(
+                                    WriteOptions::default(),
+                                    key.to_string().as_bytes(),
+                                    value.as_bytes(),
+                                )
+                                .unwrap();
+                        } else {
+                            if let Some(value) = state
+                                .db
+                                .get(ReadOptions::default(), key.to_string().as_bytes())
+                                .unwrap()
+                            {
+                                let s = String::from_utf8(value).unwrap();
+                                let ss = s.split('.').collect::<Vec<_>>();
+                                assert_eq!(3, ss.len());
+                                assert_eq!(ss[0], key.to_string());
+                            }
+                        }
+                        counter += 1;
+                    }
+                    state.done.store(true, Ordering::Release);
+                    println!("===== stopping thread {} after {} opts", id, counter);
+                })
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn test_multi_thread() {
+        for t in default_cases() {
+            let mut mt = t.new_multi_thd_test();
+            for id in 0..THREAD_COUNT {
+                mt.start(id);
+            }
+            thread::sleep(Duration::from_secs(TEST_SECONDS as u64));
+            mt.stop.store(true, Ordering::Release);
+            for state in mt.states.iter() {
+                while !state.done.load(Ordering::Acquire) {
+                    thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
     }
 }
