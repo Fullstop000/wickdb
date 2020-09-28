@@ -223,12 +223,31 @@ where
         }
     }
 
-    fn empty() -> bool {
-        unimplemented!()
+    fn empty(&self) -> bool {
+        self.find_last().is_null()
     }
 
-    fn find_last() {
-        unimplemented!()
+    fn find_last(&self) -> *mut Node {
+        let mut x = self.head;
+        let mut height = self.get_height() - 1;
+        loop {
+            unsafe {
+                let next = (*x).get_next(height);
+                if next.is_null() {
+                    if height == 0 {
+                        if x == self.head {
+                            return null_mut();
+                        } else {
+                            return x;
+                        }
+                    } else {
+                        height -= 1;
+                    }
+                } else {
+                    x = next;
+                }
+            }
+        }
     }
 
     fn find_splice_for_level(
@@ -260,23 +279,9 @@ where
     fn get_height(&self) -> usize {
         self.height.load(Ordering::Relaxed)
     }
-
-    // Return whether the give key is less than the given node's key.
-    fn key_is_less_than_or_equal(&self, key: &[u8], n: *mut Node) -> bool {
-        if n.is_null() {
-            // take nullptr as +infinite large
-            true
-        } else {
-            let node_key = unsafe { (*n).key() };
-            match self.comparator.compare(key, node_key) {
-                CmpOrdering::Greater => false,
-                _ => true,
-            }
-        }
-    }
 }
 
-struct InlineSkiplistIterator<C, A>
+pub struct InlineSkiplistIterator<C, A>
 where
     C: Comparator,
     A: Arena,
@@ -290,6 +295,7 @@ where
     C: Comparator,
     A: Arena,
 {
+    #[inline]
     fn valid(&self) -> bool {
         !self.node.is_null()
     }
@@ -305,24 +311,36 @@ where
         }
     }
 
+    // find previous node
     fn prev(&mut self) {
-        unimplemented!()
+        assert!(self.valid());
+        let (node, _) = self.list.find_near(self.key(), true, false);
+        self.node = node;
     }
 
-    fn seek(&mut self, target: &[u8]) {
-        unimplemented!()
+    // find first node, key <= node.key
+    fn seek(&mut self, key: &[u8]) {
+        let (node, _) = self.list.find_near(key, false, true);
+        self.node = node;
     }
 
-    fn seek_for_prev(&mut self, target: &[u8]) {
-        unimplemented!()
+    // find last node, node.key <= key
+    fn seek_for_prev(&mut self, key: &[u8]) {
+        let (node, _) = self.list.find_near(key, true, true);
+        self.node = node;
     }
 
     fn seek_to_first(&mut self) {
-        unimplemented!()
+        unsafe {
+            self.node = (*self.list.head)
+                .next_nodes
+                .get_unchecked(0)
+                .load(Ordering::Acquire)
+        }
     }
 
     fn seek_to_last(&mut self) {
-        unimplemented!()
+        self.node = self.list.find_last();
     }
 }
 
@@ -331,7 +349,7 @@ where
     C: Comparator,
     A: Arena,
 {
-    fn new(list: Rc<InlineSkipList<C, A>>) -> Self {
+    pub(crate) fn new(list: Rc<InlineSkipList<C, A>>) -> Self {
         Self { list, node: null() }
     }
 }
@@ -342,4 +360,37 @@ fn random_height() -> usize {
         height += 1;
     }
     height
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::mem::arena::BlockArena;
+    use crate::mem::inlineskiplist::{InlineSkipList, InlineSkiplistIterator, Iterator};
+    use crate::BytewiseComparator;
+    use std::rc::Rc;
+
+    fn new_test_skl() -> InlineSkipList<BytewiseComparator, BlockArena> {
+        InlineSkipList::new(BytewiseComparator::default(), BlockArena::default())
+    }
+
+    #[test]
+    fn test_empty() {
+        let key = b"aaa";
+        let skl = new_test_skl();
+        for less in &[false, true] {
+            for allow_equal in &[false, true] {
+                let (node, found) = skl.find_near(key, *less, *allow_equal);
+                assert!(node.is_null());
+                assert!(!found);
+            }
+        }
+        let mut iterator = InlineSkiplistIterator::new(Rc::new(skl));
+        assert!(!iterator.valid());
+        iterator.seek_to_first();
+        assert!(!iterator.valid());
+        iterator.seek_to_last();
+        assert!(!iterator.valid());
+        iterator.seek(key);
+        assert!(!iterator.valid());
+    }
 }

@@ -19,9 +19,6 @@ pub mod arena;
 pub mod inlineskiplist;
 pub mod skiplist;
 
-#[cfg(test)]
-mod inlineskiplist_test;
-
 use crate::db::format::{InternalKeyComparator, LookupKey, ValueType, INTERNAL_KEY_TAIL};
 use crate::iterator::Iterator;
 use crate::mem::arena::{Arena, BlockArena};
