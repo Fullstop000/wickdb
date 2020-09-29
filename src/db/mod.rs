@@ -1905,8 +1905,7 @@ mod tests {
     // Test look up key with snapshot
     fn test_get_with_snapshot() {
         for t in default_cases() {
-            let keys = vec![String::from("foo"), "x".repeat(200)];
-            for key in keys {
+            for key in vec![String::from("foo"), "x".repeat(20)] {
                 t.assert_put_get(&key, "v1");
                 let s = t.db.snapshot();
                 t.put(&key, "v2").unwrap();
@@ -2974,7 +2973,7 @@ mod tests {
         store.count_random_reads = true;
         let mut opts = Options::<BytewiseComparator>::default();
         opts.logger_level = crate::LevelFilter::Debug;
-        opts.block_cache = Some(Arc::new(LRUCache::new(0, None)));
+        opts.block_cache = Some(Arc::new(LRUCache::new(0)));
         let db = WickDB::open_db(opts, "bloom_filter_test", store.clone()).unwrap();
         // Populate multiple layers
         let n = 10000;

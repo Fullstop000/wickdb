@@ -566,7 +566,7 @@ mod tests {
             builder.finish(false).unwrap();
             let file = storage.open(file_name)?;
             let file_len = file.len()?;
-            let table = Table::open(file, file_len, options, self.cmp)?;
+            let table = Table::open(file, 0, file_len, options, self.cmp)?;
             self.table = Some(Arc::new(table));
             Ok(())
         }

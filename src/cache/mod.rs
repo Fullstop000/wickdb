@@ -20,7 +20,6 @@ pub mod lru;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A `Cache` is an interface that maps keys to values.
 /// It has internal synchronization and may be safely accessed concurrently from
@@ -35,22 +34,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Clients may use their own implementations if
 /// they want something more sophisticated (like scan-resistance, a
 /// custom eviction policy, variable cache sizing, etc.)
-pub trait Cache<K, V> {
+pub trait Cache<K, V: Clone> {
     /// Insert a mapping from key->value into the cache and assign it
     /// the specified charge against the total cache capacity.
     fn insert(&self, key: K, value: V, charge: usize) -> Option<V>;
 
     /// If the cache has no mapping for `key`, returns `None`.
-    fn look_up<'a>(&'a self, key: &K) -> Option<&'a V>;
+    fn get(&self, key: &K) -> Option<V>;
 
     /// If the cache contains entry for key, erase it.
     fn erase(&self, key: &K);
-
-    /// Return a new numeric id.  May be used by multiple clients who are
-    /// sharing the same cache to partition the key space.  Typically the
-    /// client will allocate a new id at startup and prepend the id to
-    /// its cache keys.
-    fn new_id(&self) -> u64;
 
     /// Return an estimate of the combined charges of all elements stored in the
     /// cache.
@@ -58,19 +51,17 @@ pub trait Cache<K, V> {
 }
 
 /// A sharded cache container by key hash
-pub struct ShardedCache<K, V, C: Cache<K, V>> {
+pub struct ShardedCache<K, V: Clone, C: Cache<K, V>> {
     shards: Vec<C>,
-    sequence: AtomicU64,
     _k: PhantomData<K>,
     _v: PhantomData<V>,
 }
 
-impl<K: Hash + Eq, V, C: Cache<K, V>> ShardedCache<K, V, C> {
+impl<K: Hash + Eq, V: Clone, C: Cache<K, V>> ShardedCache<K, V, C> {
     /// Create a new `ShardedCache` with given shards
     pub fn new(shards: Vec<C>) -> Self {
         Self {
             shards,
-            sequence: AtomicU64::new(0),
             _k: PhantomData,
             _v: PhantomData,
         }
@@ -84,24 +75,20 @@ impl<K: Hash + Eq, V, C: Cache<K, V>> ShardedCache<K, V, C> {
     }
 }
 
-impl<K: Hash + Eq, V, C: Cache<K, V>> Cache<K, V> for ShardedCache<K, V, C> {
+impl<K: Hash + Eq, V: Clone, C: Cache<K, V>> Cache<K, V> for ShardedCache<K, V, C> {
     fn insert(&self, key: K, value: V, charge: usize) -> Option<V> {
         let idx = self.find_shard(&key);
         self.shards[idx].insert(key, value, charge)
     }
 
-    fn look_up<'a>(&'a self, key: &K) -> Option<&'a V> {
+    fn get(&self, key: &K) -> Option<V> {
         let idx = self.find_shard(key);
-        self.shards[idx].look_up(key)
+        self.shards[idx].get(key)
     }
 
     fn erase(&self, key: &K) {
         let idx = self.find_shard(key);
         self.shards[idx].erase(key)
-    }
-
-    fn new_id(&self) -> u64 {
-        self.sequence.fetch_add(1, Ordering::SeqCst)
     }
 
     fn total_charge(&self) -> usize {
@@ -113,12 +100,13 @@ impl<K: Hash + Eq, V, C: Cache<K, V>> Cache<K, V> for ShardedCache<K, V, C> {
 mod tests {
     use super::*;
     use lru::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
     use std::thread;
 
     fn new_test_lru_shards(n: usize) -> Vec<LRUCache<String, String>> {
         (0..n).into_iter().fold(vec![], |mut acc, _| {
-            acc.push(LRUCache::new(1 << 20, None));
+            acc.push(LRUCache::new(1 << 20));
             acc
         })
     }
@@ -157,7 +145,7 @@ mod tests {
             cache.total_charge()
         );
         for (k, v) in kv.lock().unwrap().clone() {
-            assert_eq!(cache.look_up(&k), Some(&v));
+            assert_eq!(cache.get(&k), Some(v));
         }
     }
 }
