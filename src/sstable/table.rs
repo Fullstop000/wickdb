@@ -37,11 +37,10 @@ use std::sync::Arc;
 /// without external synchronization.
 pub struct Table<F: File> {
     file: F,
+    file_number: u64,
     filter_reader: Option<FilterBlockReader>,
-    // None iff we fail to read meta block
     meta_block_handle: Option<BlockHandle>,
     index_block: Block,
-    // block cache handler
     block_cache: Option<Arc<dyn Cache<Vec<u8>, Arc<Block>>>>,
 }
 
@@ -53,6 +52,7 @@ impl<F: File> Table<F> {
     /// NOTE: `UC` for user comparator and `TC` for table comparator
     pub fn open<UC: Comparator, TC: Comparator>(
         file: F,
+        file_number: u64,
         file_len: u64,
         options: Arc<Options<UC>>,
         cmp: TC,
@@ -76,6 +76,7 @@ impl<F: File> Table<F> {
         let mut t = Self {
             block_cache: options.block_cache.clone(),
             file,
+            file_number,
             filter_reader: None,
             meta_block_handle: None,
             index_block,
@@ -114,8 +115,8 @@ impl<F: File> Table<F> {
         Ok(t)
     }
 
-    /// Converts an BlockHandle into an iterator over the contents of the corresponding block.
-    pub fn block_reader<CC: Comparator>(
+    // Converts an BlockHandle into an iterator over the contents of the corresponding block.
+    fn block_reader<CC: Comparator>(
         &self,
         cmp: CC,
         data_block_handle: BlockHandle,
@@ -123,7 +124,7 @@ impl<F: File> Table<F> {
     ) -> Result<BlockIterator<CC>> {
         let iter = if let Some(cache) = &self.block_cache {
             let mut cache_key_buffer = vec![0; 16];
-            // put_fixed_64(&mut cache_key_buffer, self.cache_id);
+            put_fixed_64(&mut cache_key_buffer, self.file_number);
             put_fixed_64(&mut cache_key_buffer, data_block_handle.offset);
             if let Some(b) = cache.get(&cache_key_buffer) {
                 b.iter(cmp)
@@ -638,7 +639,7 @@ mod tests {
         tb.finish(false).unwrap();
         let file = s.open("test").unwrap();
         let file_len = file.len().unwrap();
-        let table = Table::open(file, file_len, opt.clone(), cmp).unwrap();
+        let table = Table::open(file, 0, file_len, opt.clone(), cmp).unwrap();
         assert!(table.filter_reader.is_some());
         assert!(table.meta_block_handle.is_some());
     }
@@ -654,7 +655,7 @@ mod tests {
         let file = s.open("test").unwrap();
         let file_len = file.len().unwrap();
         let cmp = BytewiseComparator::default();
-        let table = Table::open(file, file_len, opt, cmp).unwrap();
+        let table = Table::open(file, 0, file_len, opt, cmp).unwrap();
         assert!(table.filter_reader.is_none());
         assert!(table.meta_block_handle.is_none()); // no filter block means no meta block
         let read_opt = ReadOptions::default();
@@ -719,7 +720,7 @@ mod tests {
         tb.finish(false).unwrap();
         let file = s.open("test").unwrap();
         let file_len = file.len().unwrap();
-        let table = Table::open(file, file_len, opt.clone(), cmp).unwrap();
+        let table = Table::open(file, 0, file_len, opt.clone(), cmp).unwrap();
         let read_opt = ReadOptions {
             verify_checksums: true,
             fill_cache: true,

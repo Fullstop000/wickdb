@@ -34,13 +34,13 @@ use std::marker::PhantomData;
 /// Clients may use their own implementations if
 /// they want something more sophisticated (like scan-resistance, a
 /// custom eviction policy, variable cache sizing, etc.)
-pub trait Cache<K, V> {
+pub trait Cache<K, V: Clone> {
     /// Insert a mapping from key->value into the cache and assign it
     /// the specified charge against the total cache capacity.
     fn insert(&self, key: K, value: V, charge: usize) -> Option<V>;
 
     /// If the cache has no mapping for `key`, returns `None`.
-    fn get<'a>(&'a self, key: &K) -> Option<&'a V>;
+    fn get(&self, key: &K) -> Option<V>;
 
     /// If the cache contains entry for key, erase it.
     fn erase(&self, key: &K);
@@ -51,13 +51,13 @@ pub trait Cache<K, V> {
 }
 
 /// A sharded cache container by key hash
-pub struct ShardedCache<K, V, C: Cache<K, V>> {
+pub struct ShardedCache<K, V: Clone, C: Cache<K, V>> {
     shards: Vec<C>,
     _k: PhantomData<K>,
     _v: PhantomData<V>,
 }
 
-impl<K: Hash + Eq, V, C: Cache<K, V>> ShardedCache<K, V, C> {
+impl<K: Hash + Eq, V: Clone, C: Cache<K, V>> ShardedCache<K, V, C> {
     /// Create a new `ShardedCache` with given shards
     pub fn new(shards: Vec<C>) -> Self {
         Self {
@@ -75,13 +75,13 @@ impl<K: Hash + Eq, V, C: Cache<K, V>> ShardedCache<K, V, C> {
     }
 }
 
-impl<K: Hash + Eq, V, C: Cache<K, V>> Cache<K, V> for ShardedCache<K, V, C> {
+impl<K: Hash + Eq, V: Clone, C: Cache<K, V>> Cache<K, V> for ShardedCache<K, V, C> {
     fn insert(&self, key: K, value: V, charge: usize) -> Option<V> {
         let idx = self.find_shard(&key);
         self.shards[idx].insert(key, value, charge)
     }
 
-    fn get<'a>(&'a self, key: &K) -> Option<&'a V> {
+    fn get(&self, key: &K) -> Option<V> {
         let idx = self.find_shard(key);
         self.shards[idx].get(key)
     }
@@ -145,7 +145,7 @@ mod tests {
             cache.total_charge()
         );
         for (k, v) in kv.lock().unwrap().clone() {
-            assert_eq!(cache.get(&k), Some(&v));
+            assert_eq!(cache.get(&k), Some(v));
         }
     }
 }

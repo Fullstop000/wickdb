@@ -1905,8 +1905,7 @@ mod tests {
     // Test look up key with snapshot
     fn test_get_with_snapshot() {
         for t in default_cases() {
-            let keys = vec![String::from("foo"), "x".repeat(200)];
-            for key in keys {
+            for key in vec![String::from("foo"), "x".repeat(20)] {
                 t.assert_put_get(&key, "v1");
                 let s = t.db.snapshot();
                 t.put(&key, "v2").unwrap();

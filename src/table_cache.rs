@@ -23,7 +23,6 @@ use crate::sstable::block::BlockIterator;
 use crate::sstable::table::{new_table_iterator, Table, TableIterator};
 use crate::storage::Storage;
 use crate::util::comparator::Comparator;
-use crate::util::varint::VarintU64;
 use crate::Result;
 use std::sync::Arc;
 
@@ -32,13 +31,13 @@ pub struct TableCache<S: Storage + Clone, C: Comparator> {
     storage: S,
     db_name: &'static str,
     options: Arc<Options<C>>,
-    // the key of cache is the file number
-    cache: Arc<dyn Cache<Vec<u8>, Arc<Table<S::F>>>>,
+    // the key is the file number
+    cache: Arc<dyn Cache<u64, Arc<Table<S::F>>>>,
 }
 
 impl<S: Storage + Clone, C: Comparator + 'static> TableCache<S, C> {
     pub fn new(db_name: &'static str, options: Arc<Options<C>>, size: usize, storage: S) -> Self {
-        let cache = Arc::new(LRUCache::<Vec<u8>, Arc<Table<S::F>>>::new(size));
+        let cache = Arc::new(LRUCache::<u64, Arc<Table<S::F>>>::new(size));
         Self {
             storage,
             db_name,
@@ -54,16 +53,20 @@ impl<S: Storage + Clone, C: Comparator + 'static> TableCache<S, C> {
         file_number: u64,
         file_size: u64,
     ) -> Result<Arc<Table<S::F>>> {
-        let mut key = vec![];
-        VarintU64::put_varint(&mut key, file_number);
-        match self.cache.get(&key) {
-            Some(v) => Ok(v.clone()),
+        match self.cache.get(&file_number) {
+            Some(v) => Ok(v),
             None => {
                 let filename = generate_filename(self.db_name, FileType::Table, file_number);
                 let table_file = self.storage.open(filename.as_str())?;
-                let table = Table::open(table_file, file_size, self.options.clone(), cmp)?;
+                let table = Table::open(
+                    table_file,
+                    file_number,
+                    file_size,
+                    self.options.clone(),
+                    cmp,
+                )?;
                 let value = Arc::new(table);
-                let _ = self.cache.insert(key, value.clone(), 1);
+                let _ = self.cache.insert(file_number, value.clone(), 1);
                 Ok(value)
             }
         }
@@ -71,9 +74,7 @@ impl<S: Storage + Clone, C: Comparator + 'static> TableCache<S, C> {
 
     /// Evict any entry for the specified file number
     pub fn evict(&self, file_number: u64) {
-        let mut key = vec![];
-        VarintU64::put_varint(&mut key, file_number);
-        self.cache.erase(&key);
+        self.cache.erase(&file_number);
     }
 
     /// Returns the result of a seek to internal key `key` in specified file

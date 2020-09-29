@@ -17,6 +17,7 @@
 
 use crate::cache::Cache;
 use crate::util::collection::HashMap;
+use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::mem;
 use std::mem::MaybeUninit;
@@ -49,18 +50,17 @@ impl<K> Default for Key<K> {
     }
 }
 
-/// Exact node in the `LRUCache`
-pub struct LRUHandle<K, V> {
+struct LRUEntry<K, V> {
     key: MaybeUninit<K>,
     value: MaybeUninit<V>,
-    prev: *mut LRUHandle<K, V>,
-    next: *mut LRUHandle<K, V>,
+    prev: *mut LRUEntry<K, V>,
+    next: *mut LRUEntry<K, V>,
     charge: usize,
 }
 
-impl<K, V> LRUHandle<K, V> {
+impl<K, V> LRUEntry<K, V> {
     fn new(key: K, value: V, charge: usize) -> Self {
-        LRUHandle {
+        LRUEntry {
             key: MaybeUninit::new(key),
             value: MaybeUninit::new(value),
             charge,
@@ -69,7 +69,7 @@ impl<K, V> LRUHandle<K, V> {
         }
     }
     fn new_empty() -> Self {
-        LRUHandle {
+        LRUEntry {
             key: MaybeUninit::uninit(),
             value: MaybeUninit::uninit(),
             charge: 0,
@@ -80,7 +80,7 @@ impl<K, V> LRUHandle<K, V> {
 }
 
 /// LRU cache implementation
-pub struct LRUCache<K, V> {
+pub struct LRUCache<K, V: Clone> {
     // The capacity of LRU
     capacity: usize,
     inner: Mutex<LRUInner<K, V>>,
@@ -91,21 +91,21 @@ pub struct LRUCache<K, V> {
 }
 
 struct LRUInner<K, V> {
-    table: HashMap<Key<K>, Box<LRUHandle<K, V>>>,
+    table: HashMap<Key<K>, Box<LRUEntry<K, V>>>,
     // head.next is the newest entry
-    head: *mut LRUHandle<K, V>,
-    tail: *mut LRUHandle<K, V>,
+    head: *mut LRUEntry<K, V>,
+    tail: *mut LRUEntry<K, V>,
 }
 
 impl<K, V> LRUInner<K, V> {
-    fn detach(&mut self, n: *mut LRUHandle<K, V>) {
+    fn detach(&mut self, n: *mut LRUEntry<K, V>) {
         unsafe {
             (*(*n).next).prev = (*n).prev;
             (*(*n).prev).next = (*n).next;
         }
     }
 
-    fn attach(&mut self, n: *mut LRUHandle<K, V>) {
+    fn attach(&mut self, n: *mut LRUEntry<K, V>) {
         unsafe {
             (*n).next = (*self.head).next;
             (*n).prev = self.head;
@@ -115,13 +115,12 @@ impl<K, V> LRUInner<K, V> {
     }
 }
 
-impl<K: Hash + Eq, V> LRUCache<K, V> {
+impl<K: Hash + Eq, V: Clone> LRUCache<K, V> {
     pub fn new(cap: usize) -> Self {
         let l = LRUInner {
-            // lru: Self::create_dummy_node(),
             table: HashMap::default(),
-            head: Box::into_raw(Box::new(LRUHandle::new_empty())),
-            tail: Box::into_raw(Box::new(LRUHandle::new_empty())),
+            head: Box::into_raw(Box::new(LRUEntry::new_empty())),
+            tail: Box::into_raw(Box::new(LRUEntry::new_empty())),
         };
 
         unsafe {
@@ -138,7 +137,7 @@ impl<K: Hash + Eq, V> LRUCache<K, V> {
     }
 }
 
-impl<K: Hash + Eq, V> Cache<K, V> for LRUCache<K, V> {
+impl<K: Hash + Eq + Debug, V: Clone> Cache<K, V> for LRUCache<K, V> {
     fn insert(&self, key: K, mut value: V, charge: usize) -> Option<V> {
         let mut l = self.inner.lock().unwrap();
         if self.capacity > 0 {
@@ -146,10 +145,9 @@ impl<K: Hash + Eq, V> Cache<K, V> for LRUCache<K, V> {
                 k: &key as *const K,
             }) {
                 Some(h) => {
-                    let old_p = h as *mut Box<LRUHandle<K, V>>;
-                    // swap the value and move handle to the head
+                    let old_p = h as *mut Box<LRUEntry<K, V>>;
                     unsafe { mem::swap(&mut value, &mut (*(*old_p).value.as_mut_ptr())) };
-                    let p: *mut LRUHandle<K, V> = h.as_mut();
+                    let p: *mut LRUEntry<K, V> = h.as_mut();
                     l.detach(p);
                     l.attach(p);
                     if let Some(hk) = &self.evict_hook {
@@ -179,7 +177,7 @@ impl<K: Hash + Eq, V> Cache<K, V> for LRUCache<K, V> {
                             l.detach(n.as_mut());
                             n
                         } else {
-                            Box::new(LRUHandle::new(key, value, charge))
+                            Box::new(LRUEntry::new(key, value, charge))
                         }
                     };
                     self.usage.fetch_add(charge, Ordering::Relaxed);
@@ -198,14 +196,14 @@ impl<K: Hash + Eq, V> Cache<K, V> for LRUCache<K, V> {
         }
     }
 
-    fn get<'a>(&'a self, key: &K) -> Option<&'a V> {
+    fn get(&self, key: &K) -> Option<V> {
         let k = Key { k: key as *const K };
         let mut l = self.inner.lock().unwrap();
         if let Some(node) = l.table.get_mut(&k) {
-            let p = node.as_mut() as *mut LRUHandle<K, V>;
+            let p = node.as_mut() as *mut LRUEntry<K, V>;
             l.detach(p);
             l.attach(p);
-            Some(unsafe { &(*(*p).value.as_ptr()) as &V })
+            Some(unsafe { (*(*p).value.as_ptr()).clone() })
         } else {
             None
         }
@@ -214,10 +212,9 @@ impl<K: Hash + Eq, V> Cache<K, V> for LRUCache<K, V> {
     fn erase(&self, key: &K) {
         let k = Key { k: key as *const K };
         let mut l = self.inner.lock().unwrap();
-        // remove the key in hashtable
         if let Some(mut n) = l.table.remove(&k) {
             self.usage.fetch_sub(n.charge, Ordering::SeqCst);
-            l.detach(n.as_mut() as *mut LRUHandle<K, V>);
+            l.detach(n.as_mut() as *mut LRUEntry<K, V>);
             unsafe {
                 if let Some(cb) = &self.evict_hook {
                     cb(key, &(*n.value.as_ptr()));
@@ -232,7 +229,7 @@ impl<K: Hash + Eq, V> Cache<K, V> for LRUCache<K, V> {
     }
 }
 
-impl<K, V> Drop for LRUCache<K, V> {
+impl<K, V: Clone> Drop for LRUCache<K, V> {
     fn drop(&mut self) {
         let mut l = self.inner.lock().unwrap();
         (*l).table.values_mut().for_each(|e| unsafe {
@@ -246,8 +243,8 @@ impl<K, V> Drop for LRUCache<K, V> {
     }
 }
 
-unsafe impl<K: Send, V: Send> Send for LRUCache<K, V> {}
-unsafe impl<K: Sync, V: Sync> Sync for LRUCache<K, V> {}
+unsafe impl<K: Send, V: Send + Clone> Send for LRUCache<K, V> {}
+unsafe impl<K: Sync, V: Sync + Clone> Sync for LRUCache<K, V> {}
 
 #[cfg(test)]
 mod tests {
@@ -274,7 +271,7 @@ mod tests {
         }
 
         fn get(&self, key: u32) -> Option<u32> {
-            self.cache.get(&key).and_then(|v| Some(*v))
+            self.cache.get(&key)
         }
 
         fn insert(&self, key: u32, value: u32) {
@@ -293,9 +290,9 @@ mod tests {
             assert_eq!((key, val), self.deleted_kv.borrow()[index]);
         }
 
-        fn assert_get(&self, key: u32, want: u32) -> &u32 {
+        fn assert_get(&self, key: u32, want: u32) -> u32 {
             let h = self.cache.get(&key).unwrap();
-            assert_eq!(want, *h);
+            assert_eq!(want, h);
             h
         }
     }
@@ -349,20 +346,22 @@ mod tests {
         let cache = CacheTest::new(CACHE_SIZE);
         cache.insert(100, 101);
         let v1 = cache.assert_get(100, 101);
-        assert_eq!(*v1, 101);
+        assert_eq!(v1, 101);
         cache.insert(100, 102);
         let v2 = cache.assert_get(100, 102);
         assert_eq!(1, cache.deleted_kv.borrow().len());
         cache.assert_deleted_kv(0, (100, 101));
-        assert_eq!(*v1, 102);
-        assert_eq!(*v2, 102);
+        assert_eq!(v1, 101);
+        assert_eq!(v2, 102);
 
         cache.erase(100);
-        assert_eq!(*v1, 102);
-        assert_eq!(*v2, 102);
+        assert_eq!(v1, 101);
+        assert_eq!(v2, 102);
         assert_eq!(None, cache.get(100));
-        assert_eq!(2, cache.deleted_kv.borrow().len());
-        cache.assert_deleted_kv(1, (100, 102));
+        assert_eq!(
+            vec![(100, 101), (100, 102)],
+            cache.deleted_kv.borrow().clone()
+        );
     }
 
     #[test]
