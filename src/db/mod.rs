@@ -480,12 +480,17 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
             background_work_finished_signal: Condvar::new(),
             background_compaction_scheduled: AtomicBool::new(false),
             do_compaction: crossbeam_channel::unbounded(),
-            mem: ShardedLock::new(MemTable::new(icmp)),
+            mem: ShardedLock::new(MemTable::new(icmp, o.arena_size())),
             im_mem: ShardedLock::new(None),
             bg_error: RwLock::new(None),
             is_shutting_down: AtomicBool::new(false),
         }
     }
+
+    fn new_mem_table(&self) -> MemTable<C> {
+        MemTable::new(self.internal_comparator.clone(), self.options.arena_size())
+    }
+
     fn snapshot(&self) -> Arc<Snapshot> {
         self.versions.lock().unwrap().new_snapshot()
     }
@@ -692,7 +697,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                 return Err(Error::Corruption("log record too small".to_owned()));
             }
             if mem.is_none() {
-                mem = Some(MemTable::new(self.internal_comparator.clone()))
+                mem = Some(self.new_mem_table())
             }
             let mem_ref = mem.as_ref().unwrap();
             batch.set_contents(&mut record_buf);
@@ -736,7 +741,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                 *self.mem.write().unwrap() = m;
                 mem = None;
             } else {
-                *self.mem.write().unwrap() = MemTable::new(self.internal_comparator.clone());
+                *self.mem.write().unwrap() = self.new_mem_table();
             }
         }
         if let Some(m) = &mem {
@@ -909,10 +914,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                 {
                     let mut mem = self.mem.write().unwrap();
                     if mem.count() > 0 {
-                        let memtable = mem::replace(
-                            &mut *mem,
-                            MemTable::new(self.internal_comparator.clone()),
-                        );
+                        let memtable = mem::replace(&mut *mem, self.new_mem_table());
                         let mut im_mem = self.im_mem.write().unwrap();
                         *im_mem = Some(memtable);
                     }

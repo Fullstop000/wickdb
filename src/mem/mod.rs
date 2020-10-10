@@ -20,14 +20,12 @@ pub mod skiplist;
 
 use crate::db::format::{InternalKeyComparator, LookupKey, ValueType, INTERNAL_KEY_TAIL};
 use crate::iterator::Iterator;
-use crate::mem::arena::{Arena, BlockArena};
 use crate::mem::skiplist::{Skiplist, SkiplistIterator};
 use crate::util::coding::{decode_fixed_64, put_fixed_64};
 use crate::util::comparator::Comparator;
 use crate::util::varint::VarintU32;
 use crate::{Error, Result};
 use std::cmp::Ordering;
-use std::rc::Rc;
 
 // KeyComparator is a wrapper for InternalKeyComparator. It will convert the input mem key
 // to the internal key before comparing.
@@ -68,22 +66,21 @@ impl<C: Comparator> Comparator for KeyComparator<C> {
 /// In-memory write buffer
 pub struct MemTable<C: Comparator> {
     cmp: KeyComparator<C>,
-    table: Rc<Skiplist<KeyComparator<C>, BlockArena>>,
+    table: Skiplist<KeyComparator<C>>,
 }
 
 impl<C: Comparator> MemTable<C> {
     /// Creates a new memory table
-    pub fn new(icmp: InternalKeyComparator<C>) -> Self {
-        let arena = BlockArena::default();
+    pub fn new(icmp: InternalKeyComparator<C>, table_size: usize) -> Self {
         let kcmp = KeyComparator { icmp };
-        let table = Rc::new(Skiplist::new(kcmp.clone(), arena));
+        let table = Skiplist::new(kcmp.clone(), table_size);
         Self { cmp: kcmp, table }
     }
 
     /// Returns an estimate of the number of bytes of data in use by this
     /// data structure. It is safe to call when MemTable is being modified.
     pub fn approximate_memory_usage(&self) -> usize {
-        self.table.arena.memory_used()
+        self.table.memory_used()
     }
 
     /// Creates a new `MemTableIterator`
@@ -168,13 +165,13 @@ impl<C: Comparator> MemTable<C> {
 }
 
 pub struct MemTableIterator<C: Comparator> {
-    iter: SkiplistIterator<KeyComparator<C>, BlockArena>,
+    iter: SkiplistIterator<KeyComparator<C>>,
     // Tmp buffer for encoding `InternalKey` to `LookupKey` when call `seek`
     tmp: Vec<u8>,
 }
 
 impl<C: Comparator> MemTableIterator<C> {
-    pub fn new(table: Rc<Skiplist<KeyComparator<C>, BlockArena>>) -> Self {
+    pub fn new(table: Skiplist<KeyComparator<C>>) -> Self {
         let iter = SkiplistIterator::new(table);
         Self { iter, tmp: vec![] }
     }
@@ -244,7 +241,7 @@ mod tests {
 
     fn new_mem_table() -> MemTable<BytewiseComparator> {
         let icmp = InternalKeyComparator::new(BytewiseComparator::default());
-        MemTable::new(icmp)
+        MemTable::new(icmp, 100000)
     }
 
     fn add_test_data_set(memtable: &MemTable<BytewiseComparator>) -> Vec<(&str, &str)> {

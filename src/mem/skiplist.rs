@@ -18,45 +18,46 @@
 use super::arena::*;
 use crate::iterator::Iterator;
 use crate::util::comparator::Comparator;
-use crate::util::slice::Slice;
 use crate::Result;
+use bytes::Bytes;
 use rand::random;
 use std::cmp::Ordering as CmpOrdering;
-use std::intrinsics::copy_nonoverlapping;
 use std::mem;
 use std::ptr;
-use std::rc::Rc;
+use std::ptr::NonNull;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use std::sync::Arc;
 
 const BRANCHING: u32 = 4;
 pub const MAX_HEIGHT: usize = 12;
 
-#[derive(Debug)]
-#[repr(C)]
 // Node represents a skiplist node.
 //
 // This struct is marked with `repr(C)` so that the specific order of fields is enforced.
+#[derive(Debug)]
+#[repr(C)]
 struct Node {
     // The pointer and length pointing to the memory location
-    key: Slice,
+    key: Bytes,
     height: usize,
     // The inner size of `next_nodes` is equal to `height`
     next_nodes: [AtomicPtr<Node>; 0],
 }
 
 impl Node {
-    // Allocates memory in the given arena for `Node`.
-    #[allow(clippy::cast_ptr_alignment)]
-    fn new<A: Arena>(key_ptr: Slice, height: usize, arena: &A) -> *const Self {
-        let pointers_size = height * mem::size_of::<AtomicPtr<Self>>();
-        let size = mem::size_of::<Self>() + pointers_size;
-        let p = arena.allocate_aligned(size) as *const Self as *mut Self;
+    // Allocates memory in the given arena for `Node`. Returns the pointer offset of allocated node
+    fn alloc(key: Bytes, height: usize, arena: &ArenaV2) -> usize {
+        // let pointers_size = height * mem::size_of::<AtomicPtr<Self>>();
+        let size = mem::size_of::<Self>();
+        let align = mem::align_of::<Self>();
+        let offset = arena.alloc(align, size);
         unsafe {
-            ptr::write(&mut (*p).key, key_ptr);
+            let p: *mut Node = arena.get_mut(offset);
+            ptr::write(&mut (*p).key, key);
             ptr::write(&mut (*p).height, height);
             ptr::write_bytes(&mut (*p).next_nodes, 0, height);
-            p as *const Self
         }
+        offset
     }
 
     #[inline]
@@ -79,37 +80,70 @@ impl Node {
 
     #[inline]
     fn key(&self) -> &[u8] {
-        self.key.as_slice()
+        self.key.as_ref()
     }
 }
 
 /// A skiplist with a memory based arena. The skiplist
 /// should be thread safe for reading
-pub struct Skiplist<C: Comparator, A: Arena> {
-    // current max height
-    // Should be handled atomically
+struct SkiplistInner {
     max_height: AtomicUsize,
-    // head node
-    head: *const Node,
-    // arena contains all the nodes data
-    pub(super) arena: A,
-    // comparator is used to compare the key of node
-    comparator: C,
+    head: NonNull<Node>,
+    arena: ArenaV2,
     count: AtomicUsize,
 }
 
-impl<C: Comparator, A: Arena> Skiplist<C, A> {
-    /// Create a new Skiplist with the given arena capacity
-    pub fn new(cmp: C, arena: A) -> Self {
-        let head = Node::new(Slice::default(), MAX_HEIGHT, &arena);
-        Skiplist {
-            comparator: cmp,
-            // init height is 1 ( ignore the height of head )
-            max_height: AtomicUsize::new(1),
-            arena,
-            head,
-            count: AtomicUsize::new(0),
+impl Drop for SkiplistInner {
+    fn drop(&mut self) {
+        let mut node = self.head.as_ptr();
+        loop {
+            let next = unsafe { (&*node).get_next(1) };
+            if !next.is_null() {
+                unsafe {
+                    ptr::drop_in_place(node);
+                }
+                node = next;
+                continue;
+            }
+            unsafe { ptr::drop_in_place(node) };
+            return;
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct Skiplist<C: Comparator> {
+    inner: Arc<SkiplistInner>,
+    comparator: C,
+}
+
+unsafe impl<C: Comparator> Send for Skiplist<C> {}
+unsafe impl<C: Comparator> Sync for Skiplist<C> {}
+
+impl<C: Comparator> Skiplist<C> {
+    /// Create a new Skiplist with the given arena capacity
+    pub fn new(cmp: C, cap: usize) -> Self {
+        let arena = ArenaV2::with_capacity(cap);
+        let offset = Node::alloc(Bytes::new(), MAX_HEIGHT, &arena);
+        unsafe {
+            let ptr: *mut Node = arena.get_mut(offset);
+            let head = NonNull::new_unchecked(ptr);
+            Skiplist {
+                inner: Arc::new(SkiplistInner {
+                    // init height is 1 ( ignore the height of head )
+                    max_height: AtomicUsize::new(1),
+                    arena,
+                    head,
+                    count: AtomicUsize::new(0),
+                }),
+                comparator: cmp,
+            }
+        }
+    }
+
+    #[inline]
+    pub fn memory_used(&self) -> usize {
+        self.inner.arena.len()
     }
 
     /// Insert the given key as a node into the skiplist.
@@ -134,34 +168,30 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
             }
         }
         let height = rand_height();
-        let max_height = self.max_height.load(Ordering::Acquire);
+        let max_height = self.inner.max_height.load(Ordering::Acquire);
         if height > max_height {
-            #[allow(clippy::needless_range_loop)]
+            // #[allow(clippy::needless_range_loop)]
             for i in max_height..height {
-                prev[i] = self.head;
+                prev[i] = self.inner.head.as_ptr();
             }
-            self.max_height.store(height, Ordering::Release);
-        }
-        // allocate the key
-        let k = self.arena.allocate(key.len());
-        unsafe {
-            copy_nonoverlapping(key.as_ptr(), k, key.len());
+            self.inner.max_height.store(height, Ordering::Release);
         }
         // allocate the node
-        let new_node = Node::new(Slice::new(k, key.len()), height, &self.arena);
+        let offset = Node::alloc(Bytes::copy_from_slice(key), height, &self.inner.arena);
         unsafe {
+            let new_node = self.inner.arena.get_mut::<Node>(offset);
             for i in 1..=height {
                 (*new_node).set_next(i, (*(prev[i - 1])).get_next(i));
-                (*(prev[i - 1])).set_next(i, new_node as *mut Node);
+                (*(prev[i - 1])).set_next(i, new_node);
             }
         }
-        self.count.fetch_add(1, Ordering::Release);
+        self.inner.count.fetch_add(1, Ordering::Release);
     }
 
     /// Returns current elements count
     #[inline]
     pub fn count(&self) -> usize {
-        self.count.load(Ordering::Acquire)
+        self.inner.count.load(Ordering::Acquire)
     }
 
     // Find the nearest node with a key >= the given key.
@@ -172,8 +202,8 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
         key: &[u8],
         mut prev_nodes: Option<&mut [*const Node]>,
     ) -> *mut Node {
-        let mut level = self.max_height.load(Ordering::Acquire);
-        let mut node = self.head;
+        let mut level = self.inner.max_height.load(Ordering::Acquire);
+        let mut node = self.inner.head.as_ptr();
         loop {
             unsafe {
                 let next = (*node).get_next(level);
@@ -200,8 +230,8 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
     // Find the nearest node with a key < the given key.
     // Return head if there is no such node.
     fn find_less_than(&self, key: &[u8]) -> *const Node {
-        let mut level = self.max_height.load(Ordering::Acquire);
-        let mut node = self.head;
+        let mut level = self.inner.max_height.load(Ordering::Acquire);
+        let mut node = self.inner.head.as_ptr();
         loop {
             unsafe {
                 let next = (*node).get_next(level);
@@ -226,8 +256,8 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
 
     // Find the last node
     fn find_last(&self) -> *const Node {
-        let mut level = self.max_height.load(Ordering::Acquire);
-        let mut node = self.head;
+        let mut level = self.inner.max_height.load(Ordering::Acquire);
+        let mut node = self.inner.head.as_ptr();
         loop {
             unsafe {
                 let next = (*node).get_next(level);
@@ -244,7 +274,7 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
         }
     }
 
-    /// Return whether the give key is less than the given node's key.
+    // Return whether the give key is less than the given node's key.
     fn key_is_less_than_or_equal(&self, key: &[u8], n: *const Node) -> bool {
         if n.is_null() {
             // take nullptr as +infinite large
@@ -260,12 +290,12 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
 }
 
 /// Iteration over the contents of a skip list
-pub struct SkiplistIterator<C: Comparator, A: Arena> {
-    skl: Rc<Skiplist<C, A>>,
+pub struct SkiplistIterator<C: Comparator> {
+    skl: Skiplist<C>,
     node: *const Node,
 }
 
-impl<C: Comparator, A: Arena> Iterator for SkiplistIterator<C, A> {
+impl<C: Comparator> Iterator for SkiplistIterator<C> {
     /// Returns true whether the iterator is positioned at a valid node
     #[inline]
     fn valid(&self) -> bool {
@@ -276,10 +306,7 @@ impl<C: Comparator, A: Arena> Iterator for SkiplistIterator<C, A> {
     #[inline]
     fn seek_to_first(&mut self) {
         unsafe {
-            self.node = (*self.skl.head)
-                .next_nodes
-                .get_unchecked(0)
-                .load(Ordering::Acquire);
+            self.node = (&*self.skl.inner.head.as_ptr()).get_next(1);
         }
     }
 
@@ -287,7 +314,7 @@ impl<C: Comparator, A: Arena> Iterator for SkiplistIterator<C, A> {
     #[inline]
     fn seek_to_last(&mut self) {
         self.node = self.skl.find_last();
-        if self.node == self.skl.head {
+        if self.node == self.skl.inner.head.as_ptr() {
             self.node = ptr::null();
         }
     }
@@ -313,7 +340,7 @@ impl<C: Comparator, A: Arena> Iterator for SkiplistIterator<C, A> {
         self.panic_valid();
         let key = self.key();
         self.node = self.skl.find_less_than(key);
-        if self.node == self.skl.head {
+        if self.node == self.skl.inner.head.as_ptr() {
             self.node = ptr::null_mut();
         }
     }
@@ -335,8 +362,8 @@ impl<C: Comparator, A: Arena> Iterator for SkiplistIterator<C, A> {
     }
 }
 
-impl<C: Comparator, A: Arena> SkiplistIterator<C, A> {
-    pub fn new(skl: Rc<Skiplist<C, A>>) -> Self {
+impl<C: Comparator> SkiplistIterator<C> {
+    pub fn new(skl: Skiplist<C>) -> Self {
         Self {
             skl,
             node: ptr::null_mut(),
@@ -379,37 +406,50 @@ mod tests {
     use std::sync::{Arc, Condvar, Mutex};
     use std::{ptr, thread};
 
-    fn new_test_skl() -> Skiplist<BytewiseComparator, BlockArena> {
-        Skiplist::new(BytewiseComparator::default(), BlockArena::default())
+    fn new_test_skl() -> Skiplist<BytewiseComparator> {
+        Skiplist::new(BytewiseComparator::default(), 1000)
     }
 
-    fn construct_skl_from_nodes(
-        nodes: Vec<(Slice, usize)>,
-    ) -> Skiplist<BytewiseComparator, BlockArena> {
+    fn construct_skl_from_nodes(nodes: Vec<(&str, usize)>) -> Skiplist<BytewiseComparator> {
         if nodes.is_empty() {
             return new_test_skl();
         }
-        let mut skl = new_test_skl();
+        let skl = new_test_skl();
         // just use MAX_HEIGHT as capacity because it's the largest value that node.height can have
-        let mut prev_nodes = vec![skl.head; MAX_HEIGHT];
+        let mut prev_nodes = vec![skl.inner.head.as_ptr(); MAX_HEIGHT];
         let mut max_height = 1;
         for (key, height) in nodes {
-            let n = Node::new(key, height, &mut skl.arena);
+            let n = Node::alloc(
+                Bytes::copy_from_slice(key.as_bytes()),
+                height,
+                &skl.inner.arena,
+            );
+            let p = unsafe { skl.inner.arena.get_mut::<Node>(n) };
             for (h, prev_node) in prev_nodes[0..height].iter().enumerate() {
                 unsafe {
-                    (**prev_node).set_next(h + 1, n as *mut Node);
+                    (**prev_node).set_next(h + 1, p);
                 }
             }
             for i in 0..height {
-                prev_nodes[i] = n;
+                prev_nodes[i] = p;
             }
             if height > max_height {
                 max_height = height;
             }
         }
         // must update max_height
-        skl.max_height.store(max_height, Ordering::Release);
+        skl.inner.max_height.store(max_height, Ordering::Release);
         skl
+    }
+
+    #[test]
+    fn test_node_alloc() {
+        let a = ArenaV2::with_capacity(100000);
+        let offset = Node::alloc(Bytes::from("123"), MAX_HEIGHT, &a);
+        unsafe {
+            let p = a.get_mut::<Node>(offset);
+            assert_eq!(Bytes::from("123"), (*p).key)
+        }
     }
 
     #[test]
@@ -434,7 +474,8 @@ mod tests {
         assert_eq!(true, skl.key_is_less_than_or_equal(&key, ptr::null_mut()));
 
         for (node_key, expected) in tests {
-            let node = Node::new((&node_key).into(), 1, &skl.arena);
+            let offset = Node::alloc(node_key.into(), 1, &skl.inner.arena);
+            let node = unsafe { skl.inner.arena.get_mut::<Node>(offset) };
             assert_eq!(expected, skl.key_is_less_than_or_equal(&key, node))
         }
     }
@@ -448,11 +489,7 @@ mod tests {
             ("key7", 4),
             ("key9", 3),
         ];
-        let nodes: Vec<(Slice, usize)> = inputs
-            .iter()
-            .map(|(key, height)| (Slice::from(*key), *height))
-            .collect();
-        let skl = construct_skl_from_nodes(nodes);
+        let skl = construct_skl_from_nodes(inputs);
         let mut prev_nodes = vec![ptr::null(); 5];
         // test the scenario for un-inserted key
         let res = skl.find_greater_or_equal("key4".as_bytes(), Some(&mut prev_nodes));
@@ -486,11 +523,7 @@ mod tests {
             ("key7", 4),
             ("key9", 3),
         ];
-        let nodes: Vec<(Slice, usize)> = inputs
-            .iter()
-            .map(|(key, height)| (Slice::from(*key), *height))
-            .collect();
-        let skl = construct_skl_from_nodes(nodes);
+        let skl = construct_skl_from_nodes(inputs);
 
         // test scenario for un-inserted key
         let res = skl.find_less_than("key4".as_bytes());
@@ -514,11 +547,7 @@ mod tests {
             ("key7", 4),
             ("key9", 3),
         ];
-        let nodes: Vec<(Slice, usize)> = inputs
-            .iter()
-            .map(|(key, height)| (Slice::from(*key), *height))
-            .collect();
-        let skl = construct_skl_from_nodes(nodes);
+        let skl = construct_skl_from_nodes(inputs);
         let last = skl.find_last();
         unsafe {
             assert_eq!((*last).key(), "key9".as_bytes());
@@ -527,24 +556,26 @@ mod tests {
 
     #[test]
     fn test_insert() {
-        let inputs = vec!["key1", "key3", "key5", "key7", "key9"];
+        let inputs = vec![b"key1", b"key3", b"key5", b"key7", b"key9"];
         let skl = new_test_skl();
+        println!("before insert");
         for key in inputs.clone() {
-            skl.insert(key.as_bytes());
+            skl.insert(key);
         }
+        println!("after insert");
 
-        let mut node = skl.head;
+        let mut node = skl.inner.head.as_ptr();
         for input_key in inputs {
             unsafe {
-                let next = (*node).get_next(1);
+                let next = (&*node).get_next(1);
                 let key = (*next).key();
-                assert_eq!(key, input_key.as_bytes());
+                assert_eq!(key, input_key);
                 node = next;
             }
         }
         unsafe {
             // should be the last node
-            assert_eq!((*node).get_next(1), ptr::null_mut());
+            assert_eq!((&*node).get_next(1), ptr::null_mut());
         }
     }
 
@@ -561,7 +592,7 @@ mod tests {
     #[test]
     fn test_empty_skiplist_iterator() {
         let skl = new_test_skl();
-        let iter = SkiplistIterator::new(Rc::new(skl));
+        let iter = SkiplistIterator::new(skl);
         assert!(!iter.valid());
     }
 
@@ -573,7 +604,7 @@ mod tests {
         for key in inputs.clone() {
             skl.insert(key.as_bytes())
         }
-        let mut iter = SkiplistIterator::new(Rc::new(skl));
+        let mut iter = SkiplistIterator::new(skl);
         assert_eq!(ptr::null(), iter.node);
 
         iter.seek_to_first();
@@ -620,15 +651,12 @@ mod tests {
 
     impl State {
         fn new() -> Self {
-            let mut generation = [
+            let generation = [
                 AtomicUsize::new(0),
                 AtomicUsize::new(0),
                 AtomicUsize::new(0),
                 AtomicUsize::new(0),
             ];
-            for i in 0..K {
-                generation[i] = AtomicUsize::new(0)
-            }
             Self { generation }
         }
 
@@ -715,18 +743,17 @@ mod tests {
     // at iterator construction time.
     struct ConcurrencyTest {
         current: State,
-        list: Rc<Skiplist<U64Comparator, BlockArena>>,
+        list: Skiplist<U64Comparator>,
     }
 
-    unsafe impl Send for ConcurrencyTest {}
-    unsafe impl Sync for ConcurrencyTest {}
+    // unsafe impl Send for ConcurrencyTest {}
+    // unsafe impl Sync for ConcurrencyTest {}
 
     impl ConcurrencyTest {
         pub fn new() -> Self {
-            let arena = BlockArena::default();
             Self {
                 current: State::new(),
-                list: Rc::new(Skiplist::new(U64Comparator {}, arena)),
+                list: Skiplist::new(U64Comparator {}, 1000_000_000),
             }
         }
 
@@ -848,7 +875,11 @@ mod tests {
 
     // Test concurrency read&write
     fn run_concurrent() {
-        for _ in 0..100 {
+        let n = 1000;
+        for i in 0..n {
+            if i % 100 == 0 {
+                println!("Run {} of {}", i, n)
+            }
             let test = Arc::new(ConcurrencyTest::new());
             let test2 = test.clone();
             let state = Arc::new(TestState::new());
@@ -861,17 +892,14 @@ mod tests {
                 // Wakeup writing thread to exit
                 state.change(ReaderState::Done);
             });
-            let write = thread::spawn(move || {
-                state2.wait(ReaderState::Running);
-                for _ in 0..1000 {
-                    test2.write_step();
-                }
-                // Break the reading loop
-                state2.quit_flag.store(true, Ordering::Release);
-                state2.wait(ReaderState::Done);
-            });
+            state2.wait(ReaderState::Running);
+            for _ in 0..1000 {
+                test2.write_step();
+            }
+            // Break the reading loop
+            state2.quit_flag.store(true, Ordering::Release);
+            state2.wait(ReaderState::Done);
             read.join().expect("Read thread panics");
-            write.join().expect("Write thread panics");
         }
     }
 

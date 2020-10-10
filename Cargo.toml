@@ -5,6 +5,7 @@ name = "wickdb"
 version = "0.1.0"
 
 [dependencies]
+bytes = "0.5.6"
 crc32c = "0.4.0"
 crossbeam-channel = "0.4.0"
 crossbeam-utils = "0.7.0"
@@ -24,6 +25,5 @@ snap = "1.0.0"
 criterion = "0.3.0"
 
 [[bench]]
-# Excat the folder name
 harness = false
 name = "benches"

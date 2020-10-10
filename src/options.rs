@@ -119,6 +119,9 @@ pub struct Options<C: Comparator> {
     /// one open file per 2MB of working set).
     pub max_open_files: usize,
 
+    /// Max batch size in bytes
+    pub max_batch_size: usize,
+
     // -------------------
     // Control over blocks (user data is stored in a set of blocks, and
     // a block is the unit of reading from disk).
@@ -203,6 +206,10 @@ impl<C: Comparator> Options<C> {
         self.max_open_files - self.non_table_cache_files
     }
 
+    pub(crate) fn arena_size(&self) -> usize {
+        self.write_buffer_size + self.max_batch_size
+    }
+
     /// Initialize Options by limiting ranges of some flags, applying customized Logger and etc.
     pub(crate) fn initialize<O: File + 'static, S: Storage<F = O>>(
         &mut self,
@@ -275,6 +282,7 @@ impl<C: Comparator> Default for Options<C> {
             block_size: 4 * 1024, // 4KB
             block_restart_interval: 16,
             max_file_size: 2 * 1024 * 1024, // 2MB
+            max_batch_size: 1 << 20,        // 1MB
             compression: CompressionType::SnappyCompression,
             reuse_logs: false,
             filter_policy: None,

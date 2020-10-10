@@ -728,7 +728,7 @@ mod tests {
         fn new(is_reversed: bool) -> Self {
             let icmp = InternalKeyComparator::new(TestComparator::new(is_reversed));
             Self {
-                inner: MemTable::new(icmp),
+                inner: MemTable::new(icmp, 8 * 1024 * 1024),
             }
         }
 
@@ -739,12 +739,8 @@ mod tests {
             data: &[(Vec<u8>, Vec<u8>)],
         ) -> Result<()> {
             for (seq, (key, value)) in data.iter().enumerate() {
-                self.inner.add(
-                    seq as u64 + 1,
-                    ValueType::Value,
-                    key.as_slice(),
-                    value.as_slice(),
-                );
+                self.inner
+                    .add(seq as u64 + 1, ValueType::Value, &key, &value);
             }
             Ok(())
         }

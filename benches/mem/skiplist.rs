@@ -1,5 +1,4 @@
 use criterion::{BatchSize, Bencher, BenchmarkId, Criterion};
-use wickdb::mem::arena::BlockArena;
 use wickdb::mem::skiplist::*;
 use wickdb::BytewiseComparator;
 
@@ -14,7 +13,7 @@ fn bench_insert(c: &mut Criterion) {
                 b.iter_batched(
                     || {
                         (
-                            Skiplist::new(BytewiseComparator::default(), BlockArena::default()),
+                            Skiplist::new(BytewiseComparator::default(), 1 << 26),
                             vec![0u8; *length],
                         )
                     },
