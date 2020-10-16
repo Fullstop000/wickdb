@@ -1,23 +1,14 @@
 use crate::mem::arena::Arena;
 use crate::Comparator;
+use crate::{Iterator, Result};
+use bytes::Bytes;
 use rand::random;
 use std::cmp::Ordering as CmpOrdering;
 use std::mem;
 use std::ptr;
 use std::ptr::{null, null_mut};
-use std::rc::Rc;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
-
-trait Iterator {
-    fn valid(&self) -> bool;
-    fn key(&self) -> &[u8];
-    fn next(&mut self);
-    fn prev(&mut self);
-    fn seek(&mut self, target: &[u8]);
-    fn seek_for_prev(&mut self, target: &[u8]);
-    fn seek_to_first(&mut self);
-    fn seek_to_last(&mut self);
-}
+use std::sync::Arc;
 
 const MAX_HEIGHT: usize = 20;
 const HEIGHT_INCREASE: u32 = u32::MAX / 3;
@@ -25,24 +16,24 @@ const HEIGHT_INCREASE: u32 = u32::MAX / 3;
 #[derive(Debug)]
 #[repr(C)]
 pub struct Node {
-    key: Vec<u8>,
+    key: Bytes,
     height: usize,
     // The actual size will vary depending on the height that a node
     // was allocated with.
-    next_nodes: [AtomicPtr<Node>; 0],
+    next_nodes: [AtomicPtr<Self>; MAX_HEIGHT],
 }
 
 impl Node {
-    fn new<A: Arena>(key: &[u8], height: usize, arena: &A) -> *mut Self {
-        let pointers_size = height * mem::size_of::<AtomicPtr<Self>>();
-        let size = mem::size_of::<Self>() + pointers_size;
-
-        let p = arena.allocate_aligned(size) as *mut Self;
+    fn new<A: Arena>(key: Bytes, height: usize, arena: &A) -> *mut Self {
+        let size =
+            mem::size_of::<Self>() - (MAX_HEIGHT - height) * mem::size_of::<AtomicPtr<Self>>();
+        let algin = mem::align_of::<Self>();
+        let p = arena.allocate::<Node>(size, algin);
         unsafe {
-            ptr::write(&mut (*p).key, key.to_vec());
+            ptr::write(&mut (*p).key, key);
             ptr::write(&mut (*p).height, height);
             ptr::write_bytes(&mut (*p).next_nodes, 0, height);
-            p as *mut Self
+            p
         }
     }
 
@@ -66,32 +57,37 @@ impl Node {
 
     #[inline]
     fn key(&self) -> &[u8] {
-        self.key.as_slice()
+        self.key.as_ref()
     }
 }
 
-pub struct InlineSkipList<C: Comparator, A: Arena> {
+struct InlineSkipListInner<A: Arena> {
     // Current height. 1 <= height <= kMaxHeight. CAS.
     height: AtomicUsize,
-
+    // TODO: use NonNull instead?
     head: *mut Node,
+    arena: A,
+}
 
-    pub(super) arena: A,
-
+#[derive(Clone)]
+pub struct InlineSkipList<C: Comparator, A: Arena + Clone + Send + Sync> {
+    inner: Arc<InlineSkipListInner<A>>,
     comparator: C,
 }
 
 impl<C, A> InlineSkipList<C, A>
 where
     C: Comparator,
-    A: Arena,
+    A: Arena + Clone + Send + Sync,
 {
     pub fn new(comparator: C, arena: A) -> Self {
-        let head = Node::new(Vec::new().as_slice(), MAX_HEIGHT, &arena);
+        let head = Node::new(Bytes::new(), MAX_HEIGHT, &arena);
         Self {
-            height: AtomicUsize::new(1),
-            head,
-            arena,
+            inner: Arc::new(InlineSkipListInner {
+                height: AtomicUsize::new(1),
+                head,
+                arena,
+            }),
             comparator,
         }
     }
@@ -103,7 +99,7 @@ where
     // node.key >= key (if allowEqual=true).
     // Returns the node found. The bool returned is true if the node has key equal to given key.
     pub fn find_near(&self, key: &[u8], less: bool, allow_equal: bool) -> (*mut Node, bool) {
-        let mut x = self.head;
+        let mut x = self.inner.head;
         let mut height = self.get_height() - 1;
         loop {
             unsafe {
@@ -120,7 +116,7 @@ where
                         return (null_mut(), false);
                     }
                     // Try to return x. Make sure it is not a head node.
-                    if x == self.head {
+                    if x == self.inner.head {
                         return (null_mut(), false);
                     }
                     return (x, false);
@@ -148,7 +144,7 @@ where
                         }
                         // On base level. Return x.
                         // Try to return x. Make sure it is not a head node.
-                        if x == self.head {
+                        if x == self.inner.head {
                             return (null_mut(), false);
                         }
                         return (x, false);
@@ -163,7 +159,7 @@ where
                         if !less {
                             return (next, false);
                         }
-                        if x == self.head {
+                        if x == self.inner.head {
                             return (null_mut(), false);
                         }
                         return (x, false);
@@ -177,7 +173,7 @@ where
         let height = self.get_height();
         let mut prev = vec![null_mut(); MAX_HEIGHT + 1];
         let mut next = vec![null_mut(); MAX_HEIGHT + 1];
-        prev[height] = self.head;
+        prev[height] = self.inner.head;
         for i in (0..height).rev() {
             // Use higher level to speed up for current level.
             let (p, n) = self.find_splice_for_level(key, prev[i + 1], i);
@@ -187,12 +183,12 @@ where
             assert_ne!(prev[i], next[i]);
         }
         let height = random_height();
-        let x = Node::new(key, height, &self.arena);
+        let x = Node::new(Bytes::copy_from_slice(key), height, &self.inner.arena);
 
         let list_height = self.get_height();
         while height > list_height {
-            // TODO(accelsao): SeqCst or others?
-            self.height
+            self.inner
+                .height
                 .compare_and_swap(list_height, height, Ordering::SeqCst);
             if self.get_height() == height {
                 break;
@@ -223,19 +219,33 @@ where
         }
     }
 
-    fn empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         self.find_last().is_null()
     }
 
+    pub fn len(&self) -> usize {
+        let mut node = self.inner.head;
+        let mut count = 0;
+        loop {
+            let next = unsafe { (&*node).get_next(0) };
+            if next != ptr::null_mut() {
+                count += 1;
+                node = next;
+                continue;
+            }
+            return count;
+        }
+    }
+
     fn find_last(&self) -> *mut Node {
-        let mut x = self.head;
+        let mut x = self.inner.head;
         let mut height = self.get_height() - 1;
         loop {
             unsafe {
                 let next = (*x).get_next(height);
                 if next.is_null() {
                     if height == 0 {
-                        if x == self.head {
+                        if x == self.inner.head {
                             return null_mut();
                         } else {
                             return x;
@@ -277,23 +287,23 @@ where
     }
 
     fn get_height(&self) -> usize {
-        self.height.load(Ordering::Relaxed)
+        self.inner.height.load(Ordering::Relaxed)
     }
 }
 
 pub struct InlineSkiplistIterator<C, A>
 where
     C: Comparator,
-    A: Arena,
+    A: Arena + Clone + Send + Sync,
 {
-    list: Rc<InlineSkipList<C, A>>,
+    list: InlineSkipList<C, A>,
     node: *const Node,
 }
 
 impl<C, A> Iterator for InlineSkiplistIterator<C, A>
 where
     C: Comparator,
-    A: Arena,
+    A: Arena + Clone + Send + Sync,
 {
     #[inline]
     fn valid(&self) -> bool {
@@ -302,6 +312,10 @@ where
 
     fn key(&self) -> &[u8] {
         unsafe { (*self.node).key() }
+    }
+
+    fn value(&self) -> &[u8] {
+        unimplemented!()
     }
 
     fn next(&mut self) {
@@ -324,15 +338,9 @@ where
         self.node = node;
     }
 
-    // find last node, node.key <= key
-    fn seek_for_prev(&mut self, key: &[u8]) {
-        let (node, _) = self.list.find_near(key, true, true);
-        self.node = node;
-    }
-
     fn seek_to_first(&mut self) {
         unsafe {
-            self.node = (*self.list.head)
+            self.node = (*self.list.inner.head)
                 .next_nodes
                 .get_unchecked(0)
                 .load(Ordering::Acquire)
@@ -342,15 +350,25 @@ where
     fn seek_to_last(&mut self) {
         self.node = self.list.find_last();
     }
+
+    fn status(&mut self) -> Result<()> {
+        Ok(())
+    }
 }
 
 impl<C, A> InlineSkiplistIterator<C, A>
 where
     C: Comparator,
-    A: Arena,
+    A: Arena + Clone + Send + Sync,
 {
-    pub(crate) fn new(list: Rc<InlineSkipList<C, A>>) -> Self {
+    pub fn new(list: InlineSkipList<C, A>) -> Self {
         Self { list, node: null() }
+    }
+
+    // find last node, node.key <= key
+    fn seek_for_prev(&mut self, key: &[u8]) {
+        let (node, _) = self.list.find_near(key, true, true);
+        self.node = node;
     }
 }
 
@@ -364,13 +382,15 @@ fn random_height() -> usize {
 
 #[cfg(test)]
 mod tests {
-    use crate::mem::arena::BlockArena;
-    use crate::mem::inlineskiplist::{InlineSkipList, InlineSkiplistIterator, Iterator};
+    use super::*;
+    use crate::mem::arena::ArenaV2;
     use crate::BytewiseComparator;
-    use std::rc::Rc;
 
-    fn new_test_skl() -> InlineSkipList<BytewiseComparator, BlockArena> {
-        InlineSkipList::new(BytewiseComparator::default(), BlockArena::default())
+    fn new_test_skl() -> InlineSkipList<BytewiseComparator, ArenaV2> {
+        InlineSkipList::new(
+            BytewiseComparator::default(),
+            ArenaV2::with_capacity(1 << 20),
+        )
     }
 
     #[test]
@@ -384,13 +404,34 @@ mod tests {
                 assert!(!found);
             }
         }
-        let mut iterator = InlineSkiplistIterator::new(Rc::new(skl));
-        assert!(!iterator.valid());
-        iterator.seek_to_first();
-        assert!(!iterator.valid());
-        iterator.seek_to_last();
-        assert!(!iterator.valid());
-        iterator.seek(key);
-        assert!(!iterator.valid());
+        let mut iter = InlineSkiplistIterator::new(skl.clone());
+        assert!(!iter.valid());
+        iter.seek_to_first();
+        assert!(!iter.valid());
+        iter.seek_to_last();
+        assert!(!iter.valid());
+        iter.seek(key);
+        assert!(!iter.valid());
+    }
+
+    #[test]
+    fn test_basic() {
+        let c = BytewiseComparator::default();
+        let arena = ArenaV2::with_capacity(1 << 20);
+        let list = InlineSkipList::new(c, arena);
+        let table = vec!["key1", "key2", "key3", "key4", "key5"];
+
+        for key in table.clone() {
+            println!("insert {}", key);
+            list.put(key.as_bytes());
+        }
+        assert_eq!(list.len(), 5);
+        assert!(!list.is_empty());
+        let mut iter = InlineSkiplistIterator::new(list);
+        dbg!(123);
+        for key in table {
+            iter.seek(key.as_bytes());
+            assert_eq!(iter.key(), key.as_bytes());
+        }
     }
 }

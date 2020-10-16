@@ -26,6 +26,7 @@ extern crate slog_async;
 extern crate slog_term;
 #[macro_use]
 extern crate num_derive;
+extern crate bytes;
 extern crate quick_error;
 extern crate rand;
 extern crate snap;
