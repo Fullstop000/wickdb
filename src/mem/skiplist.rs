@@ -18,11 +18,10 @@
 use super::arena::*;
 use crate::iterator::Iterator;
 use crate::util::comparator::Comparator;
-use crate::util::slice::Slice;
 use crate::Result;
+use bytes::Bytes;
 use rand::random;
 use std::cmp::Ordering as CmpOrdering;
-use std::intrinsics::copy_nonoverlapping;
 use std::mem;
 use std::ptr;
 use std::rc::Rc;
@@ -38,7 +37,7 @@ pub const MAX_HEIGHT: usize = 12;
 // This struct is marked with `repr(C)` so that the specific order of fields is enforced.
 struct Node {
     // The pointer and length pointing to the memory location
-    key: Slice,
+    key: Bytes,
     height: usize,
     // The inner size of `next_nodes` is equal to `height`
     next_nodes: [AtomicPtr<Node>; 0],
@@ -46,13 +45,13 @@ struct Node {
 
 impl Node {
     // Allocates memory in the given arena for `Node`.
-    #[allow(clippy::cast_ptr_alignment)]
-    fn new<A: Arena>(key_ptr: Slice, height: usize, arena: &A) -> *const Self {
+    fn new<A: Arena>(key: Bytes, height: usize, arena: &A) -> *const Self {
         let pointers_size = height * mem::size_of::<AtomicPtr<Self>>();
         let size = mem::size_of::<Self>() + pointers_size;
-        let p = arena.allocate_aligned(size) as *const Self as *mut Self;
+        let align = mem::align_of::<Self>();
+        let p = arena.allocate(size, align) as *const Self as *mut Self;
         unsafe {
-            ptr::write(&mut (*p).key, key_ptr);
+            ptr::write(&mut (*p).key, key);
             ptr::write(&mut (*p).height, height);
             ptr::write_bytes(&mut (*p).next_nodes, 0, height);
             p as *const Self
@@ -79,7 +78,7 @@ impl Node {
 
     #[inline]
     fn key(&self) -> &[u8] {
-        self.key.as_slice()
+        self.key.as_ref()
     }
 }
 
@@ -101,7 +100,7 @@ pub struct Skiplist<C: Comparator, A: Arena> {
 impl<C: Comparator, A: Arena> Skiplist<C, A> {
     /// Create a new Skiplist with the given arena capacity
     pub fn new(cmp: C, arena: A) -> Self {
-        let head = Node::new(Slice::default(), MAX_HEIGHT, &arena);
+        let head = Node::new(Bytes::new(), MAX_HEIGHT, &arena);
         Skiplist {
             comparator: cmp,
             // init height is 1 ( ignore the height of head )
@@ -136,19 +135,13 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
         let height = rand_height();
         let max_height = self.max_height.load(Ordering::Acquire);
         if height > max_height {
-            #[allow(clippy::needless_range_loop)]
             for i in max_height..height {
                 prev[i] = self.head;
             }
             self.max_height.store(height, Ordering::Release);
         }
-        // allocate the key
-        let k = self.arena.allocate(key.len());
-        unsafe {
-            copy_nonoverlapping(key.as_ptr(), k, key.len());
-        }
         // allocate the node
-        let new_node = Node::new(Slice::new(k, key.len()), height, &self.arena);
+        let new_node = Node::new(Bytes::copy_from_slice(key), height, &self.arena);
         unsafe {
             for i in 1..=height {
                 (*new_node).set_next(i, (*(prev[i - 1])).get_next(i));
@@ -381,7 +374,7 @@ mod tests {
     }
 
     fn construct_skl_from_nodes(
-        nodes: Vec<(Slice, usize)>,
+        nodes: Vec<(&str, usize)>,
     ) -> Skiplist<BytewiseComparator, BlockArena> {
         if nodes.is_empty() {
             return new_test_skl();
@@ -391,7 +384,11 @@ mod tests {
         let mut prev_nodes = vec![skl.head; MAX_HEIGHT];
         let mut max_height = 1;
         for (key, height) in nodes {
-            let n = Node::new(key, height, &mut skl.arena);
+            let n = Node::new(
+                Bytes::copy_from_slice(key.as_bytes()),
+                height,
+                &mut skl.arena,
+            );
             for (h, prev_node) in prev_nodes[0..height].iter().enumerate() {
                 unsafe {
                     (**prev_node).set_next(h + 1, n as *mut Node);
@@ -431,7 +428,7 @@ mod tests {
         assert_eq!(true, skl.key_is_less_than_or_equal(&key, ptr::null_mut()));
 
         for (node_key, expected) in tests {
-            let node = Node::new((&node_key).into(), 1, &skl.arena);
+            let node = Node::new(Bytes::from(node_key), 1, &skl.arena);
             assert_eq!(expected, skl.key_is_less_than_or_equal(&key, node))
         }
     }
@@ -445,11 +442,7 @@ mod tests {
             ("key7", 4),
             ("key9", 3),
         ];
-        let nodes: Vec<(Slice, usize)> = inputs
-            .iter()
-            .map(|(key, height)| (Slice::from(*key), *height))
-            .collect();
-        let skl = construct_skl_from_nodes(nodes);
+        let skl = construct_skl_from_nodes(inputs);
         let mut prev_nodes = vec![ptr::null(); 5];
         // test the scenario for un-inserted key
         let res = skl.find_greater_or_equal("key4".as_bytes(), Some(&mut prev_nodes));
@@ -483,11 +476,7 @@ mod tests {
             ("key7", 4),
             ("key9", 3),
         ];
-        let nodes: Vec<(Slice, usize)> = inputs
-            .iter()
-            .map(|(key, height)| (Slice::from(*key), *height))
-            .collect();
-        let skl = construct_skl_from_nodes(nodes);
+        let skl = construct_skl_from_nodes(inputs);
 
         // test scenario for un-inserted key
         let res = skl.find_less_than("key4".as_bytes());
@@ -511,11 +500,7 @@ mod tests {
             ("key7", 4),
             ("key9", 3),
         ];
-        let nodes: Vec<(Slice, usize)> = inputs
-            .iter()
-            .map(|(key, height)| (Slice::from(*key), *height))
-            .collect();
-        let skl = construct_skl_from_nodes(nodes);
+        let skl = construct_skl_from_nodes(inputs);
         let last = skl.find_last();
         unsafe {
             assert_eq!((*last).key(), "key9".as_bytes());
