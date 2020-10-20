@@ -22,7 +22,6 @@ const BLOCK_SIZE: usize = 4096;
 // TODO(fullstop000): Add Send + Sync constrait?
 pub trait Arena {
     /// Return the start pointer to a newly allocated memory block of 'chunk' bytes .
-    /// TODO(fullstop000): Use <T:?Sized> ?
     fn allocate<T>(&self, chunk: usize, align: usize) -> *mut T;
 
     /// Return the size of memory that has been allocated.
@@ -43,8 +42,10 @@ pub struct ArenaV2 {
 impl Drop for ArenaInner {
     fn drop(&mut self) {
         // manully drop ArenaInner
-        unsafe {
-            Vec::from_raw_parts(self.ptr, 0, self.cap);
+        if !self.ptr.is_null() {
+            unsafe {
+                Vec::from_raw_parts(self.ptr, 0, self.cap);
+            }
         }
     }
 }
@@ -98,18 +99,6 @@ impl ArenaV2 {
         }
         self.inner.ptr.add(offset) as _
     }
-
-    // Calculates the offset between given pointer and the arena start pointer.
-    // Returns 0 if the pointer is out of arena range
-    // pub fn offset<N>(&self, ptr: *const N) -> usize {
-    //     let ptr_addr = ptr as usize;
-    //     let self_addr = self.inner.ptr as usize;
-    //     if ptr_addr > self_addr && ptr_addr < self_addr + self.inner.cap {
-    //         ptr_addr - self_addr
-    //     } else {
-    //         0
-    //     }
-    // }
 }
 
 /// `BlockArena` is a memory pool for allocating and handling Node memory dynamically.

@@ -40,14 +40,15 @@ impl Node {
     #[inline]
     // height, 0-based index
     fn get_next(&self, height: usize) -> *mut Node {
-        unsafe { self.next_nodes.get_unchecked(height).load(Ordering::SeqCst) }
+        self.next_nodes.get(height).unwrap().load(Ordering::SeqCst)
     }
 
     #[inline]
     // height, 0-based index
     unsafe fn set_next(&self, height: usize, node: *mut Node) {
         self.next_nodes
-            .get_unchecked(height)
+            .get(height)
+            .unwrap()
             .store(node, Ordering::SeqCst);
     }
 
@@ -63,6 +64,27 @@ struct InlineSkipListInner<A: Arena> {
     // TODO: use NonNull instead?
     head: *mut Node,
     arena: A,
+}
+
+unsafe impl<A: Arena + Send> Send for InlineSkipListInner<A> {}
+unsafe impl<A: Arena + Sync> Sync for InlineSkipListInner<A> {}
+
+impl<A: Arena> Drop for InlineSkipListInner<A> {
+    fn drop(&mut self) {
+        let mut node = self.head;
+        loop {
+            let next = unsafe { (&*node).get_next(0) };
+            if !next.is_null() {
+                unsafe {
+                    ptr::drop_in_place(next);
+                }
+                node = next;
+                continue;
+            }
+            unsafe { ptr::drop_in_place(node) };
+            return;
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -94,7 +116,7 @@ where
     // If less=false, it finds leftmost node such that node.key > key (if allowEqual=false) or
     // node.key >= key (if allowEqual=true).
     // Returns the node found. The bool returned is true if the node has key equal to given key.
-    pub fn find_near(&self, key: &[u8], less: bool, allow_equal: bool) -> (*mut Node, bool) {
+    fn find_near(&self, key: &[u8], less: bool, allow_equal: bool) -> (*mut Node, bool) {
         let mut x = self.inner.head;
         let mut level = self.get_height() - 1;
         loop {
@@ -208,26 +230,29 @@ where
                 }
                 unsafe {
                     (*x).set_next(i, next[i]);
-                    // TODO: Relaxed?
-                    let old =
-                        (*prev[i]).next_nodes[i].compare_and_swap(next[i], x, Ordering::Relaxed);
-                    if old == x {
-                        break;
+                    match &(*prev[i]).next_nodes[i].compare_exchange(
+                        next[i],
+                        x,
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    ) {
+                        Ok(_) => break,
+                        Err(_) => {
+                            let (p, n) = self.find_splice_for_level(key, prev[i], i);
+                            if p == n {
+                                assert_eq!(i, 0, "Equality can happen only on base level");
+                                return;
+                            }
+                            prev[i] = p;
+                            next[i] = n;
+                        }
                     }
                 }
-                // CAS Failed.
-                let (p, n) = self.find_splice_for_level(key, prev[i], i);
-                if p == n {
-                    assert_eq!(i, 0, "Equality can happen only on base level");
-                    return;
-                }
-                prev[i] = p;
-                next[i] = n;
             }
         }
     }
 
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.find_last().is_null()
     }
 
@@ -393,12 +418,62 @@ mod tests {
     use super::*;
     use crate::mem::arena::ArenaV2;
     use crate::BytewiseComparator;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
 
     fn new_test_skl() -> InlineSkipList<BytewiseComparator, ArenaV2> {
         InlineSkipList::new(
             BytewiseComparator::default(),
             ArenaV2::with_capacity(1 << 20),
         )
+    }
+
+    #[test]
+    fn test_find_near() {
+        let cmp = BytewiseComparator::default();
+        let arena = ArenaV2::with_capacity(1 << 20);
+        let l = InlineSkipList::new(cmp, arena);
+        for i in 0..1000 {
+            let key = format!("{:05}{:08}", i * 10 + 5, 0);
+            l.put(key.as_bytes());
+        }
+        let cases = vec![
+            ("00001", false, false, Some("00005")),
+            ("00001", false, true, Some("00005")),
+            ("00001", true, false, None),
+            ("00001", true, true, None),
+            ("00005", false, false, Some("00015")),
+            ("00005", false, true, Some("00005")),
+            ("00005", true, false, None),
+            ("00005", true, true, Some("00005")),
+            ("05555", false, false, Some("05565")),
+            ("05555", false, true, Some("05555")),
+            ("05555", true, false, Some("05545")),
+            ("05555", true, true, Some("05555")),
+            ("05558", false, false, Some("05565")),
+            ("05558", false, true, Some("05565")),
+            ("05558", true, false, Some("05555")),
+            ("05558", true, true, Some("05555")),
+            ("09995", false, false, None),
+            ("09995", false, true, Some("09995")),
+            ("09995", true, false, Some("09985")),
+            ("09995", true, true, Some("09995")),
+            ("59995", false, false, None),
+            ("59995", false, true, None),
+            ("59995", true, false, Some("09995")),
+            ("59995", true, true, Some("09995")),
+        ];
+        for (i, (key, less, allow_equal, exp)) in cases.into_iter().enumerate() {
+            let seek_key = format!("{}{:08}", key, 0);
+            let (res, found) = l.find_near(seek_key.as_bytes(), less, allow_equal);
+            if exp.is_none() {
+                assert!(!found, "{}", i);
+                continue;
+            }
+            let e = format!("{}{:08}", exp.unwrap(), 0);
+            assert_eq!(&unsafe { &*res }.key, e.as_bytes(), "{}", i);
+        }
     }
 
     #[test]
@@ -454,5 +529,56 @@ mod tests {
         assert_eq!(iter.key(), table.first().unwrap().as_bytes());
         iter.seek_to_last();
         assert_eq!(iter.key(), table.last().unwrap().as_bytes());
+    }
+
+    fn test_concurrent_basic(n: usize, cap: usize, key_len: usize) {
+        let cmp = BytewiseComparator::default();
+        let arena = ArenaV2::with_capacity(cap);
+        let skl = InlineSkipList::new(cmp, arena);
+        let keys: Vec<_> = (0..n)
+            .map(|i| format!("{1:00$}", key_len, i).to_owned())
+            .collect();
+        let (tx, rx) = mpsc::channel();
+        for key in keys.clone() {
+            let tx = tx.clone();
+            let l = skl.clone();
+            thread::Builder::new()
+                .name("write thread".to_owned())
+                .spawn(move || {
+                    println!("insert {:?}", &key[..10]);
+                    l.put(key.as_bytes());
+                    tx.send(()).unwrap();
+                })
+                .unwrap();
+        }
+        for _ in 0..n {
+            rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        }
+        for key in keys {
+            let tx = tx.clone();
+            let l = skl.clone();
+            thread::Builder::new()
+                .name("read thread".to_owned())
+                .spawn(move || {
+                    let mut iter = InlineSkiplistIterator::new(l);
+                    iter.seek(key.as_bytes());
+                    assert_eq!(iter.key(), key.as_bytes());
+                    tx.send(()).unwrap();
+                })
+                .unwrap();
+        }
+        for _ in 0..n {
+            rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        }
+        assert_eq!(skl.len(), n);
+    }
+
+    #[test]
+    fn test_concurrent_basic_small_value() {
+        test_concurrent_basic(1000, 1 << 20, 5);
+    }
+    #[test]
+    fn test_concurrent_basic_big_value() {
+        test_concurrent_basic(1, 120 << 20, 1048576);
     }
 }
