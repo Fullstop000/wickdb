@@ -40,11 +40,7 @@ impl Node {
     #[inline]
     // height, 0-based index
     fn get_next(&self, height: usize) -> *mut Node {
-        unsafe {
-            self.next_nodes
-                .get_unchecked(height)
-                .load(Ordering::Acquire)
-        }
+        unsafe { self.next_nodes.get_unchecked(height).load(Ordering::SeqCst) }
     }
 
     #[inline]
@@ -52,7 +48,7 @@ impl Node {
     unsafe fn set_next(&self, height: usize, node: *mut Node) {
         self.next_nodes
             .get_unchecked(height)
-            .store(node, Ordering::Release);
+            .store(node, Ordering::SeqCst);
     }
 
     #[inline]
@@ -100,15 +96,15 @@ where
     // Returns the node found. The bool returned is true if the node has key equal to given key.
     pub fn find_near(&self, key: &[u8], less: bool, allow_equal: bool) -> (*mut Node, bool) {
         let mut x = self.inner.head;
-        let mut height = self.get_height() - 1;
+        let mut level = self.get_height() - 1;
         loop {
             unsafe {
                 // Assume x.key < key
-                let next = (*x).get_next(height);
+                let next = (*x).get_next(level);
                 if next.is_null() {
                     // x.key < key < END OF LIST
-                    if height > 0 {
-                        height -= 1;
+                    if level > 0 {
+                        level -= 1;
                         continue;
                     }
                     // height = 0
@@ -121,8 +117,8 @@ where
                     }
                     return (x, false);
                 }
-                let node_key = (*x).key();
-                match self.comparator.compare(key, node_key) {
+                let nextkey = (*next).key();
+                match self.comparator.compare(key, nextkey) {
                     CmpOrdering::Greater => {
                         // x.key < next.key < key. We can continue to move right.
                         x = next;
@@ -138,8 +134,8 @@ where
                             return ((*next).get_next(0), false);
                         }
                         // We want <. If not base level, we should go closer in the next level.
-                        if height > 0 {
-                            height -= 1;
+                        if level > 0 {
+                            level -= 1;
                             continue;
                         }
                         // On base level. Return x.
@@ -151,8 +147,8 @@ where
                     }
                     CmpOrdering::Less => {
                         // x.key < key < next.key.
-                        if height > 0 {
-                            height -= 1;
+                        if level > 0 {
+                            level -= 1;
                             continue;
                         }
                         // At base level. Need to return something.
@@ -179,7 +175,6 @@ where
             let (p, n) = self.find_splice_for_level(key, prev[i + 1], i);
             prev[i] = p;
             next[i] = n;
-
             assert_ne!(prev[i], next[i]);
         }
         let height = random_height();
@@ -201,6 +196,15 @@ where
             loop {
                 if prev[i].is_null() {
                     assert!(i > 1);
+                    // We haven't computed prev, next for this level because height exceeds old listHeight.
+                    // For these levels, we expect the lists to be sparse, so we can just search from head.
+                    let (p, n) =
+                        unsafe { self.find_splice_for_level(&(*x).key, self.inner.head, i) };
+                    // Someone adds the exact same key before we are able to do so. This can only happen on
+                    // the base level. But we know we are not on the base level.
+                    prev[i] = p;
+                    next[i] = n;
+                    assert_ne!(p, n);
                 }
                 unsafe {
                     (*x).set_next(i, next[i]);
@@ -213,6 +217,10 @@ where
                 }
                 // CAS Failed.
                 let (p, n) = self.find_splice_for_level(key, prev[i], i);
+                if p == n {
+                    assert_eq!(i, 0, "Equality can happen only on base level");
+                    return;
+                }
                 prev[i] = p;
                 next[i] = n;
             }
@@ -422,16 +430,29 @@ mod tests {
         let table = vec!["key1", "key2", "key3", "key4", "key5"];
 
         for key in table.clone() {
-            println!("insert {}", key);
             list.put(key.as_bytes());
         }
         assert_eq!(list.len(), 5);
         assert!(!list.is_empty());
         let mut iter = InlineSkiplistIterator::new(list);
-        dbg!(123);
-        for key in table {
+        for key in &table {
             iter.seek(key.as_bytes());
             assert_eq!(iter.key(), key.as_bytes());
         }
+        for key in table.iter().rev() {
+            assert_eq!(iter.key(), key.as_bytes());
+            iter.prev();
+        }
+        assert!(!iter.valid());
+        iter.seek_to_first();
+        for key in table.iter() {
+            assert_eq!(iter.key(), key.as_bytes());
+            iter.next();
+        }
+        assert!(!iter.valid());
+        iter.seek_to_first();
+        assert_eq!(iter.key(), table.first().unwrap().as_bytes());
+        iter.seek_to_last();
+        assert_eq!(iter.key(), table.last().unwrap().as_bytes());
     }
 }
