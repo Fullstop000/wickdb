@@ -44,7 +44,9 @@ impl Drop for ArenaInner {
         // manully drop ArenaInner
         if !self.ptr.is_null() {
             unsafe {
-                Vec::from_raw_parts(self.ptr, 0, self.cap);
+                let ptr = self.ptr as *mut u64;
+                let cap = self.cap / 8;
+                Vec::from_raw_parts(ptr, 0, cap);
             }
         }
     }
@@ -89,6 +91,7 @@ impl ArenaV2 {
         let offset = self.inner.len.fetch_add(size, Ordering::SeqCst);
         // (offset + align_mask) / align * align.
         let ptr_offset = (offset + align_mask) & !align_mask;
+        assert!(offset + size <= self.inner.cap);
         ptr_offset
     }
 
