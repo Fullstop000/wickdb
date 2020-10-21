@@ -29,6 +29,7 @@ impl Node {
             mem::size_of::<Self>() - (MAX_HEIGHT - height) * mem::size_of::<AtomicPtr<Self>>();
         let algin = mem::align_of::<Self>();
         let p = arena.allocate::<Node>(size, algin);
+        assert!(!p.is_null());
         unsafe {
             ptr::write(&mut (*p).key, key);
             ptr::write(&mut (*p).height, height);
@@ -40,21 +41,18 @@ impl Node {
     #[inline]
     // height, 0-based index
     fn get_next(&self, height: usize) -> *mut Node {
-        self.next_nodes.get(height).unwrap().load(Ordering::SeqCst)
+        self.next_nodes[height].load(Ordering::SeqCst)
     }
 
     #[inline]
     // height, 0-based index
-    unsafe fn set_next(&self, height: usize, node: *mut Node) {
-        self.next_nodes
-            .get(height)
-            .unwrap()
-            .store(node, Ordering::SeqCst);
+    fn set_next(&self, height: usize, node: *mut Node) {
+        self.next_nodes[height].store(node, Ordering::SeqCst);
     }
 
     #[inline]
     fn key(&self) -> &[u8] {
-        self.key.as_ref()
+        &self.key
     }
 }
 
@@ -76,7 +74,7 @@ impl<A: Arena> Drop for InlineSkipListInner<A> {
             let next = unsafe { (&*node).get_next(0) };
             if !next.is_null() {
                 unsafe {
-                    ptr::drop_in_place(next);
+                    ptr::drop_in_place(node);
                 }
                 node = next;
                 continue;
@@ -187,30 +185,35 @@ where
         }
     }
 
-    pub fn put(&self, key: &[u8]) {
+    pub fn put(&self, key: impl Into<Bytes>) {
+        let key = key.into();
         let height = self.get_height();
         let mut prev = vec![null_mut(); MAX_HEIGHT + 1];
         let mut next = vec![null_mut(); MAX_HEIGHT + 1];
         prev[height] = self.inner.head;
         for i in (0..height).rev() {
             // Use higher level to speed up for current level.
-            let (p, n) = self.find_splice_for_level(key, prev[i + 1], i);
+            let (p, n) = self.find_splice_for_level(&key, prev[i + 1], i);
             prev[i] = p;
             next[i] = n;
             assert_ne!(prev[i], next[i]);
         }
         let height = random_height();
-        let x = Node::new(Bytes::copy_from_slice(key), height, &self.inner.arena);
+        let np = Node::new(key, height, &self.inner.arena);
 
-        let list_height = self.get_height();
+        let mut list_height = self.get_height();
         while height > list_height {
-            self.inner
-                .height
-                .compare_and_swap(list_height, height, Ordering::SeqCst);
-            if self.get_height() == height {
-                break;
+            match self.inner.height.compare_exchange_weak(
+                list_height,
+                height,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => break,
+                Err(h) => list_height = h,
             }
         }
+        let node = unsafe { &*np };
 
         // We always insert from the base level and up. After you add a node in base level, we cannot
         // create a node in the level above because it would have discovered the node in the base level.
@@ -220,8 +223,8 @@ where
                     assert!(i > 1);
                     // We haven't computed prev, next for this level because height exceeds old listHeight.
                     // For these levels, we expect the lists to be sparse, so we can just search from head.
-                    let (p, n) =
-                        unsafe { self.find_splice_for_level(&(*x).key, self.inner.head, i) };
+                    let (p, n) = self.find_splice_for_level(&node.key, self.inner.head, i);
+
                     // Someone adds the exact same key before we are able to do so. This can only happen on
                     // the base level. But we know we are not on the base level.
                     prev[i] = p;
@@ -229,16 +232,21 @@ where
                     assert_ne!(p, n);
                 }
                 unsafe {
-                    (*x).set_next(i, next[i]);
+                    node.set_next(i, next[i]);
                     match &(*prev[i]).next_nodes[i].compare_exchange(
                         next[i],
-                        x,
+                        np,
                         Ordering::SeqCst,
                         Ordering::SeqCst,
                     ) {
-                        Ok(_) => break,
+                        Ok(_) => {
+                            break;
+                        }
                         Err(_) => {
-                            let (p, n) = self.find_splice_for_level(key, prev[i], i);
+                            // CAS failed. We need to recompute prev and next.
+                            // It is unlikely to be helpful to try to use a different level as we redo the search,
+                            // because it is unlikely that lots of nodes are inserted between prev[i] and next[i].
+                            let (p, n) = self.find_splice_for_level(&node.key, prev[i], i);
                             if p == n {
                                 assert_eq!(i, 0, "Equality can happen only on base level");
                                 return;
@@ -296,10 +304,9 @@ where
     fn find_splice_for_level(
         &self,
         key: &[u8],
-        before: *mut Node,
+        mut before: *mut Node,
         height: usize,
     ) -> (*mut Node, *mut Node) {
-        let mut before = before;
         loop {
             unsafe {
                 let next = (*before).get_next(height);
@@ -308,9 +315,9 @@ where
                 } else {
                     let next_key = (*next).key();
                     match self.comparator.compare(key, next_key) {
-                        std::cmp::Ordering::Equal => return (next, next),
-                        std::cmp::Ordering::Less => return (before, next),
-                        std::cmp::Ordering::Greater => {
+                        CmpOrdering::Equal => return (next, next),
+                        CmpOrdering::Less => return (before, next),
+                        CmpOrdering::Greater => {
                             before = next;
                         }
                     }
@@ -372,12 +379,7 @@ where
     }
 
     fn seek_to_first(&mut self) {
-        unsafe {
-            self.node = (*self.list.inner.head)
-                .next_nodes
-                .get_unchecked(0)
-                .load(Ordering::Acquire)
-        }
+        unsafe { self.node = (*self.list.inner.head).get_next(0) }
     }
 
     fn seek_to_last(&mut self) {
@@ -396,12 +398,6 @@ where
 {
     pub fn new(list: InlineSkipList<C, A>) -> Self {
         Self { list, node: null() }
-    }
-
-    // find last node, node.key <= key
-    fn seek_for_prev(&mut self, key: &[u8]) {
-        let (node, _) = self.list.find_near(key, true, true);
-        self.node = node;
     }
 }
 
@@ -436,7 +432,7 @@ mod tests {
         let l = InlineSkipList::new(cmp, arena);
         for i in 0..1000 {
             let key = format!("{:05}{:08}", i * 10 + 5, 0);
-            l.put(key.as_bytes());
+            l.put(key);
         }
         let cases = vec![
             ("00001", false, false, Some("00005")),
@@ -545,8 +541,7 @@ mod tests {
             thread::Builder::new()
                 .name("write thread".to_owned())
                 .spawn(move || {
-                    println!("insert {:?}", &key[..10]);
-                    l.put(key.as_bytes());
+                    l.put(key);
                     tx.send(()).unwrap();
                 })
                 .unwrap();
@@ -579,6 +574,6 @@ mod tests {
     }
     #[test]
     fn test_concurrent_basic_big_value() {
-        test_concurrent_basic(1, 120 << 20, 1048576);
+        test_concurrent_basic(100, 120 << 20, 10);
     }
 }
