@@ -11,20 +11,23 @@ name: Test
 jobs:
   run-test:
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.experimental }}
+    continue-on-error: ${{ matrix.ignore-err }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
         toolchain: [stable]
-        experimental: [false]
+        ignore-err: [false]
+        coverage: [false]
         include:
           - os: ubuntu-latest
             toolchain: nightly
-            experimental: true
+            ignore-err: true
+            coverage: true
           - os: macos-latest
             toolchain: nightly
-            experimental: true
+            ignore-err: true
+            coverage: true
     steps:
       - uses: actions/checkout@v2
         name: Checkout 🛎️
@@ -57,39 +60,34 @@ jobs:
         with:
           command: test
           args: --all
-  # latest-test:
-  #   strategy:
-  #     matrix:
-  #       os: [ubuntu-latest, macos-latest]
-  #   continue-on-error: true
+      - uses: actions-rs/cargo@v1
+        if: ${{ matrix.coverage }}
+        with:
+          command: clean
+      - uses: actions-rs/cargo@v1
+        if: ${{ matrix.coverage }}
+        with:
+          command: test
+          args: --all-features --no-fail-fast
+        env:
+          CARGO_INCREMENTAL: "0"
+          RUSTFLAGS: "-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests"
+          RUSTDOCFLAGS: "-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests"
+      - id: coverage
+        if: ${{ matrix.coverage }}
+        uses: actions-rs/grcov@v0.1
+      - name: Coveralls upload
+        if: ${{ matrix.coverage }}
+        uses: codecov/codecov-action@v1
+        with:
+          file: ${{ steps.coverage.outputs.report }}
+  # coverage:
+  #   if: ${{ matrix.coverage }}
   #   steps:
-  #     - uses: actions/checkout@v2
-  #       name: Checkout 🛎️
-  #     - uses: actions/cache@v2
-  #       with:
-  #         path: |
-  #           ~/.cargo/registry
-  #           ~/.cargo/git
-  #           target
-  #         key: ${{ runner.os }}-cargo-test
+  #     - uses: actions/checkout@v1
   #     - uses: actions-rs/toolchain@v1
-  #       name: Setup Cargo Toolchain 🛎️
   #       with:
-  #         components: rustfmt, clippy
   #         toolchain: nightly
   #         override: true
-  #     - uses: actions-rs/cargo@v1
-  #       name: Check Code Format 🔧
-  #       with:
-  #         command: fmt
-  #         args: -- --check
-  #     - uses: actions-rs/cargo@v1
-  #       name: Run Cargo Clippy
-  #       with:
-  #         command: clippy
-  #         args: -- -D warnings
-  #     - uses: actions-rs/cargo@v1
-  #       name: Running Tests 🚀
-  #       with:
-  #         command: test
-  #         args: --all
+  # uses: coverallsapp/github-action@master
+  #   path-to-lcov: ${{ steps.coverage.outputs.report }}
