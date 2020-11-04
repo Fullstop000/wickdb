@@ -27,7 +27,7 @@ jobs:
           - os: macos-latest
             toolchain: nightly
             ignore-err: true
-            coverage: true
+            coverage: false
     steps:
       - uses: actions/checkout@v2
         name: Checkout 🛎️
