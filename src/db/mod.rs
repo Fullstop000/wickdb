@@ -618,7 +618,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         }
 
         // Recover in the order in which the logs were generated
-        logs_to_recover.sort();
+        logs_to_recover.sort_unstable();
         let mut max_sequence = 0;
         let mut edit = VersionEdit::new(self.options.max_levels);
         for (i, log_number) in logs_to_recover.iter().enumerate() {

@@ -1,0 +1,85 @@
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+name: Test
+
+jobs:
+  run-test:
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.ignore-err }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        toolchain: [stable]
+        ignore-err: [false]
+        coverage: [false]
+        include:
+          - os: ubuntu-latest
+            toolchain: nightly
+            ignore-err: true
+            coverage: true
+          - os: macos-latest
+            toolchain: nightly
+            ignore-err: true
+            coverage: false
+    steps:
+      - uses: actions/checkout@v2
+        name: Checkout 🛎️
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-test
+      - uses: actions-rs/toolchain@v1
+        name: Setup Cargo Toolchain 🛎️
+        with:
+          components: rustfmt, clippy
+          toolchain: ${{ matrix.toolchain }}
+          override: true
+          default: true
+      - uses: actions-rs/cargo@v1
+        name: Check Code Format 🔧
+        with:
+          command: fmt
+          args: -- --check
+      - uses: actions-rs/cargo@v1
+        name: Run Cargo Clippy 🔧
+        with:
+          command: clippy
+          args: -- -D warnings
+      - uses: actions-rs/cargo@v1
+        name: Running Tests 🚀
+        with:
+          command: test
+          args: --all
+      - uses: actions-rs/cargo@v1
+        name: Cargo Clean
+        if: ${{ matrix.coverage }}
+        with:
+          command: clean
+      - uses: actions-rs/cargo@v1
+        name: Tests with coverage reports 🚀
+        if: ${{ matrix.coverage }}
+        with:
+          command: test
+          args: --all-features --no-fail-fast
+        env:
+          CARGO_INCREMENTAL: "0"
+          RUSTFLAGS: "-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests"
+          RUSTDOCFLAGS: "-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests"
+      - id: coverage
+        if: ${{ matrix.coverage }}
+        uses: actions-rs/grcov@v0.1
+      - name: Coveralls upload 📕
+        if: ${{ matrix.coverage }}
+        uses: codecov/codecov-action@v1
+        with:
+          file: ${{ steps.coverage.outputs.report }}

@@ -251,10 +251,7 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
             true
         } else {
             let node_key = unsafe { (*n).key() };
-            match self.comparator.compare(key, node_key) {
-                CmpOrdering::Greater => false,
-                _ => true,
-            }
+            !matches!(self.comparator.compare(key, node_key), CmpOrdering::Greater)
         }
     }
 }

@@ -91,7 +91,7 @@ pub struct Version<C: Comparator> {
 
 impl<C: Comparator> fmt::Debug for Version<C> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "vnum: {} \n", &self.vnum)?;
+        writeln!(f, "vnum: {} ", &self.vnum)?;
         for (level, files) in self.files.iter().enumerate() {
             write!(f, "level {}: [ ", level)?;
             for file in files {
@@ -101,7 +101,7 @@ impl<C: Comparator> fmt::Debug for Version<C> {
                     file.number, file.file_size, file.smallest, file.largest
                 )?;
             }
-            write!(f, " ]\n")?;
+            writeln!(f, " ]")?;
         }
         Ok(())
     }
@@ -251,7 +251,7 @@ impl<C: Comparator + 'static> Version<C> {
             acc
         });
         s.push_str(summary.as_str());
-        s.push_str("]");
+        s.push(']');
         s
     }
 
