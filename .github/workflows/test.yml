@@ -10,17 +10,21 @@ name: Test
 
 jobs:
   run-test:
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        toolchain: [stable, nightly]
+        toolchain: [stable]
         experimental: [false]
         include:
-          - toolchain: nightly
+          - os: ubuntu-latest
+            toolchain: nightly
             experimental: true
-    runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.experimental }}
+          - os: macos-latest
+            toolchain: nightly
+            experimental: true
     steps:
       - uses: actions/checkout@v2
         name: Checkout 🛎️
@@ -35,7 +39,7 @@ jobs:
         name: Setup Cargo Toolchain 🛎️
         with:
           components: rustfmt, clippy
-          toolchain: ${{ metrix.toolchain }}
+          toolchain: ${{ matrix.toolchain }}
           override: true
           default: true
       - uses: actions-rs/cargo@v1
