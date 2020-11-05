@@ -6,7 +6,7 @@ use rand::random;
 use std::cmp::Ordering as CmpOrdering;
 use std::mem;
 use std::ptr;
-use std::ptr::{null, null_mut};
+use std::ptr::{null, null_mut, NonNull};
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -31,9 +31,10 @@ impl Node {
         let p = arena.allocate::<Node>(size, algin);
         assert!(!p.is_null());
         unsafe {
-            ptr::write(&mut (*p).key, key);
-            ptr::write(&mut (*p).height, height);
-            ptr::write_bytes(&mut (*p).next_nodes, 0, height);
+            let node = &mut *p;
+            ptr::write(&mut node.key, key);
+            ptr::write(&mut node.height, height);
+            ptr::write_bytes(&mut node.next_nodes.as_mut_ptr(), 0, height);
             p
         }
     }
@@ -60,7 +61,7 @@ struct InlineSkipListInner<A: Arena> {
     // Current height. 1 <= height <= kMaxHeight. CAS.
     height: AtomicUsize,
     // TODO: use NonNull instead?
-    head: *mut Node,
+    head: NonNull<Node>,
     arena: A,
 }
 
@@ -69,7 +70,7 @@ unsafe impl<A: Arena + Sync> Sync for InlineSkipListInner<A> {}
 
 impl<A: Arena> Drop for InlineSkipListInner<A> {
     fn drop(&mut self) {
-        let mut node = self.head;
+        let mut node = self.head.as_ptr();
         loop {
             let next = unsafe { (&*node).get_next(0) };
             if !next.is_null() {
@@ -101,7 +102,7 @@ where
         Self {
             inner: Arc::new(InlineSkipListInner {
                 height: AtomicUsize::new(1),
-                head,
+                head: unsafe { NonNull::new_unchecked(head) },
                 arena,
             }),
             comparator,
@@ -115,43 +116,40 @@ where
     // node.key >= key (if allowEqual=true).
     // Returns the node found. The bool returned is true if the node has key equal to given key.
     fn find_near(&self, key: &[u8], less: bool, allow_equal: bool) -> (*mut Node, bool) {
-        let mut x = self.inner.head;
+        let head = self.inner.head.as_ptr();
+        let mut x = head;
         let mut level = self.get_height() - 1;
         loop {
             unsafe {
                 // Assume x.key < key
-                let next = (*x).get_next(level);
-                if next.is_null() {
+                let next_ptr = (*x).get_next(level);
+                if next_ptr.is_null() {
                     // x.key < key < END OF LIST
                     if level > 0 {
                         level -= 1;
                         continue;
                     }
-                    // height = 0
-                    if !less {
-                        return (null_mut(), false);
-                    }
-                    // Try to return x. Make sure it is not a head node.
-                    if x == self.inner.head {
+                    // height = 0 or it's a head node
+                    if !less || x == head {
                         return (null_mut(), false);
                     }
                     return (x, false);
                 }
-                let nextkey = (*next).key();
-                match self.comparator.compare(key, nextkey) {
+                let next = &*next_ptr;
+                match self.comparator.compare(key, &next.key) {
                     CmpOrdering::Greater => {
                         // x.key < next.key < key. We can continue to move right.
-                        x = next;
+                        x = next_ptr;
                         continue;
                     }
                     CmpOrdering::Equal => {
                         // x.key < key == next.key.
                         if allow_equal {
-                            return (next, true);
+                            return (next_ptr, true);
                         }
                         if !less {
                             // We want >, so go to base level to grab the next bigger note.
-                            return ((*next).get_next(0), false);
+                            return (next.get_next(0), false);
                         }
                         // We want <. If not base level, we should go closer in the next level.
                         if level > 0 {
@@ -160,7 +158,7 @@ where
                         }
                         // On base level. Return x.
                         // Try to return x. Make sure it is not a head node.
-                        if x == self.inner.head {
+                        if x == head {
                             return (null_mut(), false);
                         }
                         return (x, false);
@@ -173,9 +171,9 @@ where
                         }
                         // At base level. Need to return something.
                         if !less {
-                            return (next, false);
+                            return (next_ptr, false);
                         }
-                        if x == self.inner.head {
+                        if x == head {
                             return (null_mut(), false);
                         }
                         return (x, false);
@@ -186,12 +184,12 @@ where
     }
 
     pub fn put(&self, key: impl Into<Bytes>) {
-        let key = key.into();
-        let height = self.get_height();
+        let key: Bytes = key.into();
+        let mut list_height = self.get_height();
         let mut prev = vec![null_mut(); MAX_HEIGHT + 1];
         let mut next = vec![null_mut(); MAX_HEIGHT + 1];
-        prev[height] = self.inner.head;
-        for i in (0..height).rev() {
+        prev[list_height] = self.inner.head.as_ptr();
+        for i in (0..list_height).rev() {
             // Use higher level to speed up for current level.
             let (p, n) = self.find_splice_for_level(&key, prev[i + 1], i);
             prev[i] = p;
@@ -201,7 +199,6 @@ where
         let height = random_height();
         let np = Node::new(key, height, &self.inner.arena);
 
-        let mut list_height = self.get_height();
         while height > list_height {
             match self.inner.height.compare_exchange_weak(
                 list_height,
@@ -223,7 +220,7 @@ where
                     assert!(i > 1);
                     // We haven't computed prev, next for this level because height exceeds old listHeight.
                     // For these levels, we expect the lists to be sparse, so we can just search from head.
-                    let (p, n) = self.find_splice_for_level(&node.key, self.inner.head, i);
+                    let (p, n) = self.find_splice_for_level(&node.key, self.inner.head.as_ptr(), i);
 
                     // Someone adds the exact same key before we are able to do so. This can only happen on
                     // the base level. But we know we are not on the base level.
@@ -248,7 +245,9 @@ where
                             // because it is unlikely that lots of nodes are inserted between prev[i] and next[i].
                             let (p, n) = self.find_splice_for_level(&node.key, prev[i], i);
                             if p == n {
+                                // In wickdb, this should never happen
                                 assert_eq!(i, 0, "Equality can happen only on base level");
+                                ptr::drop_in_place(np);
                                 return;
                             }
                             prev[i] = p;
@@ -265,7 +264,7 @@ where
     }
 
     pub fn len(&self) -> usize {
-        let mut node = self.inner.head;
+        let mut node = self.inner.head.as_ptr();
         let mut count = 0;
         loop {
             let next = unsafe { (&*node).get_next(0) };
@@ -279,18 +278,17 @@ where
     }
 
     fn find_last(&self) -> *mut Node {
-        let mut x = self.inner.head;
+        let mut x = self.inner.head.as_ptr();
         let mut height = self.get_height() - 1;
         loop {
             unsafe {
                 let next = (*x).get_next(height);
                 if next.is_null() {
                     if height == 0 {
-                        if x == self.inner.head {
+                        if x == self.inner.head.as_ptr() {
                             return null_mut();
-                        } else {
-                            return x;
                         }
+                        return x;
                     } else {
                         height -= 1;
                     }
@@ -309,12 +307,11 @@ where
     ) -> (*mut Node, *mut Node) {
         loop {
             unsafe {
-                let next = (*before).get_next(height);
+                let next = (&*before).get_next(height);
                 if next.is_null() {
                     return (before, null_mut());
                 } else {
-                    let next_key = (*next).key();
-                    match self.comparator.compare(key, next_key) {
+                    match self.comparator.compare(key, &(*next).key) {
                         CmpOrdering::Equal => return (next, next),
                         CmpOrdering::Less => return (before, next),
                         CmpOrdering::Greater => {
@@ -351,6 +348,7 @@ where
     }
 
     fn key(&self) -> &[u8] {
+        assert!(self.valid());
         unsafe { (*self.node).key() }
     }
 
@@ -379,7 +377,7 @@ where
     }
 
     fn seek_to_first(&mut self) {
-        unsafe { self.node = (*self.list.inner.head).get_next(0) }
+        unsafe { self.node = self.list.inner.head.as_ref().get_next(0) }
     }
 
     fn seek_to_last(&mut self) {
@@ -423,6 +421,15 @@ mod tests {
             BytewiseComparator::default(),
             ArenaV2::with_capacity(1 << 20),
         )
+    }
+
+    #[test]
+    fn test_mem_alloc() {
+        let cmp = BytewiseComparator::default();
+        let arena = ArenaV2::with_capacity(1 << 20);
+        let l = InlineSkipList::new(cmp, arena);
+        // 20 * size_of<node> +
+        println!("{}", l.inner.arena.memory_used());
     }
 
     #[test]
