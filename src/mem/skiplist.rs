@@ -135,8 +135,8 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
         let height = rand_height();
         let max_height = self.max_height.load(Ordering::Acquire);
         if height > max_height {
-            for i in max_height..height {
-                prev[i] = self.head;
+            for p in prev.iter_mut().take(height).skip(max_height) {
+                *p = self.head;
             }
             self.max_height.store(height, Ordering::Release);
         }

@@ -268,7 +268,7 @@ where
         let mut count = 0;
         loop {
             let next = unsafe { (&*node).get_next(0) };
-            if next != ptr::null_mut() {
+            if next.is_null() {
                 count += 1;
                 node = next;
                 continue;
