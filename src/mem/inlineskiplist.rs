@@ -34,7 +34,7 @@ impl Node {
             let node = &mut *p;
             ptr::write(&mut node.key, key);
             ptr::write(&mut node.height, height);
-            ptr::write_bytes(&mut node.next_nodes.as_mut_ptr(), 0, height);
+            ptr::write_bytes(node.next_nodes.as_mut_ptr(), 0, height);
             p
         }
     }
@@ -268,7 +268,7 @@ where
         let mut count = 0;
         loop {
             let next = unsafe { (&*node).get_next(0) };
-            if next.is_null() {
+            if !next.is_null() {
                 count += 1;
                 node = next;
                 continue;
