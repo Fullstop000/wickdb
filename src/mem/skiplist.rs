@@ -24,8 +24,8 @@ use rand::random;
 use std::cmp::Ordering as CmpOrdering;
 use std::mem;
 use std::ptr;
-use std::rc::Rc;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use std::sync::Arc;
 
 const BRANCHING: u32 = 4;
 pub const MAX_HEIGHT: usize = 12;
@@ -51,9 +51,10 @@ impl Node {
         let align = mem::align_of::<Self>();
         let p = arena.allocate(size, align) as *const Self as *mut Self;
         unsafe {
-            ptr::write(&mut (*p).key, key);
-            ptr::write(&mut (*p).height, height);
-            ptr::write_bytes(&mut (*p).next_nodes, 0, height);
+            let node = &mut *p;
+            ptr::write(&mut node.key, key);
+            ptr::write(&mut node.height, height);
+            ptr::write_bytes(node.next_nodes.as_mut_ptr(), 0, height);
             p as *const Self
         }
     }
@@ -119,13 +120,14 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
     /// Concurrent insertion is not thread safe but concurrent reading with a
     /// single writer is safe.
     ///
-    pub fn insert(&self, key: &[u8]) {
+    pub fn insert(&self, key: impl Into<Bytes>) {
+        let key = key.into();
         let mut prev = [ptr::null(); MAX_HEIGHT];
-        let node = self.find_greater_or_equal(key, Some(&mut prev));
+        let node = self.find_greater_or_equal(&key, Some(&mut prev));
         if !node.is_null() {
             unsafe {
                 assert_ne!(
-                    self.comparator.compare((&(*node)).key(), key),
+                    self.comparator.compare((&(*node)).key(), &key),
                     CmpOrdering::Equal,
                     "[skiplist] duplicate insertion [key={:?}] is not allowed",
                     &key
@@ -141,7 +143,7 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
             self.max_height.store(height, Ordering::Release);
         }
         // allocate the node
-        let new_node = Node::new(Bytes::copy_from_slice(key), height, &self.arena);
+        let new_node = Node::new(key, height, &self.arena);
         unsafe {
             for i in 1..=height {
                 (*new_node).set_next(i, (*(prev[i - 1])).get_next(i));
@@ -251,7 +253,7 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
 
 /// Iteration over the contents of a skip list
 pub struct SkiplistIterator<C: Comparator, A: Arena> {
-    skl: Rc<Skiplist<C, A>>,
+    skl: Arc<Skiplist<C, A>>,
     node: *const Node,
 }
 
@@ -326,7 +328,7 @@ impl<C: Comparator, A: Arena> Iterator for SkiplistIterator<C, A> {
 }
 
 impl<C: Comparator, A: Arena> SkiplistIterator<C, A> {
-    pub fn new(skl: Rc<Skiplist<C, A>>) -> Self {
+    pub fn new(skl: Arc<Skiplist<C, A>>) -> Self {
         Self {
             skl,
             node: ptr::null_mut(),
@@ -543,7 +545,7 @@ mod tests {
     #[test]
     fn test_empty_skiplist_iterator() {
         let skl = new_test_skl();
-        let iter = SkiplistIterator::new(Rc::new(skl));
+        let iter = SkiplistIterator::new(Arc::new(skl));
         assert!(!iter.valid());
     }
 
@@ -555,7 +557,7 @@ mod tests {
         for key in inputs.clone() {
             skl.insert(key.as_bytes())
         }
-        let mut iter = SkiplistIterator::new(Rc::new(skl));
+        let mut iter = SkiplistIterator::new(Arc::new(skl));
         assert_eq!(ptr::null(), iter.node);
 
         iter.seek_to_first();
@@ -697,7 +699,7 @@ mod tests {
     // at iterator construction time.
     struct ConcurrencyTest {
         current: State,
-        list: Rc<Skiplist<U64Comparator, BlockArena>>,
+        list: Arc<Skiplist<U64Comparator, BlockArena>>,
     }
 
     unsafe impl Send for ConcurrencyTest {}
@@ -708,7 +710,7 @@ mod tests {
             let arena = BlockArena::default();
             Self {
                 current: State::new(),
-                list: Rc::new(Skiplist::new(U64Comparator {}, arena)),
+                list: Arc::new(Skiplist::new(U64Comparator {}, arena)),
             }
         }
 
@@ -718,7 +720,7 @@ mod tests {
             let key = make_key(k as u64, g as u64);
             let mut bytes = vec![];
             put_fixed_64(&mut bytes, key);
-            self.list.insert(&bytes);
+            self.list.insert(bytes);
             self.current.set(k, g);
         }
 

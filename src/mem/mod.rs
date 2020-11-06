@@ -28,7 +28,7 @@ use crate::util::comparator::Comparator;
 use crate::util::varint::VarintU32;
 use crate::{Error, Result};
 use std::cmp::Ordering;
-use std::rc::Rc;
+use std::sync::Arc;
 
 // KeyComparator is a wrapper for InternalKeyComparator. It will convert the input mem key
 // to the internal key before comparing.
@@ -69,7 +69,7 @@ impl<C: Comparator> Comparator for KeyComparator<C> {
 /// In-memory write buffer
 pub struct MemTable<C: Comparator> {
     cmp: KeyComparator<C>,
-    table: Rc<Skiplist<KeyComparator<C>, BlockArena>>,
+    table: Arc<Skiplist<KeyComparator<C>, BlockArena>>,
 }
 
 impl<C: Comparator> MemTable<C> {
@@ -77,7 +77,7 @@ impl<C: Comparator> MemTable<C> {
     pub fn new(icmp: InternalKeyComparator<C>) -> Self {
         let arena = BlockArena::default();
         let kcmp = KeyComparator { icmp };
-        let table = Rc::new(Skiplist::new(kcmp.clone(), arena));
+        let table = Arc::new(Skiplist::new(kcmp.clone(), arena));
         Self { cmp: kcmp, table }
     }
 
@@ -130,7 +130,7 @@ impl<C: Comparator> MemTable<C> {
             (seq_number << INTERNAL_KEY_TAIL) | val_type as u64,
         );
         VarintU32::put_varint_prefixed_slice(&mut buf, value);
-        self.table.insert(&buf);
+        self.table.insert(buf);
     }
 
     /// If memtable contains a value for key, returns it in `Some(Ok())`.
@@ -175,7 +175,7 @@ pub struct MemTableIterator<C: Comparator> {
 }
 
 impl<C: Comparator> MemTableIterator<C> {
-    pub fn new(table: Rc<Skiplist<KeyComparator<C>, BlockArena>>) -> Self {
+    pub fn new(table: Arc<Skiplist<KeyComparator<C>, BlockArena>>) -> Self {
         let iter = SkiplistIterator::new(table);
         Self { iter, tmp: vec![] }
     }
