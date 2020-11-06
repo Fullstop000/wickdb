@@ -60,7 +60,6 @@ impl Node {
 struct InlineSkipListInner<A: Arena> {
     // Current height. 1 <= height <= kMaxHeight. CAS.
     height: AtomicUsize,
-    // TODO: use NonNull instead?
     head: NonNull<Node>,
     arena: A,
 }
@@ -347,13 +346,18 @@ where
         !self.node.is_null()
     }
 
-    fn key(&self) -> &[u8] {
-        assert!(self.valid());
-        unsafe { (*self.node).key() }
+    fn seek_to_first(&mut self) {
+        unsafe { self.node = self.list.inner.head.as_ref().get_next(0) }
     }
 
-    fn value(&self) -> &[u8] {
-        unimplemented!()
+    fn seek_to_last(&mut self) {
+        self.node = self.list.find_last();
+    }
+
+    // find first node, key <= node.key
+    fn seek(&mut self, key: &[u8]) {
+        let (node, _) = self.list.find_near(key, false, true);
+        self.node = node;
     }
 
     fn next(&mut self) {
@@ -370,18 +374,13 @@ where
         self.node = node;
     }
 
-    // find first node, key <= node.key
-    fn seek(&mut self, key: &[u8]) {
-        let (node, _) = self.list.find_near(key, false, true);
-        self.node = node;
+    fn key(&self) -> &[u8] {
+        assert!(self.valid());
+        unsafe { (*self.node).key() }
     }
 
-    fn seek_to_first(&mut self) {
-        unsafe { self.node = self.list.inner.head.as_ref().get_next(0) }
-    }
-
-    fn seek_to_last(&mut self) {
-        self.node = self.list.find_last();
+    fn value(&self) -> &[u8] {
+        unimplemented!()
     }
 
     fn status(&mut self) -> Result<()> {
