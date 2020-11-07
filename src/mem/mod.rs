@@ -21,7 +21,7 @@ pub mod skiplist;
 
 use crate::db::format::{InternalKeyComparator, LookupKey, ValueType, INTERNAL_KEY_TAIL};
 use crate::iterator::Iterator;
-use crate::mem::arena::{Arena, BlockArena};
+use crate::mem::arena::BlockArena;
 use crate::mem::skiplist::{Skiplist, SkiplistIterator};
 use crate::util::coding::{decode_fixed_64, put_fixed_64};
 use crate::util::comparator::Comparator;
@@ -84,7 +84,7 @@ impl<C: Comparator> MemTable<C> {
     /// Returns an estimate of the number of bytes of data in use by this
     /// data structure. It is safe to call when MemTable is being modified.
     pub fn approximate_memory_usage(&self) -> usize {
-        self.table.arena.memory_used()
+        self.table.total_size()
     }
 
     /// Creates a new `MemTableIterator`
@@ -285,6 +285,9 @@ mod tests {
         assert!(v.unwrap().is_err());
         let v = memtable.get(&LookupKey::new(b"boo", 3));
         assert_eq!(b"boo", v.unwrap().unwrap().as_slice());
+        assert!(
+            memtable.approximate_memory_usage() < 100 && memtable.approximate_memory_usage() > 70
+        );
     }
 
     #[test]

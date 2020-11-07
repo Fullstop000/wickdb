@@ -96,6 +96,11 @@ pub struct Skiplist<C: Comparator, A: Arena> {
     // comparator is used to compare the key of node
     comparator: C,
     count: AtomicUsize,
+    // The total size memory skiplist served
+    //
+    // Note:
+    // We only alloc space for `Node` in arena without the content of `key` (only `Bytes` which is pretty small).
+    size: AtomicUsize,
 }
 
 impl<C: Comparator, A: Arena> Skiplist<C, A> {
@@ -109,6 +114,7 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
             arena,
             head,
             count: AtomicUsize::new(0),
+            size: AtomicUsize::new(0),
         }
     }
 
@@ -122,6 +128,7 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
     ///
     pub fn insert(&self, key: impl Into<Bytes>) {
         let key = key.into();
+        let length = key.len();
         let mut prev = [ptr::null(); MAX_HEIGHT];
         let node = self.find_greater_or_equal(&key, Some(&mut prev));
         if !node.is_null() {
@@ -150,13 +157,20 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
                 (*(prev[i - 1])).set_next(i, new_node as *mut Node);
             }
         }
-        self.count.fetch_add(1, Ordering::Release);
+        self.count.fetch_add(1, Ordering::SeqCst);
+        self.size.fetch_add(length, Ordering::SeqCst);
     }
 
     /// Returns current elements count
     #[inline]
     pub fn count(&self) -> usize {
         self.count.load(Ordering::Acquire)
+    }
+
+    /// Returns current memory size being served
+    #[inline]
+    pub fn total_size(&self) -> usize {
+        self.size.load(Ordering::Acquire)
     }
 
     // Find the nearest node with a key >= the given key.
