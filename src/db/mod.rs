@@ -200,6 +200,7 @@ impl<S: Storage + Clone, C: Comparator + 'static> WickDB<S, C> {
         wick_db.process_compaction();
         wick_db.process_batch();
         // Schedule a compaction to current version for potential unfinished work
+        debug!("Try to schedule a compaction on opening db");
         wick_db.inner.maybe_schedule_compaction(current);
         Ok(wick_db)
     }
@@ -1887,7 +1888,9 @@ mod tests {
             thread::sleep(Duration::from_secs(2));
             t.assert_file_num_at_level(2, 1);
             // Try to retrieve key "foo" from level 0 files
+            t.assert_get("k1", Some(&"x".repeat(100000)));
             assert_eq!("v1", t.get("foo", None).unwrap()); // "v1" on SST files
+            t.assert_get("k2", Some(&"y".repeat(100000)));
         }
     }
 

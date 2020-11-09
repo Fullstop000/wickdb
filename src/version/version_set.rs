@@ -380,7 +380,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
             v.finalize();
             let summary = v.level_summary();
             info!(
-                "Compaction result summary : \n\t before {} \n\t now {}",
+                "level changing result summary : \n\t before {} \n\t now {}",
                 level_summary_before, summary
             );
             (v, record)

@@ -18,15 +18,14 @@
 use super::arena::*;
 use crate::iterator::Iterator;
 use crate::util::comparator::Comparator;
-use crate::util::slice::Slice;
 use crate::Result;
+use bytes::Bytes;
 use rand::random;
 use std::cmp::Ordering as CmpOrdering;
-use std::intrinsics::copy_nonoverlapping;
 use std::mem;
 use std::ptr;
-use std::rc::Rc;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use std::sync::Arc;
 
 const BRANCHING: u32 = 4;
 pub const MAX_HEIGHT: usize = 12;
@@ -38,7 +37,7 @@ pub const MAX_HEIGHT: usize = 12;
 // This struct is marked with `repr(C)` so that the specific order of fields is enforced.
 struct Node {
     // The pointer and length pointing to the memory location
-    key: Slice,
+    key: Bytes,
     height: usize,
     // The inner size of `next_nodes` is equal to `height`
     next_nodes: [AtomicPtr<Node>; 0],
@@ -46,15 +45,16 @@ struct Node {
 
 impl Node {
     // Allocates memory in the given arena for `Node`.
-    #[allow(clippy::cast_ptr_alignment)]
-    fn new<A: Arena>(key_ptr: Slice, height: usize, arena: &A) -> *const Self {
+    fn new<A: Arena>(key: Bytes, height: usize, arena: &A) -> *const Self {
         let pointers_size = height * mem::size_of::<AtomicPtr<Self>>();
         let size = mem::size_of::<Self>() + pointers_size;
-        let p = arena.allocate_aligned(size) as *const Self as *mut Self;
+        let align = mem::align_of::<Self>();
+        let p = arena.allocate(size, align) as *const Self as *mut Self;
         unsafe {
-            ptr::write(&mut (*p).key, key_ptr);
-            ptr::write(&mut (*p).height, height);
-            ptr::write_bytes(&mut (*p).next_nodes, 0, height);
+            let node = &mut *p;
+            ptr::write(&mut node.key, key);
+            ptr::write(&mut node.height, height);
+            ptr::write_bytes(node.next_nodes.as_mut_ptr(), 0, height);
             p as *const Self
         }
     }
@@ -79,7 +79,7 @@ impl Node {
 
     #[inline]
     fn key(&self) -> &[u8] {
-        self.key.as_slice()
+        self.key.as_ref()
     }
 }
 
@@ -96,12 +96,17 @@ pub struct Skiplist<C: Comparator, A: Arena> {
     // comparator is used to compare the key of node
     comparator: C,
     count: AtomicUsize,
+    // The total size memory skiplist served
+    //
+    // Note:
+    // We only alloc space for `Node` in arena without the content of `key` (only `Bytes` which is pretty small).
+    size: AtomicUsize,
 }
 
 impl<C: Comparator, A: Arena> Skiplist<C, A> {
     /// Create a new Skiplist with the given arena capacity
     pub fn new(cmp: C, arena: A) -> Self {
-        let head = Node::new(Slice::default(), MAX_HEIGHT, &arena);
+        let head = Node::new(Bytes::new(), MAX_HEIGHT, &arena);
         Skiplist {
             comparator: cmp,
             // init height is 1 ( ignore the height of head )
@@ -109,6 +114,7 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
             arena,
             head,
             count: AtomicUsize::new(0),
+            size: AtomicUsize::new(0),
         }
     }
 
@@ -120,13 +126,15 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
     /// Concurrent insertion is not thread safe but concurrent reading with a
     /// single writer is safe.
     ///
-    pub fn insert(&self, key: &[u8]) {
+    pub fn insert(&self, key: impl Into<Bytes>) {
+        let key = key.into();
+        let length = key.len();
         let mut prev = [ptr::null(); MAX_HEIGHT];
-        let node = self.find_greater_or_equal(key, Some(&mut prev));
+        let node = self.find_greater_or_equal(&key, Some(&mut prev));
         if !node.is_null() {
             unsafe {
                 assert_ne!(
-                    self.comparator.compare((&(*node)).key(), key),
+                    self.comparator.compare((&(*node)).key(), &key),
                     CmpOrdering::Equal,
                     "[skiplist] duplicate insertion [key={:?}] is not allowed",
                     &key
@@ -136,32 +144,33 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
         let height = rand_height();
         let max_height = self.max_height.load(Ordering::Acquire);
         if height > max_height {
-            #[allow(clippy::needless_range_loop)]
-            for i in max_height..height {
-                prev[i] = self.head;
+            for p in prev.iter_mut().take(height).skip(max_height) {
+                *p = self.head;
             }
             self.max_height.store(height, Ordering::Release);
         }
-        // allocate the key
-        let k = self.arena.allocate(key.len());
-        unsafe {
-            copy_nonoverlapping(key.as_ptr(), k, key.len());
-        }
         // allocate the node
-        let new_node = Node::new(Slice::new(k, key.len()), height, &self.arena);
+        let new_node = Node::new(key, height, &self.arena);
         unsafe {
             for i in 1..=height {
                 (*new_node).set_next(i, (*(prev[i - 1])).get_next(i));
                 (*(prev[i - 1])).set_next(i, new_node as *mut Node);
             }
         }
-        self.count.fetch_add(1, Ordering::Release);
+        self.count.fetch_add(1, Ordering::SeqCst);
+        self.size.fetch_add(length, Ordering::SeqCst);
     }
 
     /// Returns current elements count
     #[inline]
     pub fn count(&self) -> usize {
         self.count.load(Ordering::Acquire)
+    }
+
+    /// Returns current memory size being served
+    #[inline]
+    pub fn total_size(&self) -> usize {
+        self.size.load(Ordering::Acquire)
     }
 
     // Find the nearest node with a key >= the given key.
@@ -258,7 +267,7 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
 
 /// Iteration over the contents of a skip list
 pub struct SkiplistIterator<C: Comparator, A: Arena> {
-    skl: Rc<Skiplist<C, A>>,
+    skl: Arc<Skiplist<C, A>>,
     node: *const Node,
 }
 
@@ -333,7 +342,7 @@ impl<C: Comparator, A: Arena> Iterator for SkiplistIterator<C, A> {
 }
 
 impl<C: Comparator, A: Arena> SkiplistIterator<C, A> {
-    pub fn new(skl: Rc<Skiplist<C, A>>) -> Self {
+    pub fn new(skl: Arc<Skiplist<C, A>>) -> Self {
         Self {
             skl,
             node: ptr::null_mut(),
@@ -381,7 +390,7 @@ mod tests {
     }
 
     fn construct_skl_from_nodes(
-        nodes: Vec<(Slice, usize)>,
+        nodes: Vec<(&str, usize)>,
     ) -> Skiplist<BytewiseComparator, BlockArena> {
         if nodes.is_empty() {
             return new_test_skl();
@@ -391,7 +400,11 @@ mod tests {
         let mut prev_nodes = vec![skl.head; MAX_HEIGHT];
         let mut max_height = 1;
         for (key, height) in nodes {
-            let n = Node::new(key, height, &mut skl.arena);
+            let n = Node::new(
+                Bytes::copy_from_slice(key.as_bytes()),
+                height,
+                &mut skl.arena,
+            );
             for (h, prev_node) in prev_nodes[0..height].iter().enumerate() {
                 unsafe {
                     (**prev_node).set_next(h + 1, n as *mut Node);
@@ -431,7 +444,7 @@ mod tests {
         assert_eq!(true, skl.key_is_less_than_or_equal(&key, ptr::null_mut()));
 
         for (node_key, expected) in tests {
-            let node = Node::new((&node_key).into(), 1, &skl.arena);
+            let node = Node::new(Bytes::from(node_key), 1, &skl.arena);
             assert_eq!(expected, skl.key_is_less_than_or_equal(&key, node))
         }
     }
@@ -445,11 +458,7 @@ mod tests {
             ("key7", 4),
             ("key9", 3),
         ];
-        let nodes: Vec<(Slice, usize)> = inputs
-            .iter()
-            .map(|(key, height)| (Slice::from(*key), *height))
-            .collect();
-        let skl = construct_skl_from_nodes(nodes);
+        let skl = construct_skl_from_nodes(inputs);
         let mut prev_nodes = vec![ptr::null(); 5];
         // test the scenario for un-inserted key
         let res = skl.find_greater_or_equal("key4".as_bytes(), Some(&mut prev_nodes));
@@ -483,11 +492,7 @@ mod tests {
             ("key7", 4),
             ("key9", 3),
         ];
-        let nodes: Vec<(Slice, usize)> = inputs
-            .iter()
-            .map(|(key, height)| (Slice::from(*key), *height))
-            .collect();
-        let skl = construct_skl_from_nodes(nodes);
+        let skl = construct_skl_from_nodes(inputs);
 
         // test scenario for un-inserted key
         let res = skl.find_less_than("key4".as_bytes());
@@ -511,11 +516,7 @@ mod tests {
             ("key7", 4),
             ("key9", 3),
         ];
-        let nodes: Vec<(Slice, usize)> = inputs
-            .iter()
-            .map(|(key, height)| (Slice::from(*key), *height))
-            .collect();
-        let skl = construct_skl_from_nodes(nodes);
+        let skl = construct_skl_from_nodes(inputs);
         let last = skl.find_last();
         unsafe {
             assert_eq!((*last).key(), "key9".as_bytes());
@@ -558,7 +559,7 @@ mod tests {
     #[test]
     fn test_empty_skiplist_iterator() {
         let skl = new_test_skl();
-        let iter = SkiplistIterator::new(Rc::new(skl));
+        let iter = SkiplistIterator::new(Arc::new(skl));
         assert!(!iter.valid());
     }
 
@@ -570,7 +571,7 @@ mod tests {
         for key in inputs.clone() {
             skl.insert(key.as_bytes())
         }
-        let mut iter = SkiplistIterator::new(Rc::new(skl));
+        let mut iter = SkiplistIterator::new(Arc::new(skl));
         assert_eq!(ptr::null(), iter.node);
 
         iter.seek_to_first();
@@ -712,7 +713,7 @@ mod tests {
     // at iterator construction time.
     struct ConcurrencyTest {
         current: State,
-        list: Rc<Skiplist<U64Comparator, BlockArena>>,
+        list: Arc<Skiplist<U64Comparator, BlockArena>>,
     }
 
     unsafe impl Send for ConcurrencyTest {}
@@ -723,7 +724,7 @@ mod tests {
             let arena = BlockArena::default();
             Self {
                 current: State::new(),
-                list: Rc::new(Skiplist::new(U64Comparator {}, arena)),
+                list: Arc::new(Skiplist::new(U64Comparator {}, arena)),
             }
         }
 
@@ -733,7 +734,7 @@ mod tests {
             let key = make_key(k as u64, g as u64);
             let mut bytes = vec![];
             put_fixed_64(&mut bytes, key);
-            self.list.insert(&bytes);
+            self.list.insert(bytes);
             self.current.set(k, g);
         }
 
