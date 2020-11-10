@@ -153,7 +153,7 @@ impl<C: Comparator> MemTable<C> {
             {
                 Ordering::Equal => {
                     let tag = decode_fixed_64(&ikey[key_size - INTERNAL_KEY_TAIL..]);
-                    match ValueType::from(tag & 0xff as u64) {
+                    match ValueType::from(tag & 0xff_u64) {
                         ValueType::Value => {
                             return Some(Ok(extract_varint32_encoded_slice(&mut e).to_vec()))
                         }
