@@ -47,11 +47,13 @@ jobs:
           default: true
       - uses: actions-rs/cargo@v1
         name: Check Code Format 🔧
+        continue-on-error: ${{ matrix.toolchain == nighty}}
         with:
           command: fmt
           args: -- --check
       - uses: actions-rs/cargo@v1
         name: Run Cargo Clippy 🔧
+        continue-on-error: ${{ matrix.toolchain == nighty}}
         with:
           command: clippy
           args: -- -D warnings
