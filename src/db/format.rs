@@ -180,7 +180,7 @@ impl InternalKey {
         let size = self.data.len();
         let user_key = &(self.data.as_slice())[..size - INTERNAL_KEY_TAIL];
         let num = decode_fixed_64(&(self.data.as_slice())[size - INTERNAL_KEY_TAIL..]);
-        let t = ValueType::from(num & 0xff as u64);
+        let t = ValueType::from(num & 0xff_u64);
         match t {
             ValueType::Unknown => None,
             _ => Some(ParsedInternalKey {
