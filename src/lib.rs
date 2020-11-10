@@ -11,11 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(clippy::unreadable_literal)]
-#![allow(clippy::type_complexity)]
-// See https://github.com/rust-lang/rust-clippy/issues/1608
-#![allow(clippy::redundant_closure)]
-
 #[macro_use]
 extern crate log;
 extern crate crc32c;

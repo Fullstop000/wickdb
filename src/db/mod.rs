@@ -954,7 +954,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         // TODO: This is not safe because there could be several compaction triggered continously
         thread::sleep(Duration::from_secs(1));
         if self.im_mem.read().unwrap().is_some() {
-            return self.take_bg_error().map_or(Ok(()), |e| Err(e));
+            return self.take_bg_error().map_or(Ok(()), Err);
         }
         assert_eq!(self.mem.read().unwrap().count(), 0);
         Ok(())
