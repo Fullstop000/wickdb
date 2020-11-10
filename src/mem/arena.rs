@@ -22,24 +22,28 @@ const BLOCK_SIZE: usize = 4096;
 // TODO(fullstop000): Add Send + Sync constrait?
 pub trait Arena {
     /// Return the start pointer to a newly allocated memory block of 'chunk' bytes .
-    fn allocate<T>(&self, chunk: usize, align: usize) -> *mut T;
+    ///
+    /// # Safety
+    ///
+    /// The `*mut T` might be unmatched with the size and align
+    unsafe fn allocate<T>(&self, chunk: usize, align: usize) -> *mut T;
 
     /// Return the size of memory that has been allocated.
     fn memory_used(&self) -> usize;
 }
 
-struct ArenaInner {
+struct OffsetArenaInner {
     len: AtomicUsize,
     cap: usize,
     ptr: *mut u8,
 }
 
 #[derive(Clone)]
-pub struct ArenaV2 {
-    inner: Arc<ArenaInner>,
+pub struct OffsetArena {
+    inner: Arc<OffsetArenaInner>,
 }
 
-impl Drop for ArenaInner {
+impl Drop for OffsetArenaInner {
     fn drop(&mut self) {
         // manully drop ArenaInner
         if !self.ptr.is_null() {
@@ -52,10 +56,10 @@ impl Drop for ArenaInner {
     }
 }
 
-impl Arena for ArenaV2 {
-    fn allocate<T>(&self, chunk: usize, align: usize) -> *mut T {
+impl Arena for OffsetArena {
+    unsafe fn allocate<T>(&self, chunk: usize, align: usize) -> *mut T {
         let offset = self.alloc(align, chunk);
-        unsafe { self.get_mut(offset) }
+        self.get_mut(offset)
     }
 
     /// Return the size of memory that has been allocated.
@@ -64,18 +68,18 @@ impl Arena for ArenaV2 {
     }
 }
 
-unsafe impl Send for ArenaV2 {}
-unsafe impl Sync for ArenaV2 {}
+unsafe impl Send for OffsetArena {}
+unsafe impl Sync for OffsetArena {}
 
-impl ArenaV2 {
+impl OffsetArena {
     // The real cap will be aligned with 8
     pub fn with_capacity(cap: usize) -> Self {
         let mut buf: Vec<u64> = Vec::with_capacity(cap / 8);
         let ptr = buf.as_mut_ptr() as *mut u8;
         let cap = buf.capacity() * 8;
         mem::forget(buf);
-        ArenaV2 {
-            inner: Arc::new(ArenaInner {
+        OffsetArena {
+            inner: Arc::new(OffsetArenaInner {
                 len: AtomicUsize::new(1),
                 cap,
                 ptr,
@@ -114,11 +118,11 @@ impl ArenaV2 {
 ///
 #[derive(Default)]
 pub struct BlockArena {
-    pub(super) ptr: AtomicPtr<u8>,
-    pub(super) bytes_remaining: AtomicUsize,
-    pub(super) blocks: RefCell<Vec<Vec<u8>>>,
+    ptr: AtomicPtr<u8>,
+    bytes_remaining: AtomicUsize,
+    blocks: RefCell<Vec<Vec<u8>>>,
     // Total memory usage of the arena.
-    pub(super) memory_usage: AtomicUsize,
+    memory_usage: AtomicUsize,
 }
 
 impl BlockArena {
@@ -139,7 +143,7 @@ impl BlockArena {
         new_block_ptr
     }
 
-    pub(super) fn allocate_new_block(&self, block_bytes: usize) -> *mut u8 {
+    fn allocate_new_block(&self, block_bytes: usize) -> *mut u8 {
         let mut new_block = vec![0; block_bytes];
         let p = new_block.as_mut_ptr();
         self.blocks.borrow_mut().push(new_block);
@@ -149,7 +153,7 @@ impl BlockArena {
 }
 
 impl Arena for BlockArena {
-    fn allocate<T>(&self, chunk: usize, align: usize) -> *mut T {
+    unsafe fn allocate<T>(&self, chunk: usize, align: usize) -> *mut T {
         assert!(chunk > 0);
         let ptr_size = mem::size_of::<usize>();
         // the align should be a pow(2)
@@ -165,13 +169,11 @@ impl Arena for BlockArena {
         };
         let needed = chunk + slop;
         let result = if needed <= self.bytes_remaining.load(Ordering::Acquire) {
-            unsafe {
-                // padding to align
-                let p = self.ptr.load(Ordering::Acquire).add(slop);
-                self.ptr.store(p.add(chunk), Ordering::Release);
-                self.bytes_remaining.fetch_sub(needed, Ordering::SeqCst);
-                p
-            }
+            // padding to align
+            let p = self.ptr.load(Ordering::Acquire).add(slop);
+            self.ptr.store(p.add(chunk), Ordering::Release);
+            self.bytes_remaining.fetch_sub(needed, Ordering::SeqCst);
+            p
         } else {
             self.allocate_fallback(chunk)
         };
@@ -210,7 +212,7 @@ mod tests {
     #[should_panic]
     fn test_allocate_empty_should_panic() {
         let a = BlockArena::default();
-        a.allocate::<u8>(0, 0);
+        unsafe { a.allocate::<u8>(0, 0) };
     }
 
     #[test]
@@ -260,7 +262,7 @@ mod tests {
                     r.gen_range(1, i)
                 }
             };
-            let ptr = a.allocate::<u8>(size, 8);
+            let ptr = unsafe { a.allocate::<u8>(size, 8) };
             unsafe {
                 for j in 0..size {
                     let np = ptr.add(j);

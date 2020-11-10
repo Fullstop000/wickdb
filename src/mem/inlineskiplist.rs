@@ -27,8 +27,8 @@ impl Node {
     fn new<A: Arena>(key: Bytes, height: usize, arena: &A) -> *mut Self {
         let size =
             mem::size_of::<Self>() - (MAX_HEIGHT - height) * mem::size_of::<AtomicPtr<Self>>();
-        let algin = mem::align_of::<Self>();
-        let p = arena.allocate::<Node>(size, algin);
+        let align = mem::align_of::<Self>();
+        let p = unsafe { arena.allocate::<Node>(size, align) };
         assert!(!p.is_null());
         unsafe {
             let node = &mut *p;
@@ -62,6 +62,11 @@ struct InlineSkipListInner<A: Arena> {
     height: AtomicUsize,
     head: NonNull<Node>,
     arena: A,
+    // The total size memory skiplist served
+    //
+    // Note:
+    // We only alloc space for `Node` in arena without the content of `key` (only `Bytes` which is pretty small).
+    size: AtomicUsize,
 }
 
 unsafe impl<A: Arena + Send> Send for InlineSkipListInner<A> {}
@@ -103,6 +108,7 @@ where
                 height: AtomicUsize::new(1),
                 head: unsafe { NonNull::new_unchecked(head) },
                 arena,
+                size: AtomicUsize::new(0),
             }),
             comparator,
         }
@@ -184,6 +190,7 @@ where
 
     pub fn put(&self, key: impl Into<Bytes>) {
         let key: Bytes = key.into();
+        let length = key.len();
         let mut list_height = self.get_height();
         let mut prev = vec![null_mut(); MAX_HEIGHT + 1];
         let mut next = vec![null_mut(); MAX_HEIGHT + 1];
@@ -236,6 +243,7 @@ where
                         Ordering::SeqCst,
                     ) {
                         Ok(_) => {
+                            self.inner.size.fetch_add(length, Ordering::SeqCst);
                             break;
                         }
                         Err(_) => {
@@ -258,6 +266,7 @@ where
         }
     }
 
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.find_last().is_null()
     }
@@ -274,6 +283,11 @@ where
             }
             return count;
         }
+    }
+
+    #[inline]
+    pub fn total_size(&self) -> usize {
+        self.inner.size.load(Ordering::Acquire)
     }
 
     fn find_last(&self) -> *mut Node {
@@ -409,32 +423,32 @@ fn random_height() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mem::arena::ArenaV2;
+    use crate::mem::arena::OffsetArena;
     use crate::BytewiseComparator;
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
 
-    fn new_test_skl() -> InlineSkipList<BytewiseComparator, ArenaV2> {
+    fn new_test_skl() -> InlineSkipList<BytewiseComparator, OffsetArena> {
         InlineSkipList::new(
             BytewiseComparator::default(),
-            ArenaV2::with_capacity(1 << 20),
+            OffsetArena::with_capacity(1 << 20),
         )
     }
 
     #[test]
     fn test_mem_alloc() {
         let cmp = BytewiseComparator::default();
-        let arena = ArenaV2::with_capacity(1 << 20);
+        let arena = OffsetArena::with_capacity(1 << 20);
         let l = InlineSkipList::new(cmp, arena);
-        // 20 * size_of<node> +
-        println!("{}", l.inner.arena.memory_used());
+        // Node size + algin mask
+        assert_eq!(mem::size_of::<Node>() + 8, l.inner.arena.memory_used());
     }
 
     #[test]
     fn test_find_near() {
         let cmp = BytewiseComparator::default();
-        let arena = ArenaV2::with_capacity(1 << 20);
+        let arena = OffsetArena::with_capacity(1 << 20);
         let l = InlineSkipList::new(cmp, arena);
         for i in 0..1000 {
             let key = format!("{:05}{:08}", i * 10 + 5, 0);
@@ -502,7 +516,7 @@ mod tests {
     #[test]
     fn test_basic() {
         let c = BytewiseComparator::default();
-        let arena = ArenaV2::with_capacity(1 << 20);
+        let arena = OffsetArena::with_capacity(1 << 20);
         let list = InlineSkipList::new(c, arena);
         let table = vec!["key1", "key2", "key3", "key4", "key5"];
 
@@ -535,7 +549,7 @@ mod tests {
 
     fn test_concurrent_basic(n: usize, cap: usize, key_len: usize) {
         let cmp = BytewiseComparator::default();
-        let arena = ArenaV2::with_capacity(cap);
+        let arena = OffsetArena::with_capacity(cap);
         let skl = InlineSkipList::new(cmp, arena);
         let keys: Vec<_> = (0..n)
             .map(|i| format!("{1:00$}", key_len, i).to_owned())

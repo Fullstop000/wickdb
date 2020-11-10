@@ -12,7 +12,7 @@ fn bench_block_arena_allocate(c: &mut Criterion) {
             |b: &mut Bencher, size| {
                 b.iter_batched(
                     || BlockArena::default(),
-                    |arena| arena.allocate::<u8>(*size, 8),
+                    |arena| unsafe { arena.allocate::<u8>(*size, 8) },
                     BatchSize::PerIteration,
                 );
             },
@@ -28,8 +28,8 @@ fn bench_offset_arena_allocate(c: &mut Criterion) {
             size,
             |b: &mut Bencher, size| {
                 b.iter_batched(
-                    || ArenaV2::with_capacity(1 << 10),
-                    |arena| arena.allocate::<u8>(*size, 8),
+                    || OffsetArena::with_capacity(1 << 10),
+                    |arena| unsafe { arena.allocate::<u8>(*size, 8) },
                     BatchSize::PerIteration,
                 );
             },

@@ -208,7 +208,10 @@ mod tests {
     use crate::util::comparator::BytewiseComparator;
 
     fn print_contents(batch: &WriteBatch) -> String {
-        let mem = MemTable::new(InternalKeyComparator::new(BytewiseComparator::default()));
+        let mem = MemTable::new(
+            1 << 32,
+            InternalKeyComparator::new(BytewiseComparator::default()),
+        );
         let result = batch.insert_into(&mem);
         let mut iter = mem.iter();
         iter.seek_to_first();

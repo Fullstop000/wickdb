@@ -49,7 +49,7 @@ impl Node {
         let pointers_size = height * mem::size_of::<AtomicPtr<Self>>();
         let size = mem::size_of::<Self>() + pointers_size;
         let align = mem::align_of::<Self>();
-        let p = arena.allocate(size, align) as *const Self as *mut Self;
+        let p = unsafe { arena.allocate(size, align) } as *const Self as *mut Self;
         unsafe {
             let node = &mut *p;
             ptr::write(&mut node.key, key);
