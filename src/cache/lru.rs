@@ -23,7 +23,7 @@ use std::mem;
 use std::mem::MaybeUninit;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 #[derive(Copy, Clone)]
 struct Key<K> {
@@ -83,9 +83,9 @@ impl<K, V> LRUEntry<K, V> {
 pub struct LRUCache<K, V: Clone> {
     // The capacity of LRU
     capacity: usize,
-    inner: Mutex<LRUInner<K, V>>,
+    inner: Arc<Mutex<LRUInner<K, V>>>,
     // The size of space which have been allocated
-    usage: AtomicUsize,
+    usage: Arc<AtomicUsize>,
     // Only for tests
     evict_hook: Option<Box<dyn Fn(&K, &V)>>,
 }
@@ -129,15 +129,19 @@ impl<K: Hash + Eq, V: Clone> LRUCache<K, V> {
         }
 
         LRUCache {
-            usage: AtomicUsize::new(0),
+            usage: Arc::new(AtomicUsize::new(0)),
             capacity: cap,
-            inner: Mutex::new(l),
+            inner: Arc::new(Mutex::new(l)),
             evict_hook: None,
         }
     }
 }
 
-impl<K: Hash + Eq + Debug, V: Clone> Cache<K, V> for LRUCache<K, V> {
+impl<K, V> Cache<K, V> for LRUCache<K, V>
+where
+    K: Send + Sync + Hash + Eq + Debug,
+    V: Send + Sync + Clone,
+{
     fn insert(&self, key: K, mut value: V, charge: usize) -> Option<V> {
         let mut l = self.inner.lock().unwrap();
         if self.capacity > 0 {

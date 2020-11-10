@@ -440,10 +440,6 @@ pub struct DBImpl<S: Storage + Clone, C: Comparator> {
     is_shutting_down: AtomicBool,
 }
 
-unsafe impl<S: Storage + Clone, C: Comparator> Sync for DBImpl<S, C> {}
-
-unsafe impl<S: Storage + Clone, C: Comparator> Send for DBImpl<S, C> {}
-
 impl<S: Storage + Clone, C: Comparator> Drop for DBImpl<S, C> {
     #[allow(unused_must_use)]
     fn drop(&mut self) {
@@ -1461,7 +1457,6 @@ mod tests {
     use rand::distributions::Alphanumeric;
     use rand::{thread_rng, Rng};
     use std::ops::{Deref, DerefMut};
-    use std::rc::Rc;
     use std::str;
     use std::sync::atomic::AtomicUsize;
 
@@ -1519,7 +1514,7 @@ mod tests {
             TestOption::FilterPolicy => {
                 let filter = BloomFilter::new(10);
                 let mut o = Options::default();
-                o.filter_policy = Some(Rc::new(filter));
+                o.filter_policy = Some(Arc::new(filter));
                 o
             }
             TestOption::UnCompressed => {

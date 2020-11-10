@@ -29,7 +29,6 @@ use crate::util::crc32::{extend, mask, unmask, value};
 use crate::{Error, Result};
 use snap::raw::max_compress_len;
 use std::cmp::Ordering;
-use std::rc::Rc;
 use std::sync::Arc;
 
 /// A `Table` is a sorted map from strings to strings, which must be immutable and persistent.
@@ -286,7 +285,7 @@ pub struct TableBuilder<C: Comparator, F: File> {
     block_size: usize,
     block_restart_interval: usize,
     compression: CompressionType,
-    filter_policy: Option<Rc<dyn FilterPolicy>>,
+    filter_policy: Option<Arc<dyn FilterPolicy>>,
 }
 
 impl<C: Comparator, F: File> TableBuilder<C, F> {
@@ -623,7 +622,6 @@ mod tests {
     use crate::storage::mem::MemStorage;
     use crate::util::comparator::BytewiseComparator;
     use crate::{File, Options, ReadOptions, Storage};
-    use std::rc::Rc;
     use std::sync::Arc;
 
     #[test]
@@ -631,7 +629,7 @@ mod tests {
         let s = MemStorage::default();
         let mut o = Options::<BytewiseComparator>::default();
         let bf = BloomFilter::new(16);
-        o.filter_policy = Some(Rc::new(bf));
+        o.filter_policy = Some(Arc::new(bf));
         let opt = Arc::new(o);
         let new_file = s.create("test").unwrap();
         let cmp = BytewiseComparator::default();

@@ -17,7 +17,7 @@
 
 use crate::filter::FilterPolicy;
 use crate::util::coding::{decode_fixed_32, put_fixed_32};
-use std::rc::Rc;
+use std::sync::Arc;
 
 const FILTER_BASE_LG: usize = 11;
 const FILTER_BASE: usize = 1 << FILTER_BASE_LG; // 2KiB
@@ -27,7 +27,7 @@ const FILTER_OFFSET_LEN: usize = 4; // u32 length
 /// particular Table.  It generates a single string which is stored as
 /// a special block in the Table.
 pub struct FilterBlockBuilder {
-    policy: Rc<dyn FilterPolicy>,
+    policy: Arc<dyn FilterPolicy>,
     // key contents
     // reused by every block
     keys: Vec<Vec<u8>>,
@@ -42,7 +42,7 @@ pub struct FilterBlockBuilder {
 }
 
 impl FilterBlockBuilder {
-    pub fn new(policy: Rc<dyn FilterPolicy>) -> Self {
+    pub fn new(policy: Arc<dyn FilterPolicy>) -> Self {
         Self {
             policy,
             keys: vec![],
@@ -110,7 +110,7 @@ impl FilterBlockBuilder {
 }
 
 pub struct FilterBlockReader {
-    policy: Rc<dyn FilterPolicy>,
+    policy: Arc<dyn FilterPolicy>,
     // all filter block data without filter meta
     // | ----- filter data ----- | ----- filter offsets ----|
     //                                   num * 4 bytes
@@ -121,7 +121,7 @@ pub struct FilterBlockReader {
 }
 
 impl FilterBlockReader {
-    pub fn new(policy: Rc<dyn FilterPolicy>, mut filter_block: Vec<u8>) -> Self {
+    pub fn new(policy: Arc<dyn FilterPolicy>, mut filter_block: Vec<u8>) -> Self {
         let mut r = FilterBlockReader {
             policy,
             data: vec![],
@@ -208,10 +208,10 @@ mod tests {
     }
 
     fn new_test_builder() -> FilterBlockBuilder {
-        FilterBlockBuilder::new(Rc::new(TestHashFilter {}))
+        FilterBlockBuilder::new(Arc::new(TestHashFilter {}))
     }
     fn new_test_reader(block: Vec<u8>) -> FilterBlockReader {
-        FilterBlockReader::new(Rc::new(TestHashFilter {}), block)
+        FilterBlockReader::new(Arc::new(TestHashFilter {}), block)
     }
 
     #[test]
