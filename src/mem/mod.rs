@@ -99,6 +99,11 @@ impl<C: Comparator> MemTable<C> {
         self.table.len()
     }
 
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.table.len() == 0
+    }
+
     /// Add an entry into memtable that maps key to value at the
     /// specified sequence number and with the specified type.
     /// Typically value will be empty if the type is `Deletion`.
