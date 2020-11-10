@@ -21,14 +21,13 @@ pub mod skiplist;
 
 use crate::db::format::{InternalKeyComparator, LookupKey, ValueType, INTERNAL_KEY_TAIL};
 use crate::iterator::Iterator;
-use crate::mem::arena::BlockArena;
-use crate::mem::skiplist::{Skiplist, SkiplistIterator};
+use crate::mem::arena::OffsetArena;
+use crate::mem::inlineskiplist::{InlineSkipList, InlineSkiplistIterator};
 use crate::util::coding::{decode_fixed_64, put_fixed_64};
 use crate::util::comparator::Comparator;
 use crate::util::varint::VarintU32;
 use crate::{Error, Result};
 use std::cmp::Ordering;
-use std::sync::Arc;
 
 // KeyComparator is a wrapper for InternalKeyComparator. It will convert the input mem key
 // to the internal key before comparing.
@@ -69,32 +68,35 @@ impl<C: Comparator> Comparator for KeyComparator<C> {
 /// In-memory write buffer
 pub struct MemTable<C: Comparator> {
     cmp: KeyComparator<C>,
-    table: Arc<Skiplist<KeyComparator<C>, BlockArena>>,
+    table: InlineSkipList<KeyComparator<C>, OffsetArena>,
 }
 
 impl<C: Comparator> MemTable<C> {
     /// Creates a new memory table
-    pub fn new(icmp: InternalKeyComparator<C>) -> Self {
-        let arena = BlockArena::default();
+    pub fn new(max_mem_size: usize, icmp: InternalKeyComparator<C>) -> Self {
+        let arena = OffsetArena::with_capacity(max_mem_size);
         let kcmp = KeyComparator { icmp };
-        let table = Arc::new(Skiplist::new(kcmp.clone(), arena));
+        let table = InlineSkipList::new(kcmp.clone(), arena);
         Self { cmp: kcmp, table }
     }
 
     /// Returns an estimate of the number of bytes of data in use by this
     /// data structure. It is safe to call when MemTable is being modified.
+    #[inline]
     pub fn approximate_memory_usage(&self) -> usize {
         self.table.total_size()
     }
 
     /// Creates a new `MemTableIterator`
+    #[inline]
     pub fn iter(&self) -> MemTableIterator<C> {
         MemTableIterator::new(self.table.clone())
     }
 
     /// Returns current elements count in inner Skiplist
-    pub fn count(&self) -> usize {
-        self.table.count()
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.table.len()
     }
 
     /// Add an entry into memtable that maps key to value at the
@@ -130,7 +132,7 @@ impl<C: Comparator> MemTable<C> {
             (seq_number << INTERNAL_KEY_TAIL) | val_type as u64,
         );
         VarintU32::put_varint_prefixed_slice(&mut buf, value);
-        self.table.insert(buf);
+        self.table.put(buf);
     }
 
     /// If memtable contains a value for key, returns it in `Some(Ok())`.
@@ -138,7 +140,7 @@ impl<C: Comparator> MemTable<C> {
     /// If memtable does not contain the key, return `None`
     pub fn get(&self, key: &LookupKey) -> Option<Result<Vec<u8>>> {
         let mk = key.mem_key();
-        let mut iter = SkiplistIterator::new(self.table.clone());
+        let mut iter = InlineSkiplistIterator::new(self.table.clone());
         iter.seek(mk);
         if iter.valid() {
             let mut e = iter.key();
@@ -169,14 +171,14 @@ impl<C: Comparator> MemTable<C> {
 }
 
 pub struct MemTableIterator<C: Comparator> {
-    iter: SkiplistIterator<KeyComparator<C>, BlockArena>,
+    iter: InlineSkiplistIterator<KeyComparator<C>, OffsetArena>,
     // Tmp buffer for encoding `InternalKey` to `LookupKey` when call `seek`
     tmp: Vec<u8>,
 }
 
 impl<C: Comparator> MemTableIterator<C> {
-    pub fn new(table: Arc<Skiplist<KeyComparator<C>, BlockArena>>) -> Self {
-        let iter = SkiplistIterator::new(table);
+    pub fn new(table: InlineSkipList<KeyComparator<C>, OffsetArena>) -> Self {
+        let iter = InlineSkiplistIterator::new(table);
         Self { iter, tmp: vec![] }
     }
 }
@@ -245,7 +247,7 @@ mod tests {
 
     fn new_mem_table() -> MemTable<BytewiseComparator> {
         let icmp = InternalKeyComparator::new(BytewiseComparator::default());
-        MemTable::new(icmp)
+        MemTable::new(1 << 32, icmp)
     }
 
     fn add_test_data_set(memtable: &MemTable<BytewiseComparator>) -> Vec<(&str, &str)> {
@@ -285,9 +287,6 @@ mod tests {
         assert!(v.unwrap().is_err());
         let v = memtable.get(&LookupKey::new(b"boo", 3));
         assert_eq!(b"boo", v.unwrap().unwrap().as_slice());
-        assert!(
-            memtable.approximate_memory_usage() < 100 && memtable.approximate_memory_usage() > 70
-        );
     }
 
     #[test]

@@ -728,7 +728,7 @@ mod tests {
         fn new(is_reversed: bool) -> Self {
             let icmp = InternalKeyComparator::new(TestComparator::new(is_reversed));
             Self {
-                inner: MemTable::new(icmp),
+                inner: MemTable::new(1 << 32, icmp),
             }
         }
 
