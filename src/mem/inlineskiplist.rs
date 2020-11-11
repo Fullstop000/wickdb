@@ -190,7 +190,7 @@ where
 
     pub fn put(&self, key: impl Into<Bytes>) {
         let key: Bytes = key.into();
-        let length = key.len();
+        self.inner.size.fetch_add(key.len(), Ordering::SeqCst);
         let mut list_height = self.get_height();
         let mut prev = vec![null_mut(); MAX_HEIGHT + 1];
         let mut next = vec![null_mut(); MAX_HEIGHT + 1];
@@ -243,7 +243,6 @@ where
                         Ordering::SeqCst,
                     ) {
                         Ok(_) => {
-                            self.inner.size.fetch_add(length, Ordering::SeqCst);
                             break;
                         }
                         Err(_) => {
@@ -287,7 +286,7 @@ where
 
     #[inline]
     pub fn total_size(&self) -> usize {
-        self.inner.size.load(Ordering::Acquire)
+        self.inner.size.load(Ordering::SeqCst) + self.inner.arena.memory_used()
     }
 
     fn find_last(&self) -> *mut Node {

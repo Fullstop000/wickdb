@@ -95,7 +95,12 @@ impl OffsetArena {
         let offset = self.inner.len.fetch_add(size, Ordering::SeqCst);
         // (offset + align_mask) / align * align.
         let ptr_offset = (offset + align_mask) & !align_mask;
-        assert!(offset + size <= self.inner.cap);
+        assert!(
+            offset + size <= self.inner.cap,
+            "current {}, cap {}",
+            offset + size,
+            self.inner.cap
+        );
         ptr_offset
     }
 

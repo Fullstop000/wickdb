@@ -895,10 +895,13 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                 // There is room in current memtable
                 break;
             } else if self.im_mem.read().unwrap().is_some() {
-                info!("Current memtable full; waiting...");
+                info!("Current memtable full; waiting...",);
                 versions = self.background_work_finished_signal.wait(versions).unwrap();
             } else if versions.level_files_count(0) >= self.options.l0_stop_writes_threshold {
-                info!("Too many L0 files; waiting...");
+                info!(
+                    "Too many L0 files {}; waiting...",
+                    versions.level_files_count(0)
+                );
                 versions = self.background_work_finished_signal.wait(versions).unwrap();
             } else {
                 let new_log_num = versions.get_next_file_number();
@@ -1548,9 +1551,9 @@ mod tests {
     {
         vec![
             TestOption::Default,
-            // TestOption::Reuse,
-            // TestOption::FilterPolicy,
-            // TestOption::UnCompressed,
+            TestOption::Reuse,
+            TestOption::FilterPolicy,
+            TestOption::UnCompressed,
         ]
         .into_iter()
         .map(|opt| {
@@ -3049,6 +3052,8 @@ mod tests {
         // The set-get runs
         counter: AtomicUsize,
         done: AtomicBool,
+        werrs: Arc<Mutex<Vec<Error>>>,
+        rerrs: Arc<Mutex<Vec<Error>>>,
     }
 
     unsafe impl Send for ThreadState {}
@@ -3061,6 +3066,8 @@ mod tests {
                 stop: self.stop.clone(),
                 counter: AtomicUsize::new(0),
                 done: AtomicBool::new(false),
+                werrs: Arc::new(Mutex::new(Vec::new())),
+                rerrs: Arc::new(Mutex::new(Vec::new())),
             });
             self.states.push(state.clone());
             thread::Builder::new()
@@ -3075,30 +3082,48 @@ mod tests {
                         if rnd.gen_range(1, 3) == 1 {
                             // Write values of the form <key, id, counter>
                             let value = format!("{}.{}.{}", key, id, counter);
-                            state
-                                .db
-                                .put(
-                                    WriteOptions::default(),
-                                    key.to_string().as_bytes(),
-                                    value.as_bytes(),
-                                )
-                                .unwrap();
+                            match state.db.put(
+                                WriteOptions::default(),
+                                key.to_string().as_bytes(),
+                                value.as_bytes(),
+                            ) {
+                                Ok(_) => continue,
+                                Err(e) => {
+                                    let mut guard = state.werrs.lock().unwrap();
+                                    guard.push(e);
+                                    break;
+                                }
+                            }
                         } else {
-                            if let Some(value) = state
+                            match state
                                 .db
                                 .get(ReadOptions::default(), key.to_string().as_bytes())
-                                .unwrap()
                             {
-                                let s = String::from_utf8(value).unwrap();
-                                let ss = s.split('.').collect::<Vec<_>>();
-                                assert_eq!(3, ss.len());
-                                assert_eq!(ss[0], key.to_string());
+                                Ok(v) => {
+                                    if let Some(value) = v {
+                                        let s = String::from_utf8(value).unwrap();
+                                        let ss = s.split('.').collect::<Vec<_>>();
+                                        assert_eq!(3, ss.len());
+                                        assert_eq!(ss[0], key.to_string());
+                                    }
+                                }
+                                Err(e) => {
+                                    let mut guard = state.rerrs.lock().unwrap();
+                                    guard.push(e);
+                                    break;
+                                }
                             }
                         }
                         counter += 1;
                     }
                     state.done.store(true, Ordering::Release);
-                    println!("===== stopping thread {} after {} opts", id, counter);
+                    println!(
+                        "===== stopping thread {} after {} opts: write error {}, read error {}",
+                        id,
+                        counter,
+                        state.werrs.lock().unwrap().len(),
+                        state.rerrs.lock().unwrap().len()
+                    );
                 })
                 .unwrap();
         }
@@ -3116,6 +3141,12 @@ mod tests {
             for state in mt.states.iter() {
                 while !state.done.load(Ordering::Acquire) {
                     thread::sleep(Duration::from_millis(100));
+                }
+                {
+                    let werrs = state.werrs.lock().unwrap();
+                    assert_eq!(0, werrs.len(), "{:?}", werrs);
+                    let rerrs = state.rerrs.lock().unwrap();
+                    assert_eq!(0, rerrs.len(), "{:?}", rerrs);
                 }
             }
         }
