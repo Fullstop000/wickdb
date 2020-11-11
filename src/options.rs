@@ -26,7 +26,6 @@ use crate::sstable::block::Block;
 use crate::storage::{File, Storage};
 use crate::util::comparator::Comparator;
 use crate::{BloomFilter, LevelFilter, Log};
-use std::rc::Rc;
 use std::sync::Arc;
 
 const DEFAULT_CACHE_SHARDS: usize = 8;
@@ -159,7 +158,7 @@ pub struct Options<C: Comparator> {
     pub reuse_logs: bool,
 
     /// If non-null, use the specified filter policy to reduce disk reads.
-    pub filter_policy: Option<Rc<dyn FilterPolicy>>,
+    pub filter_policy: Option<Arc<dyn FilterPolicy>>,
 
     /// The underlying logger
     /// In dev mode, default using a std output
@@ -226,10 +225,10 @@ impl<C: Comparator> Options<C> {
             self.block_cache = Some(Arc::new(ShardedCache::new(shards)))
         }
         if let Some(fp) = std::mem::replace(&mut self.filter_policy, None) {
-            self.filter_policy = Some(Rc::new(InternalFilterPolicy::new(fp)));
+            self.filter_policy = Some(Arc::new(InternalFilterPolicy::new(fp)));
         } else {
             let bf = BloomFilter::new(10);
-            self.filter_policy = Some(Rc::new(InternalFilterPolicy::new(Rc::new(bf))))
+            self.filter_policy = Some(Arc::new(InternalFilterPolicy::new(Arc::new(bf))))
         }
     }
 

@@ -21,7 +21,7 @@ use crate::util::comparator::Comparator;
 use crate::util::varint::VarintU32;
 use crate::{Error, Result};
 use std::cmp::{min, Ordering};
-use std::rc::Rc;
+use std::sync::Arc;
 
 // TODO: remove all magic number
 const U32_LEN: usize = std::mem::size_of::<u32>();
@@ -43,7 +43,7 @@ const U32_LEN: usize = std::mem::size_of::<u32>();
 ///
 #[derive(Clone, Debug)]
 pub struct Block {
-    data: Rc<Vec<u8>>,
+    data: Arc<Vec<u8>>,
     // restart array starting in `data`
     restart_offset: u32,
     // the lenght of restart array
@@ -65,7 +65,7 @@ impl Block {
             // make sure the size is enough for restarts
             if restarts_len as usize <= max_restarts_allowed {
                 return Ok(Self {
-                    data: Rc::new(data),
+                    data: Arc::new(data),
                     restart_offset: (size - (1 + restarts_len as usize) * U32_LEN) as u32,
                     restarts_len,
                 });
@@ -97,7 +97,7 @@ impl Block {
 impl Default for Block {
     fn default() -> Self {
         Self {
-            data: Rc::new(vec![]),
+            data: Arc::new(vec![]),
             restart_offset: 0,
             restarts_len: 0,
         }
@@ -110,7 +110,7 @@ pub struct BlockIterator<C: Comparator> {
     err: Option<Error>,
 
     // underlying block data
-    data: Rc<Vec<u8>>,
+    data: Arc<Vec<u8>>,
 
     /*
       restarts
@@ -135,7 +135,7 @@ pub struct BlockIterator<C: Comparator> {
 }
 
 impl<C: Comparator> BlockIterator<C> {
-    pub fn new(cmp: C, data: Rc<Vec<u8>>, restarts: u32, restarts_len: u32) -> Self {
+    pub fn new(cmp: C, data: Arc<Vec<u8>>, restarts: u32, restarts_len: u32) -> Self {
         Self {
             cmp,
             err: None,

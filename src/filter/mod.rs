@@ -29,7 +29,7 @@ pub mod bloom;
 /// these filters, the `FilterPolicy` name at the time of writing must equal the
 /// name at the time of reading. If they do not match, the filters will be
 /// ignored, which will not affect correctness but may affect performance.
-pub trait FilterPolicy {
+pub trait FilterPolicy: Send + Sync {
     /// Return the name of this policy.  Note that if the filter encoding
     /// changes in an incompatible way, the name returned by this method
     /// must be changed.  Otherwise, old incompatible filters may be

@@ -21,8 +21,8 @@ use crate::util::comparator::Comparator;
 use crate::util::varint::VarintU32;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Error, Formatter};
-use std::rc::Rc;
 use std::str;
+use std::sync::Arc;
 
 /// The max key sequence number. The value is 2^56 - 1 because the seq number
 /// only takes 56 bits when is serialized to `InternalKey`
@@ -338,11 +338,11 @@ impl<C: Comparator> Comparator for InternalKeyComparator<C> {
 
 /// A wrapper for the internal key filter policy
 pub struct InternalFilterPolicy {
-    user_policy: Rc<dyn FilterPolicy>,
+    user_policy: Arc<dyn FilterPolicy>,
 }
 
 impl InternalFilterPolicy {
-    pub fn new(user_policy: Rc<dyn FilterPolicy>) -> Self {
+    pub fn new(user_policy: Arc<dyn FilterPolicy>) -> Self {
         Self { user_policy }
     }
 }

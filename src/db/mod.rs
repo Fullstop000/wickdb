@@ -440,10 +440,6 @@ pub struct DBImpl<S: Storage + Clone, C: Comparator> {
     is_shutting_down: AtomicBool,
 }
 
-unsafe impl<S: Storage + Clone, C: Comparator> Sync for DBImpl<S, C> {}
-
-unsafe impl<S: Storage + Clone, C: Comparator> Send for DBImpl<S, C> {}
-
 impl<S: Storage + Clone, C: Comparator> Drop for DBImpl<S, C> {
     #[allow(unused_must_use)]
     fn drop(&mut self) {
@@ -899,10 +895,13 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                 // There is room in current memtable
                 break;
             } else if self.im_mem.read().unwrap().is_some() {
-                info!("Current memtable full; waiting...");
+                info!("Current memtable full; waiting...",);
                 versions = self.background_work_finished_signal.wait(versions).unwrap();
             } else if versions.level_files_count(0) >= self.options.l0_stop_writes_threshold {
-                info!("Too many L0 files; waiting...");
+                info!(
+                    "Too many L0 files {}; waiting...",
+                    versions.level_files_count(0)
+                );
                 versions = self.background_work_finished_signal.wait(versions).unwrap();
             } else {
                 let new_log_num = versions.get_next_file_number();
@@ -1461,8 +1460,8 @@ mod tests {
     use rand::distributions::Alphanumeric;
     use rand::{thread_rng, Rng};
     use std::ops::{Deref, DerefMut};
-    use std::rc::Rc;
     use std::str;
+    use std::sync::atomic::AtomicUsize;
 
     impl<S: Storage + Clone, C: Comparator + 'static> WickDB<S, C> {
         fn options(&self) -> Arc<Options<C>> {
@@ -1518,7 +1517,7 @@ mod tests {
             TestOption::FilterPolicy => {
                 let filter = BloomFilter::new(10);
                 let mut o = Options::default();
-                o.filter_policy = Some(Rc::new(filter));
+                o.filter_policy = Some(Arc::new(filter));
                 o
             }
             TestOption::UnCompressed => {
@@ -3024,5 +3023,132 @@ mod tests {
         }
         let reads = store.random_read_counter.load(Ordering::Relaxed);
         assert!(reads <= 3 * n / 100);
+    }
+
+    const THREAD_COUNT: usize = 4;
+    const TEST_SECONDS: usize = 10;
+    const KEY_NUM: usize = 1000;
+
+    impl DBTest {
+        fn new_multi_thd_test(&self) -> MultiThreadTest {
+            MultiThreadTest {
+                db: self.db.clone(),
+                // store: self.store.clone(),
+                stop: Arc::new(AtomicBool::new(false)),
+                // options: self.opt.clone(),
+                states: Vec::with_capacity(THREAD_COUNT),
+            }
+        }
+    }
+    struct MultiThreadTest {
+        stop: Arc<AtomicBool>,
+        db: WickDB<MemStorage, BytewiseComparator>,
+        states: Vec<Arc<ThreadState>>,
+    }
+
+    struct ThreadState {
+        db: WickDB<MemStorage, BytewiseComparator>,
+        stop: Arc<AtomicBool>,
+        // The set-get runs
+        counter: AtomicUsize,
+        done: AtomicBool,
+        werrs: Arc<Mutex<Vec<Error>>>,
+        rerrs: Arc<Mutex<Vec<Error>>>,
+    }
+
+    unsafe impl Send for ThreadState {}
+    unsafe impl Sync for ThreadState {}
+
+    impl MultiThreadTest {
+        fn start(&mut self, id: usize) {
+            let state = Arc::new(ThreadState {
+                db: self.db.clone(),
+                stop: self.stop.clone(),
+                counter: AtomicUsize::new(0),
+                done: AtomicBool::new(false),
+                werrs: Arc::new(Mutex::new(Vec::new())),
+                rerrs: Arc::new(Mutex::new(Vec::new())),
+            });
+            self.states.push(state.clone());
+            thread::Builder::new()
+                .name(id.to_string())
+                .spawn(move || {
+                    println!("===== starting thread {}", id);
+                    let mut counter = 0;
+                    let mut rnd = rand::thread_rng();
+                    while !state.stop.load(Ordering::Acquire) {
+                        state.counter.store(counter, Ordering::Release);
+                        let key = rand::thread_rng().gen_range(0, KEY_NUM);
+                        if rnd.gen_range(1, 3) == 1 {
+                            // Write values of the form <key, id, counter>
+                            let value = format!("{}.{}.{}", key, id, counter);
+                            match state.db.put(
+                                WriteOptions::default(),
+                                key.to_string().as_bytes(),
+                                value.as_bytes(),
+                            ) {
+                                Ok(_) => continue,
+                                Err(e) => {
+                                    let mut guard = state.werrs.lock().unwrap();
+                                    guard.push(e);
+                                    break;
+                                }
+                            }
+                        } else {
+                            match state
+                                .db
+                                .get(ReadOptions::default(), key.to_string().as_bytes())
+                            {
+                                Ok(v) => {
+                                    if let Some(value) = v {
+                                        let s = String::from_utf8(value).unwrap();
+                                        let ss = s.split('.').collect::<Vec<_>>();
+                                        assert_eq!(3, ss.len());
+                                        assert_eq!(ss[0], key.to_string());
+                                    }
+                                }
+                                Err(e) => {
+                                    let mut guard = state.rerrs.lock().unwrap();
+                                    guard.push(e);
+                                    break;
+                                }
+                            }
+                        }
+                        counter += 1;
+                    }
+                    state.done.store(true, Ordering::Release);
+                    println!(
+                        "===== stopping thread {} after {} opts: write error {}, read error {}",
+                        id,
+                        counter,
+                        state.werrs.lock().unwrap().len(),
+                        state.rerrs.lock().unwrap().len()
+                    );
+                })
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn test_multi_thread() {
+        for t in default_cases() {
+            let mut mt = t.new_multi_thd_test();
+            for id in 0..THREAD_COUNT {
+                mt.start(id);
+            }
+            thread::sleep(Duration::from_secs(TEST_SECONDS as u64));
+            mt.stop.store(true, Ordering::Release);
+            for state in mt.states.iter() {
+                while !state.done.load(Ordering::Acquire) {
+                    thread::sleep(Duration::from_millis(100));
+                }
+                {
+                    let werrs = state.werrs.lock().unwrap();
+                    assert_eq!(0, werrs.len(), "{:?}", werrs);
+                    let rerrs = state.rerrs.lock().unwrap();
+                    assert_eq!(0, rerrs.len(), "{:?}", rerrs);
+                }
+            }
+        }
     }
 }

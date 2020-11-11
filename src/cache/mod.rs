@@ -20,6 +20,7 @@ pub mod lru;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 /// A `Cache` is an interface that maps keys to values.
 /// It has internal synchronization and may be safely accessed concurrently from
@@ -34,7 +35,11 @@ use std::marker::PhantomData;
 /// Clients may use their own implementations if
 /// they want something more sophisticated (like scan-resistance, a
 /// custom eviction policy, variable cache sizing, etc.)
-pub trait Cache<K, V: Clone> {
+pub trait Cache<K, V>: Sync + Send
+where
+    K: Sync + Send,
+    V: Sync + Send + Clone,
+{
     /// Insert a mapping from key->value into the cache and assign it
     /// the specified charge against the total cache capacity.
     fn insert(&self, key: K, value: V, charge: usize) -> Option<V>;
@@ -51,17 +56,27 @@ pub trait Cache<K, V: Clone> {
 }
 
 /// A sharded cache container by key hash
-pub struct ShardedCache<K, V: Clone, C: Cache<K, V>> {
-    shards: Vec<C>,
+pub struct ShardedCache<K, V, C>
+where
+    C: Cache<K, V>,
+    K: Sync + Send,
+    V: Sync + Send + Clone,
+{
+    shards: Arc<Vec<C>>,
     _k: PhantomData<K>,
     _v: PhantomData<V>,
 }
 
-impl<K: Hash + Eq, V: Clone, C: Cache<K, V>> ShardedCache<K, V, C> {
+impl<K, V, C> ShardedCache<K, V, C>
+where
+    C: Cache<K, V>,
+    K: Sync + Send + Hash + Eq,
+    V: Sync + Send + Clone,
+{
     /// Create a new `ShardedCache` with given shards
     pub fn new(shards: Vec<C>) -> Self {
         Self {
-            shards,
+            shards: Arc::new(shards),
             _k: PhantomData,
             _v: PhantomData,
         }
@@ -75,7 +90,12 @@ impl<K: Hash + Eq, V: Clone, C: Cache<K, V>> ShardedCache<K, V, C> {
     }
 }
 
-impl<K: Hash + Eq, V: Clone, C: Cache<K, V>> Cache<K, V> for ShardedCache<K, V, C> {
+impl<K, V, C> Cache<K, V> for ShardedCache<K, V, C>
+where
+    C: Cache<K, V>,
+    K: Sync + Send + Hash + Eq,
+    V: Sync + Send + Clone,
+{
     fn insert(&self, key: K, value: V, charge: usize) -> Option<V> {
         let idx = self.find_shard(&key);
         self.shards[idx].insert(key, value, charge)
