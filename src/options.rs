@@ -205,7 +205,7 @@ impl<C: Comparator> Options<C> {
     /// Initialize Options by limiting ranges of some flags, applying customized Logger and etc.
     pub(crate) fn initialize<O: File + 'static, S: Storage<F = O>>(
         &mut self,
-        db_name: String,
+        db_path: &str,
         storage: &S,
     ) {
         if self.max_mem_compact_level < 2 {
@@ -216,7 +216,7 @@ impl<C: Comparator> Options<C> {
         self.write_buffer_size = Self::clip_range(self.write_buffer_size, 64 << 10, 1 << 30);
         self.max_file_size = Self::clip_range(self.max_file_size, 1 << 20, 1 << 30);
         self.block_size = Self::clip_range(self.block_size, 1 << 10, 4 << 20);
-        self.apply_logger(storage, &db_name);
+        self.apply_logger(storage, &db_path);
         if self.block_cache.is_none() {
             let mut shards = vec![];
             for _ in 0..DEFAULT_CACHE_SHARDS {
