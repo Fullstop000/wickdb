@@ -18,7 +18,7 @@
 use crate::storage::{do_write_string_to_file, Storage};
 use crate::Result;
 use std::ffi::OsStr;
-use std::path::{Path, MAIN_SEPARATOR};
+use std::path::Path;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum FileType {
@@ -42,16 +42,44 @@ pub enum FileType {
 }
 
 /// Returns a filename for a certain `FileType` by given sequence number and a `dirname`.
+///
+/// # Safety
+/// `dirname` must be a valid unicode string  
 pub fn generate_filename(dirname: &str, filetype: FileType, seq: u64) -> String {
+    let dirname = Path::new(dirname).to_owned();
     match filetype {
-        FileType::Log => format!("{}{}{:06}.log", dirname, MAIN_SEPARATOR, seq),
-        FileType::Lock => format!("{}{}LOCK", dirname, MAIN_SEPARATOR),
-        FileType::Table => format!("{}{}{:06}.sst", dirname, MAIN_SEPARATOR, seq),
-        FileType::Manifest => format!("{}{}MANIFEST-{:06}", dirname, MAIN_SEPARATOR, seq),
-        FileType::Current => format!("{}{}CURRENT", dirname, MAIN_SEPARATOR),
-        FileType::Temp => format!("{}{}{:06}.dbtmp", dirname, MAIN_SEPARATOR, seq),
-        FileType::InfoLog => format!("{}{}LOG", dirname, MAIN_SEPARATOR),
-        FileType::OldInfoLog => format!("{}{}LOG.old", dirname, MAIN_SEPARATOR),
+        FileType::Log => dirname
+            .join(format!("{:06}.log", seq))
+            .into_os_string()
+            .into_string()
+            .unwrap(),
+        FileType::Lock => dirname.join("LOCK").into_os_string().into_string().unwrap(),
+        FileType::Table => dirname
+            .join(format!("{:06}.sst", seq))
+            .into_os_string()
+            .into_string()
+            .unwrap(),
+        FileType::Manifest => dirname
+            .join(format!("MANIFEST-{:06}", seq))
+            .into_os_string()
+            .into_string()
+            .unwrap(),
+        FileType::Current => dirname
+            .join("CURRENT")
+            .into_os_string()
+            .into_string()
+            .unwrap(),
+        FileType::Temp => dirname
+            .join(format!("{:06}.dbtmp", seq))
+            .into_os_string()
+            .into_string()
+            .unwrap(),
+        FileType::InfoLog => dirname.join("LOG").into_os_string().into_string().unwrap(),
+        FileType::OldInfoLog => dirname
+            .join("LOG.old")
+            .into_os_string()
+            .into_string()
+            .unwrap(),
     }
 }
 
@@ -59,7 +87,7 @@ pub fn generate_filename(dirname: &str, filetype: FileType, seq: u64) -> String 
 /// The `filename` should be a valid path.
 pub fn parse_filename<P: AsRef<Path>>(filename: P) -> Option<(FileType, u64)> {
     let invalid = "invalid";
-    let path = Path::new(filename.as_ref());
+    let path = filename.as_ref();
     let file_stem = path.file_stem().unwrap_or_else(|| OsStr::new(invalid));
     match file_stem.to_str() {
         Some("CURRENT") => Some((FileType::Current, 0)),
@@ -107,19 +135,14 @@ pub fn parse_filename<P: AsRef<Path>>(filename: P) -> Option<(FileType, u64)> {
 }
 
 /// Update the CURRENT file to point to new MANIFEST file
-pub fn update_current<S: Storage>(env: &S, dbname: &str, manifest_file_num: u64) -> Result<()> {
-    // Remove leading "dbname/" and add newline to manifest file nam
-    let mut manifest = generate_filename(dbname, FileType::Manifest, manifest_file_num);
-    manifest.drain(0..=dbname.len());
-    // write into tmp first then rename it as CURRENT
-    let tmp = generate_filename(dbname, FileType::Temp, manifest_file_num);
-    let result = do_write_string_to_file(env, manifest, tmp.as_str(), true);
+pub fn update_current<S: Storage>(env: &S, dir: &str, manifest_file_num: u64) -> Result<()> {
+    let mut manifest = generate_filename(dir, FileType::Manifest, manifest_file_num);
+    manifest.drain(0..=dir.len());
+    let tmp = generate_filename(dir, FileType::Temp, manifest_file_num);
+    let result = do_write_string_to_file(env, manifest, &tmp, true);
     match &result {
-        Ok(()) => env.rename(
-            tmp.as_str(),
-            generate_filename(dbname, FileType::Current, 0).as_str(),
-        )?,
-        Err(_) => env.remove(tmp.as_str())?,
+        Ok(()) => env.rename(&tmp, &generate_filename(dir, FileType::Current, 0))?,
+        Err(_) => env.remove(&tmp)?,
     }
     result
 }
@@ -157,7 +180,7 @@ mod tests {
 
         for (ft, seq, expect) in tests.drain(..) {
             let name = generate_filename(dirname, ft, seq);
-            assert_eq!(name.as_str(), expect);
+            assert_eq!(name, expect.to_owned());
         }
     }
 

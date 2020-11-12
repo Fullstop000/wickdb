@@ -176,8 +176,7 @@ pub struct VersionSet<S: Storage + Clone, C: Comparator> {
     // WAL writer
     pub record_writer: Option<Writer<S::F>>,
 
-    // db path
-    db_name: &'static str,
+    db_path: String,
     storage: S,
     options: Arc<Options<C>>,
     icmp: InternalKeyComparator<C>,
@@ -203,7 +202,7 @@ pub struct VersionSet<S: Storage + Clone, C: Comparator> {
 unsafe impl<S: Storage + Clone, C: Comparator> Send for VersionSet<S, C> {}
 
 impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
-    pub fn new(db_name: &'static str, options: Arc<Options<C>>, storage: S) -> Self {
+    pub fn new(db_path: String, options: Arc<Options<C>>, storage: S) -> Self {
         let max_level = options.max_levels as usize;
         let mut compaction_pointer = Vec::with_capacity(max_level);
         for _ in 0..max_level {
@@ -216,7 +215,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
         Self {
             snapshots: SnapshotList::default(),
             pending_outputs: HashSet::default(),
-            db_name,
+            db_path,
             storage,
             record_writer: None,
             options,
@@ -390,7 +389,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
         let mut new_manifest_file = String::new();
         if self.manifest_writer.is_none() {
             new_manifest_file =
-                generate_filename(self.db_name, FileType::Manifest, self.manifest_file_number);
+                generate_filename(&self.db_path, FileType::Manifest, self.manifest_file_number);
             let f = self.storage.create(&new_manifest_file)?;
             debug!("Create new manifest file #{}", self.manifest_file_number);
             let mut writer = Writer::new(f);
@@ -415,7 +414,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
                             if !new_manifest_file.is_empty()
                                 && update_current(
                                     &self.storage,
-                                    self.db_name,
+                                    &self.db_path,
                                     self.manifest_file_number,
                                 )
                                 .is_err()
@@ -581,7 +580,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
     /// If `into_base` is true, the file could be pushed into level1 or level2 if there's no too much overlapping.
     pub fn write_level0_files(
         &mut self,
-        db_name: &str,
+        db_path: &str,
         table_cache: &TableCache<S, C>,
         mem_iter: &mut dyn Iterator,
         edit: &mut VersionEdit,
@@ -594,7 +593,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
         let build_result = build_table(
             self.options.clone(),
             &self.storage,
-            db_name,
+            db_path,
             table_cache,
             mem_iter,
             &mut meta,
@@ -675,7 +674,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
         self.pending_outputs.insert(file_number);
         let mut output = FileMetaData::default();
         output.number = file_number;
-        let file_name = generate_filename(self.db_name, FileType::Table, file_number);
+        let file_name = generate_filename(&self.db_path, FileType::Table, file_number);
         let file = self.storage.create(file_name.as_str())?;
         c.builder = Some(TableBuilder::new(file, self.icmp.clone(), &self.options));
         c.outputs.push(output);
@@ -687,7 +686,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
     pub fn recover(&mut self) -> Result<bool> {
         let env = self.storage.clone();
         // Read "CURRENT" file, which contains a pointer to the current manifest file
-        let mut current = env.open(&generate_filename(self.db_name, FileType::Current, 0))?;
+        let mut current = env.open(&generate_filename(&self.db_path, FileType::Current, 0))?;
         let mut buf = vec![];
         current.read_all(&mut buf)?;
         let (current_manifest, file_name) = match String::from_utf8(buf) {
@@ -695,7 +694,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
                 if s.is_empty() {
                     return Err(Error::Corruption("CURRENT file is empty".to_owned()));
                 }
-                let mut file_name = self.db_name.to_owned();
+                let mut file_name = self.db_path.to_owned();
                 file_name.push(MAIN_SEPARATOR);
                 let file_name = file_name.add(&s);
                 (env.open(&file_name)?, file_name)
@@ -1491,7 +1490,7 @@ mod add_boundary_tests {
     #[test]
     fn test_version_builder_accumulate_and_apply() {
         let opts = Arc::new(Options::<BytewiseComparator>::default());
-        let mut mock_vset = VersionSet::new("test", opts.clone(), MemStorage::default());
+        let mut mock_vset = VersionSet::new("test".to_owned(), opts.clone(), MemStorage::default());
         for (base, diffs, expect) in vec![
             (
                 vec![],

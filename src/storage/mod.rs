@@ -124,19 +124,19 @@ pub trait File: Send + Sync {
 }
 
 /// Write given `data` into underlying `env` file and flush file iff `should_sync` is true
-pub fn do_write_string_to_file<S: Storage>(
+pub fn do_write_string_to_file<S: Storage, P: AsRef<Path>>(
     env: &S,
     data: String,
-    file_name: &str,
+    file_name: P,
     should_sync: bool,
 ) -> Result<()> {
-    let mut file = env.create(file_name)?;
+    let mut file = env.create(&file_name)?;
     file.write(data.as_bytes())?;
     if should_sync {
         file.flush()?;
     }
     if file.close().is_err() {
-        env.remove(file_name)?;
+        env.remove(&file_name)?;
     }
     Ok(())
 }

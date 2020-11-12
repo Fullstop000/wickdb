@@ -43,6 +43,7 @@ use crossbeam_utils::sync::ShardedLock;
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::vec_deque::VecDeque;
 use std::mem;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, RwLock};
 use std::thread;
@@ -152,14 +153,14 @@ impl<S: Storage + Clone, C: Comparator + 'static> DB for WickDB<S, C> {
         let _ = self.inner.do_compaction.0.send(());
         let _ = self.shutdown_compaction_thread.1.recv();
         self.inner.close()?;
-        debug!("DB {} closed", &self.inner.db_name);
+        debug!("DB {} closed", &self.inner.db_path);
         Ok(())
     }
 
     fn destroy(&mut self) -> Result<()> {
         let db = self.inner.clone();
         self.close()?;
-        db.env.remove_dir(&db.db_name, true)
+        db.env.remove_dir(&db.db_path, true)
     }
 
     fn snapshot(&self) -> Arc<Snapshot> {
@@ -169,17 +170,31 @@ impl<S: Storage + Clone, C: Comparator + 'static> DB for WickDB<S, C> {
 
 impl<S: Storage + Clone, C: Comparator + 'static> WickDB<S, C> {
     /// Create a new WickDB
-    pub fn open_db(mut options: Options<C>, db_name: &'static str, storage: S) -> Result<Self> {
-        options.initialize(db_name.to_owned(), &storage);
-        debug!("Open db: '{}'", db_name);
-        let mut db = DBImpl::new(options, db_name, storage);
+    pub fn open_db<P: AsRef<Path>>(
+        mut options: Options<C>,
+        db_path: P,
+        storage: S,
+    ) -> Result<Self> {
+        let db_path = match db_path.as_ref().to_owned().into_os_string().into_string() {
+            Ok(s) => s,
+            Err(_) => {
+                return Err(Error::Customized(
+                    "Invalid db path. Expect to use Unicode db path.".to_owned(),
+                ))
+            }
+        };
+        options.initialize(&db_path, &storage);
+        debug!("Open db: '{:?}'", &db_path);
+        let mut db = DBImpl::new(options, db_path, storage);
         let (mut edit, should_save_manifest) = db.recover()?;
         let mut versions = db.versions.lock().unwrap();
         if versions.record_writer.is_none() {
             let new_log_number = versions.inc_next_file_number();
-            let log_file = db
-                .env
-                .create(generate_filename(&db_name, FileType::Log, new_log_number).as_str())?;
+            let log_file = db.env.create(&generate_filename(
+                &db.db_path,
+                FileType::Log,
+                new_log_number,
+            ))?;
             versions.record_writer = Some(Writer::new(log_file));
             edit.set_log_number(new_log_number);
             versions.set_log_number(new_log_number);
@@ -403,7 +418,7 @@ pub struct DBImpl<S: Storage + Clone, C: Comparator> {
     internal_comparator: InternalKeyComparator<C>,
     options: Arc<Options<C>>,
     // The physical path of wickdb
-    db_name: &'static str,
+    db_path: String,
     db_lock: Option<S::F>,
 
     /*
@@ -460,19 +475,24 @@ impl<S: Storage + Clone, C: Comparator> DBImpl<S, C> {
 }
 
 impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
-    fn new(options: Options<C>, db_name: &'static str, storage: S) -> Self {
+    fn new(options: Options<C>, db_path: String, storage: S) -> Self {
         let o = Arc::new(options);
         let icmp = InternalKeyComparator::new(o.comparator.clone());
         Self {
             env: storage.clone(),
             internal_comparator: icmp.clone(),
             options: o.clone(),
-            db_name,
+            db_path: db_path.clone(),
             db_lock: None,
             batch_queue: Mutex::new(VecDeque::new()),
             process_batch_sem: Condvar::new(),
-            table_cache: TableCache::new(db_name, o.clone(), o.table_cache_size(), storage.clone()),
-            versions: Mutex::new(VersionSet::new(db_name, o.clone(), storage)),
+            table_cache: TableCache::new(
+                db_path.clone(),
+                o.clone(),
+                o.table_cache_size(),
+                storage.clone(),
+            ),
+            versions: Mutex::new(VersionSet::new(db_path, o.clone(), storage)),
             manual_compaction_queue: Mutex::new(VecDeque::new()),
             background_work_finished_signal: Condvar::new(),
             background_compaction_scheduled: AtomicBool::new(false),
@@ -530,24 +550,24 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         }
     }
 
-    // Recover DB from `db_name`.
+    // Recover DB from `db_path`.
     // Returns the newest VersionEdit and whether we need to persistent VersionEdit to Manifest
     fn recover(&mut self) -> Result<(VersionEdit, bool)> {
-        info!("Start recovering db : {}", self.db_name);
+        info!("Start recovering db : {}", &self.db_path);
         // Ignore error from `mkdir_all` since the creation of the DB is
         // committed only when the descriptor is created, and this directory
         // may already exist from a previous failed creation attempt.
-        let _ = self.env.mkdir_all(self.db_name);
+        let _ = self.env.mkdir_all(&self.db_path);
 
         // Try acquire file lock
         let lock_file = self
             .env
-            .create(generate_filename(self.db_name, FileType::Lock, 0).as_str())?;
+            .create(&generate_filename(&self.db_path, FileType::Lock, 0))?;
         lock_file.lock()?;
         self.db_lock = Some(lock_file);
         if !self
             .env
-            .exists(generate_filename(self.db_name, FileType::Current, 0).as_str())
+            .exists(&generate_filename(&self.db_path, FileType::Current, 0))
         {
             if self.options.create_if_missing {
                 // Create new necessary files for DB
@@ -559,7 +579,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                 // Create manifest
                 let manifest_filenum = 1;
                 let manifest_filename =
-                    generate_filename(self.db_name, FileType::Manifest, manifest_filenum);
+                    generate_filename(&self.db_path, FileType::Manifest, manifest_filenum);
                 debug!("Create manifest file: {}", &manifest_filename);
                 let manifest = self.env.create(manifest_filename.as_str())?;
                 let mut manifest_writer = Writer::new(manifest);
@@ -567,7 +587,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                 new_db.encode_to(&mut record);
                 debug!("Append manifest record: {:?}", &new_db);
                 match manifest_writer.add_record(&record) {
-                    Ok(()) => update_current(&self.env, self.db_name, manifest_filenum)?,
+                    Ok(()) => update_current(&self.env, &self.db_path, manifest_filenum)?,
                     Err(e) => {
                         self.env.remove(manifest_filename.as_str())?;
                         return Err(e);
@@ -575,12 +595,12 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                 }
             } else {
                 return Err(Error::InvalidArgument(
-                    self.db_name.to_owned() + " does not exist (create_if_missing is false)",
+                    self.db_path.to_owned() + " does not exist (create_if_missing is false)",
                 ));
             }
         } else if self.options.error_if_exists {
             return Err(Error::InvalidArgument(
-                self.db_name.to_owned() + " exists (error_if_exists is true)",
+                self.db_path.to_owned() + " exists (error_if_exists is true)",
             ));
         }
         let mut versions = self.versions.lock().unwrap();
@@ -596,7 +616,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         let min_log = versions.log_number();
         let prev_log = versions.prev_log_number();
         let mut expected_files = versions.live_files();
-        let all_files = self.env.list(self.db_name)?;
+        let all_files = self.env.list(&self.db_path)?;
         let mut logs_to_recover = vec![];
         for filename in all_files {
             if let Some((file_type, file_number)) = parse_filename(filename) {
@@ -651,7 +671,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         save_manifest: &mut bool,
         edit: &mut VersionEdit,
     ) -> Result<u64> {
-        let file_name = generate_filename(self.db_name, FileType::Log, log_number);
+        let file_name = generate_filename(&self.db_path, FileType::Log, log_number);
 
         // Open the log file
         let log_file = match self.env.open(file_name.as_str()) {
@@ -713,7 +733,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                 *save_manifest = true;
                 let mut iter = mem_ref.iter();
                 versions.write_level0_files(
-                    self.db_name,
+                    &self.db_path,
                     &self.table_cache,
                     &mut iter,
                     edit,
@@ -746,7 +766,13 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
             debug!("Try to flush memtable into level 0 in recovering",);
             *save_manifest = true;
             let mut iter = m.iter();
-            versions.write_level0_files(self.db_name, &self.table_cache, &mut iter, edit, false)?;
+            versions.write_level0_files(
+                &self.db_path,
+                &self.table_cache,
+                &mut iter,
+                edit,
+                false,
+            )?;
         }
         Ok(max_sequence)
     }
@@ -756,7 +782,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
     fn delete_obsolete_files(&self, mut versions: MutexGuard<VersionSet<S, C>>) -> Result<()> {
         versions.lock_live_files();
         // ignore IO error on purpose
-        let files = self.env.list(self.db_name)?;
+        let files = self.env.list(&self.db_path)?;
         for file in files.iter() {
             if let Some((file_type, number)) = parse_filename(file) {
                 let keep = match file_type {
@@ -905,9 +931,9 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                 versions = self.background_work_finished_signal.wait(versions).unwrap();
             } else {
                 let new_log_num = versions.get_next_file_number();
-                let log_file = self
-                    .env
-                    .create(generate_filename(self.db_name, FileType::Log, new_log_num).as_str())?;
+                let log_file = self.env.create(
+                    &generate_filename(&self.db_path, FileType::Log, new_log_num).as_str(),
+                )?;
                 versions.set_next_file_number(new_log_num + 1);
                 versions.set_log_number(new_log_num);
                 versions.record_writer = Some(Writer::new(log_file));
@@ -940,7 +966,13 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         let mut edit = VersionEdit::new(self.options.max_levels);
         let mut im_mem = self.im_mem.write().unwrap();
         let mut iter = im_mem.as_ref().unwrap().iter();
-        versions.write_level0_files(self.db_name, &self.table_cache, &mut iter, &mut edit, true)?;
+        versions.write_level0_files(
+            &self.db_path,
+            &self.table_cache,
+            &mut iter,
+            &mut edit,
+            true,
+        )?;
         if self.is_shutting_down.load(Ordering::Acquire) {
             Err(Error::DBClosed("when compacting memory table".to_owned()))
         } else {
@@ -1397,14 +1429,14 @@ struct BatchTask {
 pub(crate) fn build_table<S: Storage + Clone, C: Comparator + 'static>(
     options: Arc<Options<C>>,
     storage: &S,
-    db_name: &str,
+    db_path: &str,
     table_cache: &TableCache<S, C>,
     iter: &mut dyn Iterator,
     meta: &mut FileMetaData,
 ) -> Result<()> {
     meta.file_size = 0;
     iter.seek_to_first();
-    let file_name = generate_filename(db_name, FileType::Table, meta.number);
+    let file_name = generate_filename(db_path, FileType::Table, meta.number);
     let mut status = Ok(());
     if iter.valid() {
         let file = storage.create(file_name.as_str())?;
@@ -1582,7 +1614,7 @@ mod tests {
         // Close the inner db without destroy the contents and establish a new WickDB on same db path with same option
         fn reopen(&mut self) -> Result<()> {
             self.db.close()?;
-            let db = WickDB::open_db(self.opt.clone(), self.db.inner.db_name, self.store.clone())?;
+            let db = WickDB::open_db(self.opt.clone(), &self.db.inner.db_path, self.store.clone())?;
             self.db = db;
             Ok(())
         }
@@ -1786,8 +1818,7 @@ mod tests {
 
         // Delete a sst file randomly
         fn delete_one_sst_file(&self) -> Result<bool> {
-            let dbname = self.inner.db_name;
-            let files = self.store.list(dbname)?;
+            let files = self.store.list(&self.inner.db_path)?;
             for f in files {
                 if let Some((tp, _)) = parse_filename(&f) {
                     if tp == FileType::Table {
@@ -2969,12 +3000,12 @@ mod tests {
         let t = DBTest::default();
         t.put("foo", "v2").unwrap();
         t.compact(Some("a"), Some("z"));
-        let file_counts = t.store.list(t.inner.db_name).unwrap().len();
+        let file_counts = t.store.list(&t.inner.db_path).unwrap().len();
         for _ in 0..10 {
             t.put("foo", "v2").unwrap();
             t.compact(Some("a"), Some("z"))
         }
-        assert_eq!(t.store.list(t.inner.db_name).unwrap().len(), file_counts);
+        assert_eq!(t.store.list(&t.inner.db_path).unwrap().len(), file_counts);
     }
 
     #[test]

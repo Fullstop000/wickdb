@@ -29,18 +29,18 @@ use std::sync::Arc;
 /// A `TableCache` is the cache for the sst files and the sstable in them
 pub struct TableCache<S: Storage + Clone, C: Comparator> {
     storage: S,
-    db_name: &'static str,
+    db_path: String,
     options: Arc<Options<C>>,
     // the key is the file number
     cache: Arc<dyn Cache<u64, Arc<Table<S::F>>>>,
 }
 
 impl<S: Storage + Clone, C: Comparator + 'static> TableCache<S, C> {
-    pub fn new(db_name: &'static str, options: Arc<Options<C>>, size: usize, storage: S) -> Self {
+    pub fn new(db_path: String, options: Arc<Options<C>>, size: usize, storage: S) -> Self {
         let cache = Arc::new(LRUCache::<u64, Arc<Table<S::F>>>::new(size));
         Self {
             storage,
-            db_name,
+            db_path,
             options,
             cache,
         }
@@ -56,8 +56,8 @@ impl<S: Storage + Clone, C: Comparator + 'static> TableCache<S, C> {
         match self.cache.get(&file_number) {
             Some(v) => Ok(v),
             None => {
-                let filename = generate_filename(self.db_name, FileType::Table, file_number);
-                let table_file = self.storage.open(filename.as_str())?;
+                let filename = generate_filename(&self.db_path, FileType::Table, file_number);
+                let table_file = self.storage.open(&filename)?;
                 let table = Table::open(
                     table_file,
                     file_number,
@@ -114,7 +114,7 @@ impl<S: Storage + Clone, C: Comparator> Clone for TableCache<S, C> {
     fn clone(&self) -> Self {
         TableCache {
             storage: self.storage.clone(),
-            db_name: self.db_name,
+            db_path: self.db_path.clone(),
             options: self.options.clone(),
             cache: self.cache.clone(),
         }
