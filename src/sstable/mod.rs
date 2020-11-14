@@ -764,7 +764,6 @@ mod tests {
         value_buf: Vec<u8>,
     }
     impl DBIterWrapper {
-        // fill the kv buffer from inner key-value
         fn fill_entry(&mut self) {
             if self.valid() {
                 self.key_buf = self.inner.key().to_vec();
@@ -883,7 +882,6 @@ mod tests {
         // key/value pairs in `data`
         fn finish(&mut self, options: Arc<Options<TestComparator>>) -> Vec<Vec<u8>> {
             let cmp = options.comparator.clone();
-            // Sort the data
             self.data.sort_by(|(a, _), (b, _)| cmp.compare(&a, &b));
             let mut res = vec![];
             for (key, _) in self.data.iter() {
@@ -967,7 +965,7 @@ mod tests {
                 "iterator should be invalid after being initialized"
             );
             let mut expected_iter = EntryIterator::new(self.reverse_cmp, expected);
-            for _ in 0..1000 {
+            for _ in 0..10000 {
                 match self.rand.gen_range(0, 5) {
                     // case for `next`
                     0 => {
@@ -977,7 +975,12 @@ mod tests {
                             if iter.valid() {
                                 assert_eq!(format_entry(&iter), format_entry(&expected_iter));
                             } else {
-                                assert_eq!(iter.valid(), expected_iter.valid());
+                                assert_eq!(
+                                    iter.valid(),
+                                    expected_iter.valid(),
+                                    "{:?}",
+                                    iter.status()
+                                );
                             }
                         }
                     }
@@ -988,19 +991,18 @@ mod tests {
                         if iter.valid() {
                             assert_eq!(format_entry(&iter), format_entry(&expected_iter));
                         } else {
-                            assert_eq!(iter.valid(), expected_iter.valid());
+                            assert_eq!(iter.valid(), expected_iter.valid(), "{:?}", iter.status());
                         }
                     }
                     // case for `seek`
                     2 => {
-                        let rkey = random_seek_key(keys, self.reverse_cmp);
-                        let key = rkey.as_slice();
-                        iter.seek(key);
-                        expected_iter.seek(key);
+                        let key = random_seek_key(keys, self.reverse_cmp);
+                        iter.seek(&key);
+                        expected_iter.seek(&key);
                         if iter.valid() {
                             assert_eq!(format_entry(&iter), format_entry(&expected_iter));
                         } else {
-                            assert_eq!(iter.valid(), expected_iter.valid());
+                            assert_eq!(iter.valid(), expected_iter.valid(), "{:?}", iter.status());
                         }
                     }
                     // case for `prev`
@@ -1011,7 +1013,13 @@ mod tests {
                             if iter.valid() {
                                 assert_eq!(format_entry(&iter), format_entry(&expected_iter));
                             } else {
-                                assert_eq!(iter.valid(), expected_iter.valid());
+                                assert_eq!(
+                                    iter.valid(),
+                                    expected_iter.valid(),
+                                    "given {:?}, expect entry:{} ",
+                                    iter.status(),
+                                    format_entry(&expected_iter),
+                                );
                             }
                         }
                     }
@@ -1022,7 +1030,7 @@ mod tests {
                         if iter.valid() {
                             assert_eq!(format_entry(&iter), format_entry(&expected_iter));
                         } else {
-                            assert_eq!(iter.valid(), expected_iter.valid());
+                            assert_eq!(iter.valid(), expected_iter.valid(), "{:?}", iter.status());
                         }
                     }
                     _ => { /* ignore */ }
@@ -1085,30 +1093,30 @@ mod tests {
         Table,
         Block,
         Memtable,
-        #[allow(dead_code)]
-        DB, // TODO: Enable DB test util fundamental components are stable
+        DB,
     }
 
     fn tests() -> Vec<(TestType, bool, usize)> {
+        // (test iter, reverse iter, restart_interval)
         vec![
-            (TestType::Table, false, 16),
-            (TestType::Table, false, 1),
-            (TestType::Table, false, 1024),
-            (TestType::Table, true, 16),
-            (TestType::Table, true, 1),
-            (TestType::Table, true, 1024),
-            (TestType::Block, false, 16),
-            (TestType::Block, false, 1),
-            (TestType::Block, false, 1024),
-            (TestType::Block, true, 16),
-            (TestType::Block, true, 1),
-            (TestType::Block, true, 1024),
-            // Restart interval does not matter for memtables
-            (TestType::Memtable, false, 16),
-            (TestType::Memtable, true, 16),
+            // (TestType::Table, false, 16),
+            // (TestType::Table, false, 1),
+            // (TestType::Table, false, 1024),
+            // (TestType::Table, true, 16),
+            // (TestType::Table, true, 1),
+            // (TestType::Table, true, 1024),
+            // (TestType::Block, false, 16),
+            // (TestType::Block, false, 1),
+            // (TestType::Block, false, 1024),
+            // (TestType::Block, true, 16),
+            // (TestType::Block, true, 1),
+            // (TestType::Block, true, 1024),
+            // // Restart interval does not matter for memtables
+            // (TestType::Memtable, false, 16),
+            // (TestType::Memtable, true, 16),
             // Do not bother with restart interval variations for DB
             (TestType::DB, false, 16),
-            (TestType::DB, true, 16),
+            // (TestType::DB, true, 16),
         ]
     }
 
@@ -1209,7 +1217,7 @@ mod tests {
     fn test_randomized_key() {
         let mut rnd = rand::thread_rng();
         let mut kv = vec![];
-        for _ in 0..1000 {
+        for _ in 0..5000 {
             let key = random_key(rnd.gen_range(1, 10));
             let value = random_value(rnd.gen_range(1, 5));
             kv.push((key, value));

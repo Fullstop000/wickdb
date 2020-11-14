@@ -91,7 +91,7 @@ impl FilterPolicy for BloomFilter {
         dst[bytes] = self.k as u8;
 
         for key in keys {
-            let mut h = Self::bloom_hash(key.as_slice());
+            let mut h = Self::bloom_hash(key);
             let delta = (h >> 17) | (h << 15); // rotate right 17 bits
             for _ in 0..self.k {
                 let bit_pos = h % (bits as u32);

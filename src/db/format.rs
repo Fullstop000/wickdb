@@ -176,7 +176,7 @@ impl InternalKey {
     }
 
     /// Returns a `ParsedInternalKey`
-    pub fn parsed(&self) -> Option<ParsedInternalKey<'_>> {
+    pub fn as_parsed(&self) -> Option<ParsedInternalKey<'_>> {
         let size = self.data.len();
         let user_key = &(self.data.as_slice())[..size - INTERNAL_KEY_TAIL];
         let num = decode_fixed_64(&(self.data.as_slice())[size - INTERNAL_KEY_TAIL..]);
@@ -194,7 +194,7 @@ impl InternalKey {
 
 impl Debug for InternalKey {
     fn fmt(&self, f: &mut Formatter) -> ::std::fmt::Result {
-        if let Some(parsed) = self.parsed() {
+        if let Some(parsed) = self.as_parsed() {
             write!(f, "{:?}", parsed)
         } else {
             let s = unsafe { ::std::str::from_utf8_unchecked(self.data.as_slice()) };
@@ -436,7 +436,7 @@ mod tests {
     fn assert_encoded_decoded(key: &str, seq: u64, vt: ValueType) {
         let encoded = InternalKey::new(key.as_bytes(), seq, vt);
         assert_eq!(key.as_bytes(), encoded.user_key());
-        let decoded = encoded.parsed().expect("");
+        let decoded = encoded.as_parsed().expect("");
         assert_eq!(key, decoded.as_str());
         assert_eq!(seq, decoded.seq);
         assert_eq!(vt, decoded.value_type);

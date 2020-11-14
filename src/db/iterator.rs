@@ -20,6 +20,7 @@ use crate::util::comparator::Comparator;
 use crate::{Error, Result};
 use rand::Rng;
 use std::cmp::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering as MemOrdering};
 use std::sync::Arc;
 
 #[derive(Eq, PartialEq)]
@@ -36,7 +37,8 @@ enum Direction {
 /// (userkey,seq,type) => uservalue entries.
 /// `DBIterator` combines multiple entries for the same userkey found in the DB
 /// representation into a single entry while accounting for sequence
-/// numbers, deletion markers, overwrites, etc
+/// numbers, deletion markers, overwrites, etc.
+/// `DBIterator` only yields user key and value
 pub struct DBIterator<I: Iterator, S: Storage + Clone + 'static, C: Comparator> {
     valid: bool,
     db: Arc<DBImpl<S, C>>,
@@ -48,12 +50,12 @@ pub struct DBIterator<I: Iterator, S: Storage + Clone + 'static, C: Comparator> 
     inner: I,
     direction: Direction,
     // used for randomly picking a yielded key to record read stats
-    bytes_util_read_sampling: u64,
+    bytes_util_read_sampling: AtomicU64,
 
     // Current key when direction is Reverse
-    saved_key: Vec<u8>,
+    prev_key: Vec<u8>,
     // Current value when direction is Reverse
-    saved_value: Vec<u8>,
+    prev_value: Vec<u8>,
 }
 
 impl<I: Iterator, S: Storage + Clone, C: Comparator + 'static> Iterator for DBIterator<I, S, C> {
@@ -61,9 +63,10 @@ impl<I: Iterator, S: Storage + Clone, C: Comparator + 'static> Iterator for DBIt
         self.valid
     }
 
+    // Point the inner iter cursor to the head. Then scanning forward to find the first key whose seq <= self.sequence
     fn seek_to_first(&mut self) {
         self.direction = Direction::Forward;
-        self.saved_value.clear();
+        self.prev_value.clear();
         self.inner.seek_to_first();
         if self.inner.valid() {
             self.find_next_user_entry(false);
@@ -72,18 +75,22 @@ impl<I: Iterator, S: Storage + Clone, C: Comparator + 'static> Iterator for DBIt
         }
     }
 
+    // Point the inner iter cursor to the end. Then scanning backward to find the first key whose seq <= self.sequence
     fn seek_to_last(&mut self) {
         self.direction = Direction::Reverse;
-        self.saved_value.clear();
+        self.prev_value.clear();
         self.inner.seek_to_last();
         self.find_prev_user_key();
     }
 
+    // Seek the inner iter. Then scanning forward to find the first key.
+    // After `seek`, inner iter could point to the key greater than the target but with a higher sequence than self.sequence
+    // or a delete marker. Therefore, we still need to call `find_next_user_entry`
     fn seek(&mut self, target: &[u8]) {
         self.direction = Direction::Forward;
-        self.saved_value.clear();
-        self.saved_key.clear();
-        let ikey = ParsedInternalKey::new(target, self.sequence, VALUE_TYPE_FOR_SEEK).encode();
+        self.prev_value.clear();
+        self.prev_key.clear();
+        let ikey = InternalKey::new(target, self.sequence, VALUE_TYPE_FOR_SEEK);
         self.inner.seek(ikey.data());
         if self.inner.valid() {
             self.find_next_user_entry(false)
@@ -96,11 +103,11 @@ impl<I: Iterator, S: Storage + Clone, C: Comparator + 'static> Iterator for DBIt
         self.valid_or_panic();
         match self.direction {
             Direction::Forward => {
-                self.saved_key = Vec::from(extract_user_key(self.inner.key()));
+                // self.prev_key = Vec::from(extract_user_key(self.inner.key()));
                 self.inner.next();
                 if !self.inner.valid() {
                     self.valid = false;
-                    self.saved_key.clear();
+                    self.prev_key.clear();
                     return;
                 }
             }
@@ -116,7 +123,7 @@ impl<I: Iterator, S: Storage + Clone, C: Comparator + 'static> Iterator for DBIt
                 }
                 if !self.inner.valid() {
                     self.valid = false;
-                    self.saved_key.clear();
+                    self.prev_key.clear();
                 }
             }
         }
@@ -128,19 +135,19 @@ impl<I: Iterator, S: Storage + Clone, C: Comparator + 'static> Iterator for DBIt
         // inner iter is pointing at the current entry.  Scan backwards until
         // the key changes so we can use the normal reverse scanning code.
         if self.direction == Direction::Forward {
-            self.saved_key = Vec::from(extract_user_key(self.inner.key()));
+            self.prev_key = Vec::from(extract_user_key(self.inner.key()));
             loop {
                 self.inner.prev();
                 if !self.inner.valid() {
                     self.valid = false;
-                    self.saved_key.clear();
-                    self.saved_value.clear();
+                    self.prev_key.clear();
+                    self.prev_value.clear();
                     return;
                 }
-                if self.ucmp.compare(
-                    extract_user_key(self.inner.key()),
-                    self.saved_key.as_slice(),
-                ) == Ordering::Less
+                if self
+                    .ucmp
+                    .compare(extract_user_key(self.inner.key()), self.prev_key.as_slice())
+                    == Ordering::Less
                 {
                     break;
                 }
@@ -154,7 +161,7 @@ impl<I: Iterator, S: Storage + Clone, C: Comparator + 'static> Iterator for DBIt
         self.valid_or_panic();
         match self.direction {
             Direction::Forward => extract_user_key(self.inner.key()),
-            Direction::Reverse => &self.saved_key,
+            Direction::Reverse => &self.prev_key,
         }
     }
 
@@ -162,7 +169,7 @@ impl<I: Iterator, S: Storage + Clone, C: Comparator + 'static> Iterator for DBIt
         self.valid_or_panic();
         match self.direction {
             Direction::Forward => self.inner.value(),
-            Direction::Reverse => &self.saved_value,
+            Direction::Reverse => &self.prev_value,
         }
     }
 
@@ -185,9 +192,11 @@ impl<I: Iterator, S: Storage + Clone, C: Comparator + 'static> DBIterator<I, S, 
             err: None,
             inner: iter,
             direction: Direction::Forward,
-            bytes_util_read_sampling: random_compaction_period(db.options.read_bytes_period),
-            saved_key: Default::default(),
-            saved_value: Default::default(),
+            bytes_util_read_sampling: AtomicU64::new(random_compaction_period(
+                db.options.read_bytes_period,
+            )),
+            prev_key: Default::default(),
+            prev_value: Default::default(),
         }
     }
 
@@ -198,40 +207,40 @@ impl<I: Iterator, S: Storage + Clone, C: Comparator + 'static> DBIterator<I, S, 
 
     // Parse internal key from inner iterator into a `ParsedInternalKey`
     // otherwise records a corruption error
-    fn parse_key(&mut self) -> InternalKey {
+    fn parsed_internal_key(&self) -> Option<ParsedInternalKey<'_>> {
         let k = self.inner.key();
         let bytes_read = k.len() + self.inner.value().len();
-        while self.bytes_util_read_sampling < bytes_read as u64 {
-            self.bytes_util_read_sampling +=
-                random_compaction_period(self.db.options.read_bytes_period);
+        while self.bytes_util_read_sampling.load(MemOrdering::Relaxed) < bytes_read as u64 {
+            self.bytes_util_read_sampling.fetch_add(
+                random_compaction_period(self.db.options.read_bytes_period),
+                MemOrdering::AcqRel,
+            );
             self.db.record_read_sample(k);
         }
-        self.bytes_util_read_sampling -= bytes_read as u64;
-        InternalKey::decoded_from(k)
+        self.bytes_util_read_sampling
+            .fetch_sub(bytes_read as u64, MemOrdering::AcqRel);
+        ParsedInternalKey::decode_from(k)
     }
 
     // Try to point the inner iter to yield a internal key whose user key is greater than previous
     // user key with sequence limitation. We only need to find the first entry that has a different
     // user key.
     fn find_next_user_entry(&mut self, mut skipping: bool) {
-        let ucmp = self.ucmp.clone();
-        let seq = self.sequence;
         loop {
-            let saved_key = self.saved_key.clone();
-            if let Some(pkey) = self.parse_key().parsed() {
-                if pkey.seq <= seq {
+            if let Some(pkey) = self.parsed_internal_key() {
+                if pkey.seq <= self.sequence {
                     match pkey.value_type {
                         ValueType::Value => {
                             if skipping
-                                && ucmp.compare(pkey.user_key, saved_key.as_slice())
+                                && self.ucmp.compare(pkey.user_key, &self.prev_key)
                                     != Ordering::Greater
                             {
                                 // not greater than saved_key, so the key is skipped
                             } else {
                                 // Found the next user key
                                 self.valid = true;
-                                if !self.saved_key.is_empty() {
-                                    self.saved_key.clear();
+                                if !self.prev_key.is_empty() {
+                                    self.prev_key.clear();
                                 }
                                 return;
                             }
@@ -239,7 +248,7 @@ impl<I: Iterator, S: Storage + Clone, C: Comparator + 'static> DBIterator<I, S, 
                         ValueType::Deletion => {
                             // Arrange to skip all upcoming entries for this key since
                             // they are hidden by this deletion.
-                            self.saved_key = Vec::from(pkey.user_key);
+                            self.prev_key = Vec::from(pkey.user_key);
                             skipping = true;
                         }
                         _ => { /* ignore the unknown value type */ }
@@ -252,7 +261,7 @@ impl<I: Iterator, S: Storage + Clone, C: Comparator + 'static> DBIterator<I, S, 
             }
         }
 
-        self.saved_key.clear();
+        self.prev_key.clear();
         self.valid = false;
     }
 
@@ -264,15 +273,12 @@ impl<I: Iterator, S: Storage + Clone, C: Comparator + 'static> DBIterator<I, S, 
     // iter has to be pointed to the first entry whose user key is less than the current one.
     fn find_prev_user_key(&mut self) {
         let mut value_type = ValueType::Deletion;
-        let ucmp = self.ucmp.clone();
-        let seq = self.sequence;
         if self.inner.valid() {
             loop {
-                let saved_key = self.saved_key.clone();
-                if let Some(pkey) = self.parse_key().parsed() {
-                    if pkey.seq <= seq {
+                if let Some(pkey) = self.parsed_internal_key() {
+                    if pkey.seq <= self.sequence {
                         if value_type == ValueType::Value
-                            && ucmp.compare(pkey.user_key, saved_key.as_slice()) == Ordering::Less
+                            && self.ucmp.compare(pkey.user_key, &self.prev_key) == Ordering::Less
                         {
                             // found the key that less than
                             break;
@@ -280,14 +286,14 @@ impl<I: Iterator, S: Storage + Clone, C: Comparator + 'static> DBIterator<I, S, 
                         value_type = pkey.value_type;
                         match value_type {
                             ValueType::Deletion => {
-                                self.saved_key.clear();
-                                self.saved_value.clear();
+                                self.prev_key.clear();
+                                self.prev_value.clear();
                             }
                             ValueType::Value => {
                                 // record the current key for later comparing
-                                self.saved_key = Vec::from(extract_user_key(self.inner.key()));
+                                self.prev_key = Vec::from(extract_user_key(self.inner.key()));
                                 // record the current value for later yielding
-                                self.saved_value = self.inner.value().to_vec();
+                                self.prev_value = self.inner.value().to_vec();
                             }
                             _ => { /* ignore the unknown value type */ }
                         }
@@ -302,8 +308,8 @@ impl<I: Iterator, S: Storage + Clone, C: Comparator + 'static> DBIterator<I, S, 
         if value_type != ValueType::Value {
             // We reach the end of inner iter but didn't find a valid user key
             self.valid = false;
-            self.saved_key.clear();
-            self.saved_value.clear();
+            self.prev_key.clear();
+            self.prev_value.clear();
             self.direction = Direction::Forward;
         } else {
             self.valid = true;
