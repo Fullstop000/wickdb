@@ -323,7 +323,7 @@ pub fn base_range<'a, C: Comparator>(
     if level == 0 {
         // level 0 files are possible to overlaps with each other
         let mut smallest = &files.first().unwrap().smallest;
-        let mut largest = &files.last().unwrap().largest;
+        let mut largest = &files.first().unwrap().largest;
         for f in files.iter().skip(1) {
             if icmp.compare(f.smallest.data(), smallest.data()) == CmpOrdering::Less {
                 smallest = &f.smallest;
