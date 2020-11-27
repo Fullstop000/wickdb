@@ -153,13 +153,15 @@ impl<S: Storage + Clone, C: Comparator + 'static> DB for WickDB<S, C> {
         let _ = self.inner.do_compaction.0.send(());
         let _ = self.shutdown_compaction_thread.1.recv();
         self.inner.close()?;
-        debug!("DB {} closed", &self.inner.db_path);
+        info!("DB {} closed", &self.inner.db_path);
         Ok(())
     }
 
     fn destroy(&mut self) -> Result<()> {
+        info!("Start destroying: {}", &self.inner.db_path);
         let db = self.inner.clone();
         self.close()?;
+        info!("Remove dir: {}", &self.inner.db_path);
         db.env.remove_dir(&db.db_path, true)
     }
 
@@ -353,7 +355,7 @@ impl<S: Storage + Clone, C: Comparator + 'static> WickDB<S, C> {
                 }
             }
             shutdown.send(()).unwrap();
-            debug!("batch processing thread shut down");
+            info!("batch processing thread shut down");
         }).unwrap();
     }
 
@@ -387,7 +389,7 @@ impl<S: Storage + Clone, C: Comparator + 'static> WickDB<S, C> {
                     }
                 }
                 shutdown.send(()).unwrap();
-                debug!("compaction thread shut down");
+                info!("compaction thread shut down");
             })
             .unwrap();
     }
