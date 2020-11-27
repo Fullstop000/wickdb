@@ -11,19 +11,43 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::env::temp_dir;
+use std::ops::Range;
+use std::thread;
 use wickdb::file::FileStorage;
-use wickdb::{BytewiseComparator, Options, ReadOptions, WickDB, WriteOptions, DB};
+use wickdb::{BytewiseComparator, LevelFilter, Options, ReadOptions, WickDB, WriteOptions, DB};
 
 fn main() {
-    let options = Options::<BytewiseComparator>::default();
-    let storage = FileStorage::default();
-    let db = WickDB::open_db(options, "./test_db", storage).unwrap();
-    db.put(WriteOptions::default(), b"key1", b"value1").unwrap();
-    db.put(WriteOptions::default(), b"key2", b"value2").unwrap();
-    let val1 = db.get(ReadOptions::default(), b"key1").unwrap();
-    let val2 = db.get(ReadOptions::default(), b"key2").unwrap();
-    assert!(val1.is_some());
-    assert!(val2.is_some());
-    assert_eq!(val1.unwrap(), b"value1");
-    assert_eq!(val2.unwrap(), b"value2");
+    let mut options = Options::<BytewiseComparator>::default();
+    options.logger_level = LevelFilter::Debug;
+    let dir = temp_dir().join("test_wickdb");
+    let mut db = WickDB::open_db(options, &dir, FileStorage::default()).unwrap();
+    let mut handles = vec![];
+    let threads = 4;
+    for i in 0..threads {
+        let range = Range {
+            start: i * 25000,
+            end: (i + 1) * 25000,
+        };
+        let db = db.clone();
+        let h = thread::spawn(move || {
+            for n in range {
+                let k = format!("key {}", n);
+                let v = format!("value {}", n);
+                db.put(WriteOptions::default(), k.as_bytes(), v.as_bytes())
+                    .unwrap();
+            }
+        });
+        handles.push(h);
+    }
+    for h in handles {
+        h.join().unwrap();
+    }
+    for i in 0..10000 {
+        let k = format!("key {}", i);
+        let v = db.get(ReadOptions::default(), k.as_bytes()).unwrap();
+        assert!(v.is_some(), "key {} not found", k);
+        assert_eq!(v.unwrap().as_slice(), format!("value {}", i).as_bytes());
+    }
+    db.destroy().unwrap();
 }

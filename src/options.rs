@@ -71,7 +71,7 @@ pub struct Options<C: Comparator> {
 
     // -------------------
     // Parameters that affect compaction:
-    /// The max number of levels except L)
+    /// The max number of levels except L0
     pub max_levels: usize,
 
     /// The number of files necessary to trigger an L0 compaction.
