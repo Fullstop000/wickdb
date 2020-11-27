@@ -24,10 +24,11 @@ fn main() {
     let mut db = WickDB::open_db(options, &dir, FileStorage::default()).unwrap();
     let mut handles = vec![];
     let threads = 4;
+    let num_per_thread = 25000;
     for i in 0..threads {
         let range = Range {
-            start: i * 25000,
-            end: (i + 1) * 25000,
+            start: i * num_per_thread,
+            end: (i + 1) * num_per_thread,
         };
         let db = db.clone();
         let h = thread::spawn(move || {
@@ -40,14 +41,27 @@ fn main() {
         });
         handles.push(h);
     }
-    for h in handles {
+    for h in handles.drain(..) {
         h.join().unwrap();
     }
-    for i in 0..10000 {
-        let k = format!("key {}", i);
-        let v = db.get(ReadOptions::default(), k.as_bytes()).unwrap();
-        assert!(v.is_some(), "key {} not found", k);
-        assert_eq!(v.unwrap().as_slice(), format!("value {}", i).as_bytes());
+    for i in 0..threads {
+        let range = Range {
+            start: i * num_per_thread,
+            end: (i + 1) * num_per_thread,
+        };
+        let db = db.clone();
+        let h = thread::spawn(move || {
+            for n in range {
+                let k = format!("key {}", n);
+                let v = db.get(ReadOptions::default(), k.as_bytes()).unwrap();
+                assert!(v.is_some(), "key {} not found", k);
+                assert_eq!(v.unwrap().as_slice(), format!("value {}", n).as_bytes());
+            }
+        });
+        handles.push(h);
+    }
+    for h in handles {
+        h.join().unwrap();
     }
     db.destroy().unwrap();
 }
