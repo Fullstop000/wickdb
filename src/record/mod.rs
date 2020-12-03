@@ -63,7 +63,7 @@ mod tests {
     use crate::record::{BLOCK_SIZE, HEADER_SIZE};
     use crate::storage::File;
     use crate::util::coding::encode_fixed_32;
-    use crate::util::crc32::{mask, value};
+    use crate::util::crc32::{mask, hash};
     use crate::{Error, Result};
     use rand::Rng;
     use std::cell::RefCell;
@@ -293,7 +293,7 @@ mod tests {
             let mut borrowed = self.source.borrow_mut();
             let contents = borrowed.as_mut_slice();
             // 6 = actual crc (4) + data length (2)
-            let mut crc = value(&contents[header_offset + 6..header_offset + 6 + len + 1]);
+            let mut crc = hash(&contents[header_offset + 6..header_offset + 6 + len + 1]);
             crc = mask(crc);
             encode_fixed_32(&mut contents[header_offset..header_offset + 4], crc)
         }

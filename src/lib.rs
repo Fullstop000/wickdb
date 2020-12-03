@@ -14,7 +14,7 @@
 #![allow(clippy::rc_buffer)]
 #[macro_use]
 extern crate log;
-extern crate crc32c;
+extern crate crc32fast;
 extern crate crossbeam_channel;
 extern crate crossbeam_utils;
 extern crate slog;
