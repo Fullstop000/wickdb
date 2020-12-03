@@ -81,10 +81,7 @@ mod tests {
 
     #[test]
     pub fn test_extend() {
-        assert_eq!(
-            hash(b"hello world"),
-            extend(hash(b"hello "), b"world")
-        );
+        assert_eq!(hash(b"hello world"), extend(hash(b"hello "), b"world"));
     }
 
     #[test]

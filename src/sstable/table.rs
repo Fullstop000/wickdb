@@ -25,7 +25,7 @@ use crate::sstable::{BlockHandle, Footer, BLOCK_TRAILER_SIZE, FOOTER_ENCODED_LEN
 use crate::storage::File;
 use crate::util::coding::{decode_fixed_32, put_fixed_32, put_fixed_64};
 use crate::util::comparator::Comparator;
-use crate::util::crc32::{extend, mask, unmask, hash};
+use crate::util::crc32::{extend, hash, mask, unmask};
 use crate::{Error, Result};
 use snap::raw::max_compress_len;
 use std::cmp::Ordering;

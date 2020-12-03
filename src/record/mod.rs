@@ -63,7 +63,7 @@ mod tests {
     use crate::record::{BLOCK_SIZE, HEADER_SIZE};
     use crate::storage::File;
     use crate::util::coding::encode_fixed_32;
-    use crate::util::crc32::{mask, hash};
+    use crate::util::crc32::{hash, mask};
     use crate::{Error, Result};
     use rand::Rng;
     use std::cell::RefCell;

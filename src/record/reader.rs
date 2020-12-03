@@ -19,7 +19,7 @@ use crate::record::reader::ReaderError::{BadRecord, EOF};
 use crate::record::{RecordType, BLOCK_SIZE, HEADER_SIZE};
 use crate::storage::File;
 use crate::util::coding::decode_fixed_32;
-use crate::util::crc32::{unmask, hash};
+use crate::util::crc32::{hash, unmask};
 use std::io::SeekFrom;
 
 #[derive(Debug)]
