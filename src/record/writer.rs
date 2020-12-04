@@ -38,7 +38,7 @@ impl<F: File> Writer<F> {
         let mut cache = [0; RecordType::Last as usize + 1];
         for h in 1..=n {
             let v: [u8; 1] = [RecordType::from(h) as u8];
-            cache[h as usize] = crc32::value(&v);
+            cache[h as usize] = crc32::hash(&v);
         }
         Self {
             dest,

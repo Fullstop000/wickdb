@@ -19,7 +19,7 @@ use crate::record::reader::ReaderError::{BadRecord, EOF};
 use crate::record::{RecordType, BLOCK_SIZE, HEADER_SIZE};
 use crate::storage::File;
 use crate::util::coding::decode_fixed_32;
-use crate::util::crc32::{unmask, value};
+use crate::util::crc32::{hash, unmask};
 use std::io::SeekFrom;
 
 #[derive(Debug)]
@@ -294,7 +294,7 @@ impl<F: File> Reader<F> {
             if self.checksum {
                 let expected = unmask(decode_fixed_32(header));
                 // HEADER_SIZE - 1 to included the record type
-                let actual = value(&self.buf[HEADER_SIZE - 1..record_length]);
+                let actual = hash(&self.buf[HEADER_SIZE - 1..record_length]);
                 if expected != actual {
                     let drop_size = self.buf_length;
                     self.clear_buf();

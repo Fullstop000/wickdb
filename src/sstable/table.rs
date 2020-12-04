@@ -25,7 +25,7 @@ use crate::sstable::{BlockHandle, Footer, BLOCK_TRAILER_SIZE, FOOTER_ENCODED_LEN
 use crate::storage::File;
 use crate::util::coding::{decode_fixed_32, put_fixed_32, put_fixed_64};
 use crate::util::comparator::Comparator;
-use crate::util::crc32::{extend, mask, unmask, value};
+use crate::util::crc32::{extend, hash, mask, unmask};
 use crate::{Error, Result};
 use snap::raw::max_compress_len;
 use std::cmp::Ordering;
@@ -557,7 +557,7 @@ fn write_raw_block<F: File>(
     // TODO: use pre-allocated buf
     let mut trailer = vec![];
     trailer.push(compression as u8);
-    let crc = mask(extend(value(data), &[compression as u8]));
+    let crc = mask(extend(hash(data), &[compression as u8]));
     put_fixed_32(&mut trailer, crc);
     assert_eq!(trailer.len(), BLOCK_TRAILER_SIZE);
     file.write(trailer.as_slice())?;
@@ -576,7 +576,7 @@ fn read_block<F: File>(file: &F, handle: &BlockHandle, verify_checksum: bool) ->
     if verify_checksum {
         let crc = unmask(decode_fixed_32(&buffer[n + 1..]));
         // Compression type is included in CRC checksum
-        let actual = value(&buffer[..=n]);
+        let actual = hash(&buffer[..=n]);
         if crc != actual {
             return Err(Error::Corruption("block checksum mismatch".to_owned()));
         }
