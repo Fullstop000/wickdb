@@ -2830,7 +2830,7 @@ mod tests {
         use std::str;
         use std::usize;
         #[derive(Clone, Default)]
-        struct NumberComparator {};
+        struct NumberComparator {}
         fn to_number(n: &[u8]) -> usize {
             usize::from_str_radix(str::from_utf8(n).unwrap(), 16).unwrap()
         }
