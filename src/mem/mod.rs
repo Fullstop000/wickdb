@@ -43,7 +43,7 @@ impl<C: Comparator> Comparator for KeyComparator<C> {
         let ib = extract_varint32_encoded_slice(&mut b);
         if ia.is_empty() || ib.is_empty() {
             // Use memcmp directly
-            ia.cmp(&ib)
+            ia.cmp(ib)
         } else {
             self.icmp.compare(ia, ib)
         }

@@ -154,7 +154,7 @@ impl<C: Comparator + 'static> Version<C> {
                     }
                 }
             } else {
-                let index = find_file(&self.icmp, files, &ikey);
+                let index = find_file(&self.icmp, files, ikey);
                 if index >= files.len() {
                     // we reach the end but not found a file matches
                 } else {
@@ -183,7 +183,7 @@ impl<C: Comparator + 'static> Version<C> {
             match table_cache.get(
                 self.icmp.clone(),
                 options,
-                &ikey,
+                ikey,
                 file.number,
                 file.file_size,
             )? {
@@ -197,7 +197,7 @@ impl<C: Comparator + 'static> Version<C> {
                             if self
                                 .options
                                 .comparator
-                                .compare(&parsed_key.user_key, key.user_key())
+                                .compare(parsed_key.user_key, key.user_key())
                                 == CmpOrdering::Equal
                             {
                                 match parsed_key.value_type {
@@ -381,7 +381,7 @@ impl<C: Comparator + 'static> Version<C> {
                 if files.is_empty() {
                     continue;
                 }
-                let index = find_file(&self.icmp, self.files[level].as_slice(), &internal_key);
+                let index = find_file(&self.icmp, self.files[level].as_slice(), internal_key);
                 if index >= files.len() {
                     // we reach the end but not found a file matches
                 } else {

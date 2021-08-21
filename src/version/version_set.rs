@@ -149,7 +149,7 @@ impl<'a, C: Comparator + 'static> VersionBuilder<'a, C> {
                 // sort by smallest key
                 v.files[level].sort_by(|a, b| icmp.compare(a.smallest.data(), b.smallest.data()));
                 // make sure there is no overlap in levels > 0
-                assert!(!Self::has_overlapping(&icmp, &v.files[level]));
+                assert!(!Self::has_overlapping(icmp, &v.files[level]));
             }
         }
         v
@@ -587,8 +587,10 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
         into_base: bool,
     ) -> Result<()> {
         let now = SystemTime::now();
-        let mut meta = FileMetaData::default();
-        meta.number = self.inc_next_file_number();
+        let mut meta = FileMetaData {
+            number: self.inc_next_file_number(),
+            ..Default::default()
+        };
         info!("Level-0 table #{} : start building", meta.number);
         let build_result = build_table(
             self.options.clone(),
@@ -672,8 +674,10 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> VersionSet<S, C> {
         assert!(c.builder.is_none());
         let file_number = self.inc_next_file_number();
         self.pending_outputs.insert(file_number);
-        let mut output = FileMetaData::default();
-        output.number = file_number;
+        let output = FileMetaData {
+            number: file_number,
+            ..Default::default()
+        };
         let file_name = generate_filename(&self.db_path, FileType::Table, file_number);
         let file = self.storage.create(file_name.as_str())?;
         c.builder = Some(TableBuilder::new(file, self.icmp.clone(), &self.options));
@@ -1020,14 +1024,14 @@ fn add_boundary_inputs_for_compact_files<C: Comparator>(
         }
         let mut largest_key = &tmp.largest;
         let mut smallest_boundary_file =
-            find_smallest_boundary_file(icmp, level_files, &largest_key);
+            find_smallest_boundary_file(icmp, level_files, largest_key);
         while let Some(file) = &smallest_boundary_file {
             // If a boundary file was found, advance the `largest_key`. Otherwise we're done.
             // This might leave 'holes' in files to be compacted because we only append the last boundary file.
             // The 'holes' will be filled later (by calling `get_overlapping_inputs`).
             files_to_compact.push(file.clone());
             largest_key = &file.largest;
-            smallest_boundary_file = find_smallest_boundary_file(icmp, level_files, &largest_key);
+            smallest_boundary_file = find_smallest_boundary_file(icmp, level_files, largest_key);
         }
     }
 }

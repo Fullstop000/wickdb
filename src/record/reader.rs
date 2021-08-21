@@ -22,6 +22,7 @@ use crate::util::coding::decode_fixed_32;
 use crate::util::crc32::{hash, unmask};
 use std::io::SeekFrom;
 
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Debug)]
 enum ReaderError {
     // * We have an internal reading file error

@@ -395,8 +395,7 @@ impl<S: Storage + Clone, C: Comparator + 'static> WickDB<S, C> {
     }
 
     fn internal_iter(&self, read_opt: ReadOptions) -> Result<InternalIterator<S, C>> {
-        let mut mem_iters = vec![];
-        mem_iters.push(self.inner.mem.read().unwrap().iter());
+        let mut mem_iters = vec![self.inner.mem.read().unwrap().iter()];
         if let Some(im_mem) = self.inner.im_mem.read().unwrap().as_ref() {
             mem_iters.push(im_mem.iter());
         }
@@ -719,7 +718,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
             let mem_ref = mem.as_ref().unwrap();
             batch.set_contents(&mut record_buf);
             let last_seq = batch.get_sequence() + u64::from(batch.get_count()) - 1;
-            if let Err(e) = batch.insert_into(&mem_ref) {
+            if let Err(e) = batch.insert_into(mem_ref) {
                 if self.options.paranoid_checks {
                     return Err(e);
                 } else {
@@ -870,8 +869,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
         if size <= 128 << 10 {
             max_size = size + (128 << 10)
         }
-        let mut signals = vec![];
-        signals.push(first.signal.clone());
+        let mut signals = vec![first.signal.clone()];
         let mut grouped = first;
 
         let mut queue = self.batch_queue.lock().unwrap();
@@ -1211,7 +1209,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
             match ParsedInternalKey::decode_from(ikey) {
                 Some(key) => {
                     if current_ukey.is_none()
-                        || ucmp.compare(&key.user_key, current_ukey.as_ref().unwrap())
+                        || ucmp.compare(key.user_key, current_ukey.as_ref().unwrap())
                             != CmpOrdering::Equal
                     {
                         // First occurrence of this user key
@@ -1222,7 +1220,7 @@ impl<S: Storage + Clone + 'static, C: Comparator + 'static> DBImpl<S, C> {
                     if last_sequence_for_key <= c.oldest_snapshot_alive
                         || (key.value_type == ValueType::Deletion
                             && key.seq <= c.oldest_snapshot_alive
-                            && !c.key_exist_in_deeper_level(&key.user_key))
+                            && !c.key_exist_in_deeper_level(key.user_key))
                     {
                         // For this user key:
                         // (1) there is no data in higher levels
