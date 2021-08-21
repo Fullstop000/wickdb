@@ -46,10 +46,9 @@ macro_rules! impl_varint {
                 let mut shift: u32 = 0;
                 for (i, &b) in src.iter().enumerate() {
                     if b < 0b1000_0000 {
-                        return match (<$uint>::from(b)).checked_shl(shift) {
-                            None => None,
-                            Some(b) => Some((n | b, (i + 1) as usize)),
-                        };
+                        return (<$uint>::from(b))
+                            .checked_shl(shift)
+                            .map(|b| (n | b, (i + 1) as usize));
                     }
                     match ((<$uint>::from(b)) & 0b0111_1111).checked_shl(shift) {
                         None => return None,

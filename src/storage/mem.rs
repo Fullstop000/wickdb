@@ -397,6 +397,7 @@ pub struct FileNode {
 }
 
 impl FileNode {
+    #[allow(clippy::field_reassign_with_default)]
     fn new(name: &str) -> Self {
         let mut f = FileNode::default();
         f.name = name.to_owned();
@@ -404,7 +405,7 @@ impl FileNode {
     }
 
     fn is_manifest(&self) -> bool {
-        self.name.find("MANIFEST").is_some()
+        self.name.contains("MANIFEST")
     }
 }
 

@@ -103,14 +103,14 @@ impl<'a> ParsedInternalKey<'a> {
 
     /// Return the inner user key as a &str
     pub fn as_str(&self) -> &'a str {
-        str::from_utf8(&self.user_key).unwrap()
+        str::from_utf8(self.user_key).unwrap()
     }
 
     /// Returns a `InternalKey` encoded from the `ParsedInternalKey` using
     /// the format described in the below comment of `InternalKey`
     #[inline]
     pub fn encode(&self) -> InternalKey {
-        InternalKey::new(&self.user_key, self.seq, self.value_type)
+        InternalKey::new(self.user_key, self.seq, self.value_type)
     }
 }
 
@@ -354,7 +354,7 @@ impl FilterPolicy for InternalFilterPolicy {
 
     fn may_contain(&self, filter: &[u8], key: &[u8]) -> bool {
         let user_key = extract_user_key(key);
-        self.user_policy.may_contain(filter, &user_key)
+        self.user_policy.may_contain(filter, user_key)
     }
 
     fn create_filter(&self, keys: &[Vec<u8>]) -> Vec<u8> {

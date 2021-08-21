@@ -270,7 +270,7 @@ impl<C: Comparator> Iterator for BlockIterator<C> {
             let key_offset = region_offset + (n0 + n1 + n2) as u32;
             let key_len = (shared + not_shared) as usize;
             let mid_key = &self.data[key_offset as usize..key_offset as usize + key_len];
-            match self.cmp.compare(&mid_key, target) {
+            match self.cmp.compare(mid_key, target) {
                 Ordering::Less => left = mid,
                 _ => right = mid - 1,
             }
