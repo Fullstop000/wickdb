@@ -555,8 +555,7 @@ fn write_raw_block<F: File>(
     handle.set_size(data.len() as u64);
     // write trailer
     // TODO: use pre-allocated buf
-    let mut trailer = vec![];
-    trailer.push(compression as u8);
+    let mut trailer = vec![compression as u8];
     let crc = mask(extend(hash(data), &[compression as u8]));
     put_fixed_32(&mut trailer, crc);
     assert_eq!(trailer.len(), BLOCK_TRAILER_SIZE);

@@ -215,7 +215,7 @@ impl<C: Comparator, A: Arena> Skiplist<C, A> {
             unsafe {
                 let next = (*node).get_next(level);
                 if next.is_null()
-                    || self.comparator.compare(&((*next).key()), key) != CmpOrdering::Less
+                    || self.comparator.compare((*next).key(), key) != CmpOrdering::Less
                 {
                     // next is nullptr or next.key >= key
                     if level == 1 {

@@ -216,7 +216,7 @@ impl<C: Comparator> Options<C> {
         self.write_buffer_size = Self::clip_range(self.write_buffer_size, 64 << 10, 1 << 30);
         self.max_file_size = Self::clip_range(self.max_file_size, 1 << 20, 1 << 30);
         self.block_size = Self::clip_range(self.block_size, 1 << 10, 4 << 20);
-        self.apply_logger(storage, &db_path);
+        self.apply_logger(storage, db_path);
         if self.block_cache.is_none() {
             let mut shards = vec![];
             for _ in 0..DEFAULT_CACHE_SHARDS {
