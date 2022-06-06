@@ -7,7 +7,7 @@ version = "0.1.0"
 [dependencies]
 bytes = "0.5.6"
 crc32fast = "1.2.1"
-crossbeam-channel = "0.4.0"
+crossbeam-channel = "0.4.4"
 crossbeam-utils = "0.7.0"
 fs2 = "0.4.3"
 fxhash = "0.2.1"
