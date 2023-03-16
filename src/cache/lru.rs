@@ -224,6 +224,11 @@ where
                     cb(key, &(*n.value.as_ptr()));
                 }
             }
+            // should manually drop kv [MaybeUninit]
+            unsafe {
+                ptr::drop_in_place(n.key.as_mut_ptr());
+                ptr::drop_in_place(n.value.as_mut_ptr());
+            }
         }
     }
 
